@@ -37,6 +37,11 @@ param(
     # owner/repo used to build the download URLs inside latest.json (the in-app updater
     # consumes them); CI passes ${{ github.repository }} so forks stay correct.
     [string]$Repo = "SiliconCoderJames/MiderHive",
+    # Tag name written into latest.json (tag field + download/notes URLs). Empty (default)
+    # auto-follows the tag that actually exists in the repo for this version: GitHub release
+    # download URLs are CASE-SENSITIVE for the tag part (v1.0.4 404s when the tag is V1.0.4),
+    # so the manifest must reference the real spelling. Falls back to v<version>.
+    [string]$TagName = "",
     [switch]$SkipBuild,
     [switch]$PerMachine,
     # Per-version release folder: derive OutDir/BuildDir/StageDir from the version so each
@@ -58,7 +63,17 @@ if ($verRaw -notmatch '^([0-9]+)\.([0-9]+)\.([0-9]+)') {
     throw "version must look like 1.2.3 (got '$Version')"
 }
 $verNumeric = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
-Write-Host "Release version: $Version (MSI: $verNumeric)"
+# ---- latest.json 的 tag 名：显式参数 > 仓库里已存在的同名 tag > v<版本> ----
+$tagName = "v$verNumeric"
+if ($TagName) {
+    $tagName = $TagName
+} else {
+    $existing = @(git tag --list "*$verNumeric" 2>$null) |
+        Where-Object { $_ -match "^[vV]?[0-9]+\.[0-9]+\.[0-9]+$" } |
+        Select-Object -First 1
+    if ($existing) { $tagName = $existing }
+}
+Write-Host "Release version: $Version (MSI: $verNumeric, tag: $tagName)"
 
 if ($VersionedDir) {
     # Folder name mirrors the historical snapshots: release-V1.0.1 -> release-V1.0.2 ...
@@ -195,13 +210,13 @@ Step "8/8 update manifest (latest.json)"
 # artifact, which is what the updater verifies before installing.
 $msiName = Split-Path -Leaf $msi
 $zipNameOnly = Split-Path -Leaf $zipPath
-$base = "https://github.com/$Repo/releases/download/v$verNumeric"
+$base = "https://github.com/$Repo/releases/download/$tagName"
 $manifest = [ordered]@{
     version      = $verNumeric
-    tag          = "v$verNumeric"
+    tag          = $tagName
     published_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     repo         = $Repo
-    notes_url    = "https://github.com/$Repo/releases/tag/v$verNumeric"
+    notes_url    = "https://github.com/$Repo/releases/tag/$tagName"
     msi          = [ordered]@{
         name   = $msiName
         url    = "$base/$msiName"

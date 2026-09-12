@@ -11,6 +11,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QRegularExpression>
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
@@ -254,6 +255,19 @@ void UpdateChecker::fetchManifest(int attempt) {
     });
 }
 
+// GitHub 的 release 下载 URL 对 tag 大小写敏感（实测 v1.0.4 404、V1.0.4 206），
+// 而清单里的 tag 与实际打点可能漂移（历史版本 v/V 混用）。把 "tag 段大小写翻转"
+// 的变体作为候选地址，是零成本的兜底：主地址 404 时自动换写法再试。
+static QString withTagCaseSwapped(const QString& url) {
+    static const QRegularExpression re(
+        "^(https?://[^/]+/[^/]+/[^/]+/releases/download/)([vV])([^/]*)(/.*)$");
+    const QRegularExpressionMatch m = re.match(url);
+    if (!m.hasMatch()) return url;
+    const QString flipped = (m.captured(2) == QLatin1String("v")) ? QStringLiteral("V")
+                                                                  : QStringLiteral("v");
+    return m.captured(1) + flipped + m.captured(3) + m.captured(4);
+}
+
 void UpdateChecker::downloadAndInstall(const UpdateInfo& info) {
     if (!isInstalledCopy()) {
         // 便携版：装 MSI 会在系统里多出一份，交给用户自己选
@@ -270,6 +284,9 @@ void UpdateChecker::downloadAndInstall(const UpdateInfo& info) {
     dlPath_ = tempMsiPath(info.version);
     dlUrls_.clear();
     dlUrls_ << info.msiUrl.toString();
+    const QString caseSwapped = withTagCaseSwapped(info.msiUrl.toString());
+    if (caseSwapped != info.msiUrl.toString())
+        dlUrls_ << caseSwapped;  // tag 大小写漂移兜底（排在自定义镜像之前）
     const QString custom = mirrorPrefix();
     if (!custom.isEmpty()) dlUrls_ << applyMirror(custom, info.msiUrl).toString();
     if (autoMirrorEnabled())
