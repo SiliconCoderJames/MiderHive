@@ -47,9 +47,9 @@ English | **[简体中文](README.zh-CN.md)**
 | User memory | Project / decisions / preferences / environment / habits in five sections, with optimistic concurrency (`base_version`) against silent overwrites |
 | Agent messaging | `note` / `question` / `task`, point-to-point or broadcast; only the assignee can accept a task; point-to-point messages are visible only to sender and recipient |
 | Error log | Severity levels (info…critical), resolution loop, resolutions appended rather than overwritten |
-| Usage analytics | Token reporting per call (model optional) with an idempotency key; weekly / daily / per-model views; 80% warn, 95% critical, over-budget highlighted |
+| Usage analytics | Token reporting per call (model optional) with an idempotency key; weekly / daily / per-model views; 80% warn, 95% critical, over-budget highlighted. The dedicated **Usage** panel slices consumption by time range / agent / model, with a per-agent breakdown table and a budget editor (no more hand-editing the database) |
 | Audit trail | Every write records actor, time, action, target and a content digest (rotated at 30 days / 100k rows) |
-| Desktop workbench | Seven-panel dark UI: overview, knowledge, skills, memory, messages, errors, audit |
+| Desktop workbench | Eight-panel dark UI: overview, usage, knowledge, skills, memory, messages, errors, audit |
 | Settings | Five theme palettes and three font sizes (instant), backup/restore/maintenance, notification preferences, agent management, auto-update |
 | Operations | Consistent snapshots via `VACUUM INTO`, administrative deletes (master key only), manual maintenance |
 

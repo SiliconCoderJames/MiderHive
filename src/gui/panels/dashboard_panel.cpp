@@ -3,6 +3,8 @@
 #include <algorithm>
 
 #include <QGroupBox>
+#include <QMessageBox>
+#include <QPushButton>
 
 #include "../gui_util.h"
 #include "../i18n.h"
@@ -35,9 +37,28 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     budgetCard_ = new QGroupBox(i18n::trs("本周 Token 预算", "Weekly Token Budget"), this);
     budgetCard_->setObjectName("card");
     auto* bl = new QVBoxLayout(budgetCard_);
-    bl->setContentsMargins(8, 16, 8, 6);
+    bl->setContentsMargins(8, 16, 8, 8);
+    bl->setSpacing(6);
     ring_ = new ui::RingProgress(budgetCard_);
     bl->addWidget(ring_, 1);
+    // 预算调整入口：此前预算只能改库/脚本，界面上没有任何修改入口（用户反馈找不到）
+    editBudgetBtn_ = new QPushButton(i18n::trs("调整预算", "Adjust budget"), budgetCard_);
+    editBudgetBtn_->setObjectName("editBudget");  // 见 usage_panel：自动化按稳定 id 定位
+    editBudgetBtn_->setCursor(Qt::PointingHandCursor);
+    editBudgetBtn_->setStyleSheet(ui::th("padding:5px 14px;"));
+    connect(editBudgetBtn_, &QPushButton::clicked, this, [this] {
+        std::string berr;
+        const qint64 cur = platform_.usageBudget(berr);
+        ui::BudgetEditDialog dlg(cur > 0 ? cur : 10'000'000, this);
+        if (dlg.exec() != QDialog::Accepted) return;
+        std::string err;
+        if (platform_.usageSetBudget(ah::kManagerName, dlg.value(), err))
+            refresh();  // 环形图与 KPI 立即反映新预算
+        else
+            QMessageBox::warning(this, i18n::trs("调整失败", "Adjustment failed"),
+                                 QString::fromStdString(err));
+    });
+    bl->addWidget(editBudgetBtn_, 0, Qt::AlignCenter);
     topRow->addWidget(budgetCard_, 2);
 
     usageCard_ = new QGroupBox(i18n::trs("各 Agent 本周用量", "Per-Agent Usage This Week"), this);
@@ -337,6 +358,7 @@ void DashboardPanel::refresh() {
 void DashboardPanel::retranslate() {
     PanelBase::retranslate();
     budgetCard_->setTitle(i18n::trs("本周 Token 预算", "Weekly Token Budget"));
+    editBudgetBtn_->setText(i18n::trs("调整预算", "Adjust budget"));
     usageCard_->setTitle(i18n::trs("各 Agent 本周用量", "Per-Agent Usage This Week"));
     agentsCard_->setTitle(i18n::trs("Agent 状态", "Agent Status"));
     trendCard_->setTitle(i18n::trs("最近 14 天逐日消耗", "Daily Tokens (14 days)"));

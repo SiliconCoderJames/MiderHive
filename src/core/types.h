@@ -127,6 +127,33 @@ struct UsageModelRow {
     int64_t tokens = 0;
 };
 
+// 用量分析的多维切片（时间窗 + 可选 agent/model 筛选）下的聚合行
+struct UsageAgentRow {
+    std::string agent;
+    int64_t in = 0;
+    int64_t out = 0;
+    int64_t tokens = 0;
+    int64_t calls = 0;
+};
+
+struct UsageModelStat {
+    std::string model;
+    int64_t tokens = 0;
+    int64_t calls = 0;
+};
+
+// 一次筛选（最近 N 天 + 可选 agent/model）下的完整用量视图：
+// 同一套 WHERE 聚合出合计、按 Agent、按模型与逐日序列，保证四者口径一致
+struct UsageBreakdown {
+    int64_t total_in = 0;
+    int64_t total_out = 0;
+    int64_t total_tokens = 0;
+    int64_t calls = 0;
+    std::vector<UsageAgentRow> per_agent;
+    std::vector<UsageModelStat> per_model;
+    std::vector<UsageDailyPoint> daily;
+};
+
 enum class SearchMode { Keyword, Semantic };
 
 constexpr const char* kDefaultRole = "member";

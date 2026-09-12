@@ -365,6 +365,48 @@ static void test_platform_end_to_end() {
         CHECK(models.size() >= 1);
         CHECK_EQ(models.front().model, std::string("glm-5.3-flash"));
         CHECK_EQ(models.front().tokens, static_cast<int64_t>(1500));
+        // 多维用量切片：同一套 WHERE 下的合计 / 按 Agent / 按模型 / 逐日
+        ah::UsageBreakdown bd;
+        CHECK(p.usageBreakdown(7, "", "", bd, err));
+        CHECK_EQ(bd.daily.size(), static_cast<size_t>(7));
+        CHECK_EQ(bd.total_tokens, bd.total_in + bd.total_out);
+        CHECK(bd.per_agent.size() >= 1);
+        int64_t agentSum = 0;
+        for (const auto& r : bd.per_agent) agentSum += r.tokens;
+        CHECK_EQ(agentSum, bd.total_tokens);  // 按 Agent 汇总必须等于合计
+        CHECK_EQ(bd.per_model.size(), static_cast<size_t>(1));  // 只有 glm-5.3-flash 带模型
+        CHECK_EQ(bd.per_model.front().tokens, static_cast<int64_t>(1500));
+        // agent 过滤：只剩 hermes，且合计等于未过滤结果里 hermes 那一行
+        ah::UsageBreakdown onlyHermes;
+        CHECK(p.usageBreakdown(7, "hermes", "", onlyHermes, err));
+        CHECK_EQ(onlyHermes.per_agent.size(), static_cast<size_t>(1));
+        CHECK_EQ(onlyHermes.per_agent.front().agent, std::string("hermes"));
+        int64_t hermesRow = -1;
+        for (const auto& r : bd.per_agent)
+            if (r.agent == "hermes") hermesRow = r.tokens;
+        CHECK(hermesRow >= 0);
+        CHECK_EQ(onlyHermes.total_tokens, hermesRow);
+        // model 过滤：只留带模型的那一笔
+        ah::UsageBreakdown onlyModel;
+        CHECK(p.usageBreakdown(7, "", "glm-5.3-flash", onlyModel, err));
+        CHECK_EQ(onlyModel.total_tokens, static_cast<int64_t>(1500));
+        CHECK_EQ(onlyModel.per_agent.size(), static_cast<size_t>(1));
+        CHECK_EQ(onlyModel.per_agent.front().agent, std::string("hermes"));
+        CHECK_EQ(onlyModel.calls, static_cast<int64_t>(1));
+        // agent + model 同时过滤；不存在的模型 → 全 0 而不是报错
+        ah::UsageBreakdown both;
+        CHECK(p.usageBreakdown(7, "hermes", "glm-5.3-flash", both, err));
+        CHECK_EQ(both.total_tokens, static_cast<int64_t>(1500));
+        ah::UsageBreakdown none;
+        CHECK(p.usageBreakdown(7, "ghost-agent", "", none, err));
+        CHECK_EQ(none.total_tokens, static_cast<int64_t>(0));
+        CHECK(none.per_agent.empty());
+        // 预算读写（界面「调整预算」走的就是这条路径）
+        CHECK(p.usageSetBudget("zcode", 4'242'000, err));
+        CHECK_EQ(p.usageBudget(err), static_cast<int64_t>(4'242'000));
+        CHECK(!p.usageSetBudget("zcode", 0, err));   // 非正数被拒
+        CHECK(!p.usageSetBudget("hermes", 5'000'000, err));  // 非管理者被拒
+        CHECK_EQ(p.usageBudget(err), static_cast<int64_t>(4'242'000));
         // 超额（105.9%）：仅告警升级，不拦截技能调用（用量是观测不是限制）
         std::vector<ah::SkillInvocation> invs;
         CHECK(p.skillInvoke("hermes", "code-review", "{}", "", "success", 1, 0, 0, err));

@@ -26,6 +26,7 @@
 #include "panels/memory_panel.h"
 #include "panels/messages_panel.h"
 #include "panels/skills_panel.h"
+#include "panels/usage_panel.h"
 #include "settings_dialog.h"
 #include "theme.h"
 #include "update_checker.h"
@@ -117,6 +118,7 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
 
     panelFactories_ = {
         [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new DashboardPanel(pl, parent)); },
+        [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new UsagePanel(pl, parent)); },
         [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new KnowledgePanel(pl, parent)); },
         [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new SkillsPanel(pl, parent)); },
         [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new MemoryPanel(pl, parent)); },
@@ -163,8 +165,8 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
         }
     }
 
-    // 快捷键：Ctrl+1..7 切面板，F5 手动刷新，Ctrl+F 聚焦本面板即时过滤，Ctrl+, 打开设置
-    for (int i = 0; i < 7; ++i) {
+    // 快捷键：Ctrl+1..8 切面板，F5 手动刷新，Ctrl+F 聚焦本面板即时过滤，Ctrl+, 打开设置
+    for (int i = 0; i < 8; ++i) {
         auto* sc = new QShortcut(QKeySequence(QString("Ctrl+%1").arg(i + 1)), this);
         connect(sc, &QShortcut::activated, this, [this, i] { nav_->setCurrentRow(i); });
     }
@@ -199,6 +201,7 @@ void MainWindow::buildNav() {
     // 程序化线性图标：随主题着色，错误项恒红、选中态换亮色（替代大小不一的 emoji）
     const std::vector<std::tuple<const char*, const char*, const char*>> items{
         {"overview", "总览", "Overview"},
+        {"usage", "用量分析", "Usage"},
         {"knowledge", "知识库", "Knowledge"},
         {"skills", "技能库", "Skills"},
         {"memory", "用户记忆", "Memory"},

@@ -3,7 +3,10 @@
 // Agent 卡片、告警卡片、可折叠区块卡片。全部 QPainter / 原生 widget 实现，无 QML。
 #include <QBrush>
 #include <QConicalGradient>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QEnterEvent>
+#include <QHBoxLayout>
 #include <QMouseEvent>
 #include <QFontMetrics>
 #include <QFrame>
@@ -15,6 +18,8 @@
 #include <QPainter>
 #include <QPointer>
 #include <QPropertyAnimation>
+#include <QPushButton>
+#include <QSpinBox>
 #include <QSvgRenderer>
 #include <QTextDocument>
 #include <QTimer>
@@ -203,6 +208,56 @@ private:
     QString caption_;
     double animRatio_ = 0.0;      // 动画当前扫掠比例（与目标值的差由 QVariantAnimation 收敛）
     QPointer<QVariantAnimation> anim_;  // DeleteWhenStopped 会自删，用 QPointer 防悬空
+};
+
+// ---- 本周 Token 预算调整对话框：唯一的界面修改入口（总览环形图与「用量分析」共用）。
+// 此前预算只能改库或靠脚本，界面上无入口——用户找不到在哪里调。----
+class BudgetEditDialog : public QDialog {
+public:
+    BudgetEditDialog(qint64 current, QWidget* parent = nullptr) : QDialog(parent) {
+        setWindowTitle(i18n::trs("调整本周 Token 预算", "Adjust Weekly Token Budget"));
+        setModal(true);
+        setMinimumWidth(380);
+        auto* lay = new QVBoxLayout(this);
+        lay->setSpacing(10);
+        auto* tip = new QLabel(i18n::trs(
+            "预算用于用量告警：80% 提醒、95% 严重、超出标红；只做提示，不拦截上报。",
+            "The budget drives usage alerts: 80% warn, 95% critical, over shows red. "
+            "Advisory only — reporting is never blocked."), this);
+        tip->setWordWrap(true);
+        tip->setStyleSheet(ui::th("color:@muted@; font-size:12px;"));
+        lay->addWidget(tip);
+        spin_ = new QSpinBox(this);
+        spin_->setRange(1'000, 2'000'000'000);
+        spin_->setSingleStep(100'000);
+        spin_->setGroupSeparatorShown(true);  // 千分位：大数字一眼读出量级
+        spin_->setAccelerated(true);
+        spin_->setValue(int(qBound<qint64>(qint64(1000), current, qint64(2000000000))));
+        spin_->setStyleSheet(ui::th("QSpinBox { font-size:15px; padding:6px 8px; }"));
+        lay->addWidget(spin_);
+        auto* presets = new QHBoxLayout;
+        auto* presetsLabel = new QLabel(i18n::trs("常用:", "Presets:"), this);
+        presetsLabel->setStyleSheet(ui::th("color:@muted@;"));
+        presets->addWidget(presetsLabel);
+        for (qint64 p : {qint64(1'000'000), qint64(5'000'000), qint64(10'000'000),
+                         qint64(50'000'000), qint64(100'000'000)}) {
+            auto* b = new QPushButton(ui::fmtCompact(p), this);
+            b->setCursor(Qt::PointingHandCursor);
+            b->setStyleSheet(ui::th("padding:3px 12px;"));
+            connect(b, &QPushButton::clicked, this, [this, p] { spin_->setValue(int(p)); });
+            presets->addWidget(b);
+        }
+        presets->addStretch(1);
+        lay->addLayout(presets);
+        auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+        connect(bb, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        lay->addWidget(bb);
+    }
+    qint64 value() const { return spin_->value(); }
+
+private:
+    QSpinBox* spin_;
 };
 
 // ---- 横向柱状图：各 Agent 用量对比，柱体平滑扫掠入场 ----
@@ -952,6 +1007,9 @@ inline QIcon makeIcon(const QString& kind, const QColor& color, int px,
     else if (kind == "audit")
         inner = "<circle cx='12' cy='12' r='10'/>"
                 "<polyline points='12 6 12 12 16 14'/>";
+    else if (kind == "usage")  // 用量分析：错落柱状图
+        inner = "<line x1='4' x2='4' y1='15' y2='20'/><line x1='10' x2='10' y1='8' y2='20'/>"
+                "<line x1='16' x2='16' y1='12' y2='20'/><line x1='22' x2='22' y1='5' y2='20'/>";
     else if (kind == "palette")  // 外观
         inner = "<circle cx='13.5' cy='6.5' r='.5'/><circle cx='17.5' cy='10.5' r='.5'/>"
                 "<circle cx='8.5' cy='7.5' r='.5'/><circle cx='6.5' cy='12.5' r='.5'/>"

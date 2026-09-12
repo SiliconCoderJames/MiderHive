@@ -769,6 +769,47 @@ void HttpServer::setupRoutes() {
         send(res, ok(json{{"models", arr}}));
     });
 
+    // 多维用量切片：days/agent/model 全部可选；「用量分析」面板与 API 侧筛选共用
+    srv.Get("/api/usage/breakdown", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor;
+        if (!checkAgent(req, p, actor, res)) return;
+        int days = 14;
+        if (req.has_param("days")) {
+            const std::string& v = req.get_param_value("days");
+            try {
+                size_t pos = 0;
+                int n = std::stoi(v, &pos);
+                if (n <= 0 || pos != v.size()) throw std::invalid_argument("days");
+                days = std::min(n, 90);
+            } catch (...) {
+                send(res, fail(400, "days must be a positive integer"));
+                return;
+            }
+        }
+        const std::string agent = req.has_param("agent") ? req.get_param_value("agent") : "";
+        const std::string model = req.has_param("model") ? req.get_param_value("model") : "";
+        UsageBreakdown bd;
+        std::string err;
+        if (!p.usageBreakdown(days, agent, model, bd, err)) { send(res, fail(500, err)); return; }
+        json agents = json::array();
+        for (const auto& r : bd.per_agent)
+            agents.push_back({{"agent", r.agent}, {"tokens_in", r.in}, {"tokens_out", r.out},
+                              {"tokens", r.tokens}, {"calls", r.calls}});
+        json models = json::array();
+        for (const auto& r : bd.per_model)
+            models.push_back({{"model", r.model}, {"tokens", r.tokens}, {"calls", r.calls}});
+        json daysArr = json::array();
+        for (const auto& pt : bd.daily) daysArr.push_back({{"day", pt.day}, {"tokens", pt.tokens}});
+        send(res, ok(json{{"days", days},
+                          {"total_in", bd.total_in},
+                          {"total_out", bd.total_out},
+                          {"total_tokens", bd.total_tokens},
+                          {"calls", bd.calls},
+                          {"per_agent", agents},
+                          {"per_model", models},
+                          {"daily", daysArr}}));
+    });
+
     srv.Get("/api/usage/budget", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;

@@ -249,6 +249,24 @@ def s11_token_budget(agents):
     st, body = http("GET", "/api/usage/summary", agent="hermes", key=agents["hermes"]["key"])
     per = {p["agent"]: p["tokens"] for p in (body.get("data") or {}).get("per_agent", [])}
     check("S11b 分 Agent 用量统计", per.get("claude", 0) > per.get("codex", 0), "per=%s" % per)
+    # 多维切片（「用量分析」面板与筛选共用此接口）：合计 / 按 Agent / 按模型 / 逐日
+    st, body = http("GET", "/api/usage/breakdown?days=7", agent="hermes", key=agents["hermes"]["key"])
+    d = body.get("data") or {}
+    check("S11c 切片默认 7 天且逐日补齐", st == 200 and len(d.get("daily") or []) == 7,
+          "st=%s daily=%s" % (st, len(d.get("daily") or [])))
+    check("S11d 切片合计等于按 Agent 汇总",
+          d.get("total_tokens") == sum(r.get("tokens", 0) for r in (d.get("per_agent") or [])),
+          "total=%s per_agent=%s" % (d.get("total_tokens"), d.get("per_agent")))
+    st, body = http("GET", "/api/usage/breakdown?days=7&agent=claude", agent="hermes",
+                    key=agents["hermes"]["key"])
+    d2 = body.get("data") or {}
+    names = {r.get("agent") for r in (d2.get("per_agent") or [])}
+    check("S11e agent 筛选生效", st == 200 and names == {"claude"}, "names=%s" % names)
+    check("S11f 筛选后合计与未筛选的该行一致",
+          d2.get("total_tokens") == per.get("claude", 0),
+          "filtered=%s row=%s" % (d2.get("total_tokens"), per.get("claude")))
+    st, body = http("GET", "/api/usage/breakdown?days=0", agent="hermes", key=agents["hermes"]["key"])
+    check("S11g 非法 days 被拒", st == 400, "st=%s" % st)
     # 预算改回默认，避免影响其它验证
     http("PUT", "/api/usage/budget", master=MASTER, body={"budget": 10000000})
 

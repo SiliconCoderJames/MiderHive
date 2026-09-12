@@ -24,6 +24,7 @@ private:
     ui::MetricTile* kpiToday_ = nullptr;
     ui::MetricTile* kpiErrors_ = nullptr;
     ui::RingProgress* ring_ = nullptr;
+    class QPushButton* editBudgetBtn_ = nullptr;  // 预算调整入口（打开 BudgetEditDialog）
     ui::HBarChart* usageChart_ = nullptr;
     ui::VBarChart* trendChart_ = nullptr;    // 最近 14 天逐日消耗
     ui::HBarChart* modelChart_ = nullptr;    // 按模型累计

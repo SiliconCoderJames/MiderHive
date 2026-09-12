@@ -740,6 +740,12 @@ bool Platform::usageByModel(std::vector<UsageModelRow>& out, std::string& err) {
     return usage_.byModel(out, err);
 }
 
+bool Platform::usageBreakdown(int days, const std::string& agent, const std::string& model,
+                              UsageBreakdown& out, std::string& err) {
+    std::lock_guard lock(mutex_);
+    return usage_.breakdown(days, agent, model, out, err);
+}
+
 bool Platform::usageSummary(UsageSummary& out, std::string& err) {
     std::lock_guard lock(mutex_);
     return usage_.summary(out, err);

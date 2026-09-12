@@ -27,6 +27,10 @@ public:
     bool daily(int days, std::vector<UsageDailyPoint>& out, std::string& err);
     // 按模型累计（全部历史，模型非空才计入），消耗降序，最多 20 行
     bool byModel(std::vector<UsageModelRow>& out, std::string& err);
+    // 多维用量切片：最近 days 天（可选 agent/model 过滤）下的合计、按 Agent、
+    // 按模型与逐日序列——同一条 WHERE 聚合，四个视图口径一致
+    bool breakdown(int days, const std::string& agent, const std::string& model,
+                   UsageBreakdown& out, std::string& err);
     int64_t budget(std::string& err);
     bool setBudget(int64_t budget, std::string& err);
 

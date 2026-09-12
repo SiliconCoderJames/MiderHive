@@ -140,6 +140,8 @@ public:
     bool usageSummary(UsageSummary& out, std::string& err);
     bool usageDaily(int days, std::vector<UsageDailyPoint>& out, std::string& err);
     bool usageByModel(std::vector<UsageModelRow>& out, std::string& err);
+    bool usageBreakdown(int days, const std::string& agent, const std::string& model,
+                        UsageBreakdown& out, std::string& err);
     int64_t usageBudget(std::string& err);
     bool usageSetBudget(const std::string& actor, int64_t budget, std::string& err);
 

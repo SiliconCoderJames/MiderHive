@@ -7,6 +7,7 @@ add_executable(miderhive WIN32
     update_checker.cpp
     app.rc
     panels/dashboard_panel.cpp
+    panels/usage_panel.cpp
     panels/knowledge_panel.cpp
     panels/skills_panel.cpp
     panels/memory_panel.cpp
