@@ -48,9 +48,11 @@ English | **[简体中文](README.zh-CN.md)**
 | Agent messaging | `note` / `question` / `task`, point-to-point or broadcast; only the assignee can accept a task; point-to-point messages are visible only to sender and recipient |
 | Error log | Severity levels (info…critical), resolution loop, resolutions appended rather than overwritten |
 | Usage analytics | Token reporting per call (model optional) with an idempotency key; weekly / daily / per-model views; 80% warn, 95% critical, over-budget highlighted. The dedicated **Usage** panel slices consumption by time range / agent / model, with a per-agent breakdown table and a budget editor (no more hand-editing the database) |
+| First-run onboarding | Pops up on first launch: one-click connect for Claude Code / Cursor / Codex CLI — detects the local install, provisions the identity and generates the matching MCP config (JSON/TOML, with a copy button and the config-file location); when the agent comes online the workbench pops "Connected" and writes a welcome memory automatically (once per identity); re-openable anytime from Settings |
 | MCP support | The bundled `miderhive-mcp` stdio server exposes memory, knowledge, messaging, errors, skills and usage as ~18 MCP tools — plug-and-play for Claude Code, Claude Desktop and Cursor, same local identity system ([setup](docs/mcp.md)) |
+| Foolproof design | Startup self-check (writable data dir / readable config / port occupied / database trouble — dismissible, bilingual, with next steps); overview health banners appear only when something is wrong; offline agents show the diagnosis before the fix; a lost plaintext key is one click from rotation; technical errors are translated into plain English/Chinese with next steps — no silent failures |
 | Audit trail | Every write records actor, time, action, target and a content digest (rotated at 30 days / 100k rows) |
-| Desktop workbench | Eight-panel dark UI: overview, usage, knowledge, skills, memory, messages, errors, audit |
+| Desktop workbench | Eight-panel dark UI: overview, usage, knowledge, skills, memory, messages, errors, audit; every empty state explains the module and offers the obvious action |
 | Settings | Five theme palettes and three font sizes (instant), backup/restore/maintenance, notification preferences, agent management, auto-update |
 | Operations | Consistent snapshots via `VACUUM INTO`, administrative deletes (master key only), manual maintenance |
 
@@ -122,6 +124,12 @@ curl -X POST -H "X-Agent-Name: claude" -H "X-Api-Key: $KEY" -H "Content-Type: ap
 The bundled `agent-cli` covers the vast majority of the agent-facing API (run it with no arguments
 to list every subcommand). The full reference — unified response envelope, error codes, task state
 machine, examples — is in **[docs/api.md](docs/api.md)**.
+
+**Easiest path: the built-in onboarding.** On first launch the workbench offers a connect guide —
+pick Claude Code / Cursor / Codex CLI and it detects the local install, provisions the identity and
+generates the matching MCP config (copy button and config-file location included). Paste it, fully
+restart that tool, and the workbench pops "Connected" and writes a welcome memory once the agent is
+online. Closed it already? **Settings → Agents → *Reopen onboarding*** brings it back anytime.
 
 **Prefer MCP?** MCP-capable agents (Claude Code, Claude Desktop, Cursor) can skip the raw HTTP
 ceremony entirely: the bundled `miderhive-mcp` stdio server exposes memory, knowledge, messaging,
@@ -243,6 +251,11 @@ Run `miderhive-mcp.exe` manually and paste one line —
 `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` — on stdin; it should answer with the tool list
 (logs go to stderr). Also check the platform is running and both processes agree on the port.
 
+**I closed the onboarding guide — how do I get it back?**
+Settings → Agents → *Reopen onboarding*, anytime. If an agent is configured but shows offline, the
+overview health banner and the agent card's right-click menu give the specific reason first, then
+the matching fix (a lost plaintext key can be rotated in one click).
+
 **How do I back up?**
 Settings → data & backup takes a consistent `VACUUM INTO` snapshot; `POST /api/system/backup` does
 the same over HTTP. Restore lives in the same place (master key required).
@@ -325,6 +338,7 @@ scripts/      package.ps1, gen-wix-files.ps1, deploy.ps1, fetch-deps.ps1,
 - [x] Bilingual workbench UI (Chinese / English, one-click switch in the sidebar)
 - [x] In-app auto-update (GitHub Releases, SHA256-verified one-click upgrade)
 - [x] Reproducible release pipeline (MSI + portable ZIP + update manifest + ICE validation)
+- [x] First-run onboarding & foolproof design (tool detection + MCP config generation + startup self-check + health banners + one-click key rotation + friendly error translation)
 - [ ] Code signing (removes the SmartScreen warning and upgrades update verification to signatures)
 - [ ] Knowledge attachments (syntax-highlighted snippets, screenshots)
 - [ ] Task dependencies and a kanban view
