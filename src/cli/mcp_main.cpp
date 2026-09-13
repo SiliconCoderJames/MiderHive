@@ -284,7 +284,7 @@ std::vector<ToolDef> buildTools() {
 
     t.push_back({"memory_list",
                  "List shared memory entries (is_latest only). Optionally filter by section "
-                 "(project/decision/preference/environment/habit).",
+                 "(project/preference/work_style/decision/environment).",
                  objSchema({{"section", prop("string", "optional section filter")}}, {}),
                  [](const json& a) {
                      std::string section = sopt(a, "section");
@@ -297,7 +297,7 @@ std::vector<ToolDef> buildTools() {
                  "Create or update a shared memory key. Append-only: the old version is kept. "
                  "Pass base_version of the version you read to refuse overwriting others' updates "
                  "(409 on conflict).",
-                 objSchema({{"section", prop("string", "project|decision|preference|environment|habit")},
+                 objSchema({{"section", prop("string", "project|preference|work_style|decision|environment")},
                             {"key", prop("string", "key within the section")},
                             {"value", prop("string", "value to store (<=20000 chars)")},
                             {"base_version", prop("integer", "version you read; omit to force-write")}},
@@ -449,7 +449,7 @@ std::vector<ToolDef> buildTools() {
     t.push_back({"error_list",
                  "List error reports. status=open (default) shows unresolved ones.",
                  objSchema({{"status", prop("string", "open|resolved, default open")},
-                            {"severity", prop("string", "info|warn|error|critical")},
+                            {"severity", prop("string", "info|warning|error|critical")},
                             {"limit", prop("integer", "default 200")}},
                            {}),
                  [](const json& a) {
