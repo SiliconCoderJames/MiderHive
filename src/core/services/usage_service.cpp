@@ -12,49 +12,55 @@ bool UsageService::report(const std::string& agent, int64_t tokensIn, int64_t to
                           const std::string& referenceId, const std::string& idempotencyKey,
                           bool& duplicate, std::string& err) {
     duplicate = false;
+    // BEGIN IMMEDIATE + 事务内查重：并发/重复上报不会双重扣减
+    if (!db_.beginImmediate(err)) return false;
+    if (!reportInTx(agent, tokensIn, tokensOut, callType, model, referenceId, idempotencyKey,
+                    duplicate, err)) {
+        db_.rollback();
+        return false;
+    }
+    // COMMIT 失败同样要回滚：否则事务悬挂,后续所有写操作都会报
+    // "cannot start a transaction within a transaction"
+    if (!db_.commit(err)) { db_.rollback(); return false; }
+    return true;
+}
+
+bool UsageService::reportInTx(const std::string& agent, int64_t tokensIn, int64_t tokensOut,
+                              const std::string& callType, const std::string& model,
+                              const std::string& referenceId, const std::string& idempotencyKey,
+                              bool& duplicate, std::string& err) {
+    duplicate = false;
     if (tokensIn < 0 || tokensOut < 0) { err = "token counts must be >= 0"; return false; }
     if (idempotencyKey.size() > 200) { err = "idempotency_key too long (max 200)"; return false; }
     if (model.size() > 100) { err = "model too long (max 100)"; return false; }
 
-    // BEGIN IMMEDIATE + 事务内查重：并发/重复上报不会双重扣减
-    if (!db_.beginImmediate(err)) return false;
     if (!idempotencyKey.empty()) {
         bool exists = false;
         if (!db_.query("SELECT 1 FROM token_usage WHERE idempotency_key = ?",
                        [&](Stmt& st) { st.bind(1, idempotencyKey); },
                        [&](Stmt&) { exists = true; }, err)) {
-            db_.rollback();
             return false;
         }
         if (exists) {
             duplicate = true;
-            // COMMIT 失败同样要回滚：否则事务悬挂,后续所有写操作都会报
-            // "cannot start a transaction within a transaction"
-            if (!db_.commit(err)) { db_.rollback(); return false; }
             return true;
         }
     }
-    if (!db_.query(
-            "INSERT INTO token_usage(agent, week_start, tokens_in, tokens_out, call_type, model, reference_id, idempotency_key, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            [&](Stmt& st) {
-                st.bind(1, agent);
-                st.bind(2, weekStartIso());
-                st.bind(3, tokensIn);
-                st.bind(4, tokensOut);
-                st.bind(5, callType);
-                st.bind(6, model);
-                st.bind(7, referenceId);
-                st.bind(8, idempotencyKey);
-                st.bind(9, nowIso());
-            },
-            nullptr, err)) {
-        db_.rollback();
-        return false;
-    }
-    // 同上：COMMIT 失败必须回滚,不能把打开的事务留在连接上
-    if (!db_.commit(err)) { db_.rollback(); return false; }
-    return true;
+    return db_.query(
+        "INSERT INTO token_usage(agent, week_start, tokens_in, tokens_out, call_type, model, reference_id, idempotency_key, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        [&](Stmt& st) {
+            st.bind(1, agent);
+            st.bind(2, weekStartIso());
+            st.bind(3, tokensIn);
+            st.bind(4, tokensOut);
+            st.bind(5, callType);
+            st.bind(6, model);
+            st.bind(7, referenceId);
+            st.bind(8, idempotencyKey);
+            st.bind(9, nowIso());
+        },
+        nullptr, err);
 }
 
 bool UsageService::daily(int days, std::vector<UsageDailyPoint>& out, std::string& err) {

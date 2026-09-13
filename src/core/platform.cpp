@@ -602,18 +602,34 @@ bool Platform::skillInvoke(const std::string& caller, const std::string& skillNa
         return false;
     }
     if (status != "success" && status != "failed") { err = "status must be success|failed"; return false; }
-    // 用量仅做统计与告警（80%/95%/超额三级），不做硬性拦截——
-    // 平台定位是协作与观测，Agent 的消耗策略由调用方自行决定
+    // 记录调用、记账、审计是同一逻辑事件的三次写入：绑进一个事务，任一失败全部回滚。
+    // 此前三次写入各自独立——记账失败会留下"有调用记录、无 token 账目"的半截状态，
+    // 且审计写失败被静默忽略（违背 schema 的留痕承诺）。
+    if (!db_.beginImmediate(err)) return false;
     if (!skills_.recordInvocation(skillName, caller, paramsJson, resultSummary, status, durationMs,
-                                  err))
+                                  err)) {
+        db_.rollback();
         return false;
-    if (tokensIn > 0 || tokensOut > 0) {
-        bool invDup = false;
-        if (!usage_.report(caller, tokensIn, tokensOut, "skill", "", skillName, "", invDup, err))
-            return false;
     }
-    audit_.log(caller, "skill.invoke", skillName,
-               nlohmann::json{{"status", status}, {"duration_ms", durationMs}}.dump(), err);
+    if (tokensIn > 0 || tokensOut > 0) {
+        // 用量仅做统计与告警（80%/95%/超额三级），不做硬性拦截——
+        // 平台定位是协作与观测，Agent 的消耗策略由调用方自行决定
+        bool invDup = false;
+        if (!usage_.reportInTx(caller, tokensIn, tokensOut, "skill", "", skillName, "", invDup,
+                               err)) {
+            db_.rollback();
+            return false;
+        }
+    }
+    if (!audit_.log(caller, "skill.invoke", skillName,
+                    nlohmann::json{{"status", status}, {"duration_ms", durationMs}}.dump(), err)) {
+        db_.rollback();
+        return false;
+    }
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
     return true;
 }
 

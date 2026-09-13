@@ -22,6 +22,12 @@ public:
                 const std::string& callType, const std::string& model,
                 const std::string& referenceId, const std::string& idempotencyKey,
                 bool& duplicate, std::string& err);
+    // report 的事务内变体：不自行 BEGIN/COMMIT，供需要把"业务写入+记账"绑进同一
+    // 事务的调用方（如 skillInvoke）使用；必须在已开启的事务内调用。
+    bool reportInTx(const std::string& agent, int64_t tokensIn, int64_t tokensOut,
+                    const std::string& callType, const std::string& model,
+                    const std::string& referenceId, const std::string& idempotencyKey,
+                    bool& duplicate, std::string& err);
     bool summary(UsageSummary& out, std::string& err);
     // 最近 days 天的逐日消耗（连续日期，缺失天补 0），days 夹取到 1..90
     bool daily(int days, std::vector<UsageDailyPoint>& out, std::string& err);
