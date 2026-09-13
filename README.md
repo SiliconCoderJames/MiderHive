@@ -249,7 +249,7 @@ the same over HTTP. Restore lives in the same place (master key required).
 
 ## Quality and verification
 
-- **243 unit-test assertions**: SHA-256 and constant-time key comparison, version comparison,
+- **291 unit-test assertions**: SHA-256 and constant-time key comparison, version comparison,
   embedder, outbound URL guard, platform end-to-end, auth and message-visibility hardening
   regressions, legacy database migration;
 - **39 integration assertions** ([scripts/feasibility_check.py](scripts/feasibility_check.py)):
@@ -311,11 +311,12 @@ cmake --build build --config Release
 src/core/     Qt-free core: database wrapper, vector search, eight domain services, HTTP API, utils
 src/gui/      Qt6 workbench: main window + eight panels + settings/welcome dialogs + custom widgets
 src/cli/      agent-cli (agent-side client), platformd (headless daemon), miderhive-mcp (MCP stdio server)
-tests/        Core unit tests (243 assertions)
+tests/        Core unit tests (291 assertions)
 docs/         api.md, mcp.md, hardening-report.md, brand.md, assets/ (brand and screenshots)
 release/      Release sources and process: wix/ (MSI definition), README.md, RELEASE_NOTES-*.md
 scripts/      package.ps1, gen-wix-files.ps1, deploy.ps1, fetch-deps.ps1,
-              feasibility_check.py, soak_test.py
+              feasibility_check.py, soak_test.py, mcp_check.py,
+              verify_gui_selftest.py (offscreen GUI end-to-end), test_onboarding_and_safety.py
 ```
 
 ## Roadmap

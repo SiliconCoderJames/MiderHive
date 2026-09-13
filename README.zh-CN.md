@@ -232,10 +232,15 @@ Windows 图标缓存，运行 `ie4uinit.exe -show` 或重启资源管理器。
 
 ## 质量与验证
 
-- 单元测试 **243 项断言**：SHA-256 与常量时间密钥比较、版本比较、嵌入器、出站 URL 校验、
+- 单元测试 **291 项断言**：SHA-256 与常量时间密钥比较、版本比较、嵌入器、出站 URL 校验、
   平台端到端、鉴权与消息可见性加固回归、旧库升级迁移；
 - 集成验证 **39 项断言**（[scripts/feasibility_check.py](scripts/feasibility_check.py)）：
   模拟多 Agent 全生命周期，含中文检索、异步任务状态机、幂等上报、用量告警；
+- **离屏 GUI 全链路自测 35 项断言**（[scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py)，
+  构建目标 `gui_selftest`）：无头驱动真实工作台界面，覆盖首启引导 → Agent 上线 →
+  「接入成功」+ 欢迎记忆 → 密钥丢失健康横幅 → 轮换修复（旧钥 401/新钥 200）→ 设置重入；
+- 平台接入/密钥自测 **14 项断言**（[scripts/test_onboarding_and_safety.py](scripts/test_onboarding_and_safety.py)）：
+  预配身份、心跳上线、欢迎记忆、密钥丢失诊断与轮换语义（HTTP 实测）；
 - 加固回归：保留身份不可注册、注册角色白名单、点对点消息读隔离、请求体 1 MiB 上限、
   字段类型错误的统一 400 信封——均有单测与 HTTP 实测覆盖；
 - 发行链路：`scripts/package.ps1` 一条命令出 MSI + 便携 ZIP + 更新清单 + 校验和，
@@ -245,6 +250,8 @@ Windows 图标缓存，运行 `ie4uinit.exe -show` 或重启资源管理器。
 ```bash
 ctest --test-dir build -C Release                 # 单元测试
 python scripts/feasibility_check.py 8787          # 集成验证（需先启动工作台）
+python scripts/verify_gui_selftest.py             # 离屏 GUI 全链路自测（无需人工）
+python scripts/test_onboarding_and_safety.py      # 平台接入/密钥轮换（HTTP 实测）
 ```
 
 > 注：`docs/hardening-report.md` 中的 ASan / 浸泡数据是作者本机一次性实测结果，仓库内没有对应的
@@ -276,12 +283,14 @@ src/core/     平台核心（与 Qt 无关）：数据库封装、向量检索�
 src/gui/      Qt6 工作台：mainwindow + 八个面板（总览/用量/知识库/技能库/用户记忆/交流/错误/日志）
               + 设置/引导对话框 + 自绘控件与主题
 src/cli/      agent-cli（Agent 侧客户端）、platformd（无界面守护进程）、miderhive-mcp（MCP stdio 服务器）
-tests/        核心层单元测试（243 项断言）
+tests/        核心层单元测试（291 项断言）
 docs/         api.md（HTTP 接口）、mcp.md（MCP 接入）、hardening-report.md（加固报告）、
               brand.md、assets/（品牌与截图）
 release/      发行源与流程：wix/（MSI 定义）、README.md（打包与发版说明）、RELEASE_NOTES-*.md
 scripts/      package.ps1（出包）、gen-wix-files.ps1（WiX 清单）、deploy.ps1（本地部署）、
-              fetch-deps.ps1（依赖预取）、feasibility_check.py、soak_test.py
+              fetch-deps.ps1（依赖预取）、feasibility_check.py（集成）、soak_test.py（浸泡）、
+              verify_gui_selftest.py（离屏 GUI 全链路）、test_onboarding_and_safety.py（平台接入）、
+              mcp_check.py（真实 MCP 客户端驱动 miderhive-mcp）
 ```
 
 ## Roadmap
