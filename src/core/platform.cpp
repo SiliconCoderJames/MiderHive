@@ -536,14 +536,69 @@ bool Platform::skillGet(const std::string& name, SkillInfo& out, std::string& er
     return skills_.get(name, out, err);
 }
 
+namespace {
+// param_schema 的最小校验：只看顶层 required 与 properties 的 type。
+// 设计取舍：param_schema 是给调用方看的"约定"，平台此前完全不校验（错误参数静默入库）；
+// 这里拦明显违规（缺必填键 / 顶层类型错），不做嵌套递归与 format 校验，避免误伤合法调用。
+// schema 为空、缺失或本身损坏时一律放行——宁放行勿误杀（注册方写了坏 schema 不该堵死调用方）。
+bool jsonTypeMatches(const nlohmann::json& v, const std::string& t) {
+    if (t == "string") return v.is_string();
+    if (t == "number") return v.is_number();
+    if (t == "integer") return v.is_number_integer();
+    if (t == "boolean") return v.is_boolean();
+    if (t == "array") return v.is_array();
+    if (t == "object") return v.is_object();
+    if (t == "null") return v.is_null();
+    return true;  // 未知类型标注放行
+}
+bool validateParamsAgainstSchema(const std::string& paramsJson, const std::string& schemaJson,
+                                 std::string& err) {
+    nlohmann::json params = nlohmann::json::parse(paramsJson, nullptr, false);
+    if (params.is_discarded() || !params.is_object()) {
+        err = "params must be a JSON object";
+        return false;
+    }
+    nlohmann::json schema = nlohmann::json::parse(schemaJson, nullptr, false);
+    if (schema.is_discarded() || !schema.is_object()) return true;
+    if (schema.contains("required") && schema["required"].is_array()) {
+        for (const auto& r : schema["required"]) {
+            if (!r.is_string()) continue;
+            if (!params.contains(r.get<std::string>())) {
+                err = "missing required param: " + r.get<std::string>();
+                return false;
+            }
+        }
+    }
+    if (schema.contains("properties") && schema["properties"].is_object()) {
+        for (auto it = schema["properties"].begin(); it != schema["properties"].end(); ++it) {
+            if (!params.contains(it.key())) continue;
+            const nlohmann::json& spec = it.value();
+            if (!spec.is_object() || !spec.contains("type") || !spec["type"].is_string()) continue;
+            if (!jsonTypeMatches(params[it.key()], spec["type"].get<std::string>())) {
+                err = "param '" + it.key() + "' must be " + spec["type"].get<std::string>();
+                return false;
+            }
+        }
+    }
+    return true;
+}
+}  // namespace
+
 bool Platform::skillInvoke(const std::string& caller, const std::string& skillName,
                            const std::string& paramsJson, const std::string& resultSummary,
                            const std::string& status, int64_t durationMs, int64_t tokensIn,
                            int64_t tokensOut, std::string& err) {
     std::lock_guard lock(mutex_);
     // 协作规则：新技能必须先注册再调用
-    if (!skills_.isRegistered(skillName)) {
+    SkillInfo info;
+    if (!skills_.get(skillName, info, err)) {
         err = "skill not registered: " + skillName;
+        return false;
+    }
+    // 参数须符合注册时声明的 param_schema（最小校验：必填键 + 顶层类型）
+    std::string schemaErr;
+    if (!validateParamsAgainstSchema(paramsJson, info.param_schema, schemaErr)) {
+        err = "params do not match param_schema of '" + skillName + "': " + schemaErr;
         return false;
     }
     if (status != "success" && status != "failed") { err = "status must be success|failed"; return false; }

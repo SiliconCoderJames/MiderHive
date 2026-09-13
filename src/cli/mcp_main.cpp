@@ -484,7 +484,8 @@ std::vector<ToolDef> buildTools() {
     t.push_back({"skill_invoke",
                  "Record a skill invocation (the platform logs params/result/tokens/duration for "
                  "audit and budget accounting; the actual work is performed by the caller). "
-                 "The skill must exist (skill_list to discover).",
+                 "The skill must exist (skill_list to discover). Params are validated against the "
+                 "registered param_schema (missing required keys or wrong top-level types are rejected).",
                  objSchema({{"name", prop("string", "registered skill name")},
                             {"params", prop("object", "arguments matching the skill's param schema")},
                             {"result_summary", prop("string", "what the invocation produced")},

@@ -229,6 +229,41 @@ def main():
          status == 200 and mm == "semantic",
          f"HTTP={status} match_mode={mm}")
 
+    # ---- 16 A 注册无 schema 技能（向后兼容：无约束不拦）----
+    data = expect_env(call("POST", "/api/skills",
+                           {"name": "e2e-free", "description": "无 param_schema 的自由技能",
+                            "category": "e2e"},
+                           name=AGENT_A, key=key_a),
+                      "A 注册无 schema 技能")
+    step(16, "A 注册无 param_schema 的自由技能", data.get("param_schema") in ({}, "{}"),
+         f"param_schema={data.get('param_schema')!r}")
+
+    # ---- 17 修复回归：无 schema 技能接受任意参数（宁放行勿误杀）----
+    status, payload = call("POST", "/api/skills/e2e-free/invoke",
+                           {"params": {"whatever": [1, 2, 3]}, "result_summary": "自由参数",
+                            "status": "success"},
+                           name=AGENT_B, key=key_b)
+    step(17, "修复回归：无 schema 技能接受任意参数", status == 200, f"HTTP={status}")
+
+    # ---- 18 修复回归：缺必填参数被拒绝 ----
+    status, payload = call("POST", f"/api/skills/{SKILL}/invoke",
+                           {"params": {}, "result_summary": "缺参调用", "status": "success"},
+                           name=AGENT_B, key=key_b)
+    msg = payload.get("message") if isinstance(payload, dict) else repr(payload)
+    step(18, "修复回归：缺必填参数 text 被拒绝 HTTP 400",
+         status == 400 and "missing required param" in str(msg),
+         f"HTTP={status} message={msg}")
+
+    # ---- 19 修复回归：参数类型错误被拒绝 ----
+    status, payload = call("POST", f"/api/skills/{SKILL}/invoke",
+                           {"params": {"text": 123}, "result_summary": "类型错调用",
+                            "status": "success"},
+                           name=AGENT_B, key=key_b)
+    msg = payload.get("message") if isinstance(payload, dict) else repr(payload)
+    step(19, "修复回归：text 传数字被拒绝（应为 string）HTTP 400",
+         status == 400 and "must be string" in str(msg),
+         f"HTTP={status} message={msg}")
+
     print("=" * 72)
     print(f"全部通过：{_passed} 步。A-B 协作链路（注册→记忆→技能→调用→错误互通→事件流）端到端可用。")
 
