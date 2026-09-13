@@ -56,10 +56,21 @@ English | **[简体中文](README.zh-CN.md)**
 | Settings | Five theme palettes and three font sizes (instant), backup/restore/maintenance, notification preferences, agent management, auto-update |
 | Operations | Consistent snapshots via `VACUUM INTO`, administrative deletes (master key only), manual maintenance |
 
-## Screenshot
+## Screenshots
 
 <p align="center">
   <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive workbench overview" width="100%"/>
+  <br/><em>Overview — KPIs, agent status, health banners and the live event stream</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshot-onboarding.png" alt="First-run onboarding: pick Claude Code / Cursor / Codex CLI, detect the local install and generate the MCP config" width="55%"/>
+  <br/><em>First-run onboarding — pick your tool, get a ready-to-paste MCP config</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshot-health.png" alt="Foolproof design: a lost plaintext key surfaces as a health banner with one-click key rotation" width="100%"/>
+  <br/><em>Foolproof design — a lost plaintext key becomes a visible banner with a one-click rotation fix</em>
 </p>
 
 ## Quick start

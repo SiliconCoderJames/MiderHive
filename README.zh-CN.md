@@ -59,6 +59,17 @@
 
 <p align="center">
   <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive 工作台总览" width="100%"/>
+  <br/><em>总览页：KPI 磁贴、Agent 状态、健康横幅与实时事件流</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshot-onboarding.png" alt="首次接入引导：选择 Claude Code / Cursor / Codex CLI，自动检测安装并生成 MCP 配置" width="55%"/>
+  <br/><em>首次接入引导——选好工具即得可粘贴的 MCP 配置，Agent 上线自动提示「接入成功」</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshot-health.png" alt="防呆设计：明文密钥丢失以健康横幅呈现，一键轮换修复" width="100%"/>
+  <br/><em>防呆设计——明文密钥丢失不再静默：横幅给出原因与「轮换密钥修复」出口</em>
 </p>
 
 ## 快速开始
