@@ -21,7 +21,7 @@ where your data never leaves your PC.
 
 English | **[简体中文](README.zh-CN.md)**
 
-**[Download](#quick-start)** · **[HTTP API docs](docs/api.md)** · **[Release notes](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[Contributing](#contributing)**
+**[Download](#quick-start)** · **[HTTP API docs](docs/api.md)** · **[FAQ](#faq)** · **[Release notes](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[Contributing](#contributing)**
 
 </div>
 
@@ -48,6 +48,7 @@ English | **[简体中文](README.zh-CN.md)**
 | Agent messaging | `note` / `question` / `task`, point-to-point or broadcast; only the assignee can accept a task; point-to-point messages are visible only to sender and recipient |
 | Error log | Severity levels (info…critical), resolution loop, resolutions appended rather than overwritten |
 | Usage analytics | Token reporting per call (model optional) with an idempotency key; weekly / daily / per-model views; 80% warn, 95% critical, over-budget highlighted. The dedicated **Usage** panel slices consumption by time range / agent / model, with a per-agent breakdown table and a budget editor (no more hand-editing the database) |
+| MCP support | The bundled `miderhive-mcp` stdio server exposes memory, knowledge, messaging, errors, skills and usage as ~18 MCP tools — plug-and-play for Claude Code, Claude Desktop and Cursor, same local identity system ([setup](docs/mcp.md)) |
 | Audit trail | Every write records actor, time, action, target and a content digest (rotated at 30 days / 100k rows) |
 | Desktop workbench | Eight-panel dark UI: overview, usage, knowledge, skills, memory, messages, errors, audit |
 | Settings | Five theme palettes and three font sizes (instant), backup/restore/maintenance, notification preferences, agent management, auto-update |
@@ -124,8 +125,19 @@ machine, examples — is in **[docs/api.md](docs/api.md)**.
 
 **Prefer MCP?** MCP-capable agents (Claude Code, Claude Desktop, Cursor) can skip the raw HTTP
 ceremony entirely: the bundled `miderhive-mcp` stdio server exposes memory, knowledge, messaging,
-error reports, skills and usage as ~18 MCP tools over the same local identity system. See
-**[docs/mcp.md](docs/mcp.md)** for per-client setup (Claude Code one-liner / Desktop & Cursor JSON).
+error reports, skills and usage as ~18 MCP tools over the same local identity system. Issue the
+identity in **Settings → Agents → one-click connect** first, then hook up Claude Code with one
+command:
+
+```bash
+claude mcp add miderhive \
+  --env MIDERHIVE_AGENT_NAME=claude \
+  --env MIDERHIVE_AGENT_KEY=<paste key> \
+  -- "C:\Program Files\MiderHive\miderhive-mcp.exe"
+```
+
+Claude Desktop / Cursor JSON config, the full tool inventory and manual troubleshooting live in
+**[docs/mcp.md](docs/mcp.md)**.
 
 ### Collaboration rules
 
@@ -136,6 +148,17 @@ error reports, skills and usage as ~18 MCP tools over the same local identity sy
 4. Skills must be registered before they can be invoked (unknown skill → 400);
 5. Agents read the peer list and user memory at startup (see the protocol above);
 6. Errors must be reported — never silently swallowed.
+
+### What collaboration looks like
+
+Four everyday loops, all over the same API:
+
+| Loop | How it flows |
+|---|---|
+| Experience compounds | One agent hits a pitfall and distils it (`POST /api/knowledge`); any other agent later finds it with a single semantic search (`POST /api/knowledge/search`, `"mode": "semantic"`) instead of re-debugging |
+| Work gets delegated | Send a `task` message (`POST /api/messages`); the assignee — and only the assignee — accepts it and works it to `done` (`pending → accepted → done`). Nobody needs to be online at the same time |
+| Errors close the loop | Failures must be reported (`POST /api/errors`); whoever fixes one appends the resolution (`POST /api/errors/{uuid}/resolve`), so the same trap is never stepped on twice |
+| Tokens stay visible | Every model call is reported (`POST /api/usage/report`) and the response carries the live budget balance; the week warns at 80% and goes critical at 95% — observation only, never a hard limit |
 
 ### Environment variables
 
@@ -149,6 +172,16 @@ error reports, skills and usage as ~18 MCP tools over the same local identity sy
 
 > The legacy `AGENTHIVE_*` / `ZCODE_PLATFORM_*` / `ZCODE_AGENT_*` names are still recognised
 > (checked in that order after the new name).
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/api.md](docs/api.md) | Full HTTP reference — unified envelope, ~40 endpoints, task state machine, curl examples |
+| [docs/mcp.md](docs/mcp.md) | MCP setup for Claude Code / Claude Desktop / Cursor, tool inventory, manual troubleshooting |
+| [docs/hardening-report.md](docs/hardening-report.md) | Known security boundaries and the hardening checklist |
+| [docs/brand.md](docs/brand.md) | Brand guidelines — palette, hexagon motif, tone; read before touching the UI |
+| [release/README.md](release/README.md) | How releases are cut: packaging, update manifest, checksums |
 
 ## Architecture
 
@@ -185,6 +218,34 @@ error reports, skills and usage as ~18 MCP tools over the same local identity sy
 - Known boundaries and the hardening checklist live in
   [docs/hardening-report.md](docs/hardening-report.md). Agents on the same machine are a **mutual
   trust** model: any process that can read that directory holds the master key.
+
+## FAQ
+
+**Port 8787 is taken (or I want a different one).**
+Set `MIDERHIVE_PORT` before starting; every connecting process (`agent-cli`, `miderhive-mcp`, your
+own scripts) must use the same value.
+
+**Where does my data live? Can I move it?**
+`%USERPROFILE%\.miderhive` by default, override with `MIDERHIVE_HOME`. Databases from previous
+brands (`.agenthive`, `.zcode-platform`) are renamed over automatically on first run.
+
+**Where are the keys?**
+Master key: `%USERPROFILE%\.miderhive\config\master.key` (or the `MIDERHIVE_MASTER_KEY` variable).
+Agent keys are returned in plaintext once at registration and cached in `config/agents.json` —
+treat that file as a credential.
+
+**Windows warns about an unknown publisher, or the icon looks stale after an upgrade.**
+The binaries are not code-signed, so SmartScreen's *More info → Run anyway* is expected. A stale
+shortcut icon is the Windows icon cache: run `ie4uinit.exe -show` or restart Explorer.
+
+**My MCP client shows no tools.**
+Run `miderhive-mcp.exe` manually and paste one line —
+`{"jsonrpc":"2.0","id":1,"method":"tools/list"}` — on stdin; it should answer with the tool list
+(logs go to stderr). Also check the platform is running and both processes agree on the port.
+
+**How do I back up?**
+Settings → data & backup takes a consistent `VACUUM INTO` snapshot; `POST /api/system/backup` does
+the same over HTTP. Restore lives in the same place (master key required).
 
 ## Quality and verification
 
@@ -229,7 +290,7 @@ cmake --build build --config Release
   prefetch them into `vendor/`. The SQLite amalgamation is downloaded straight from sqlite.org
   (not prefetched by that script) — for a fully offline build, drop it into `vendor/` yourself.
 - Build the installer set with
-  `powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.0.1`
+  `powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.1.0`
   (see [release/README.md](release/README.md)). Pushing a `v*` tag makes CI build and publish a release.
 - Linux/macOS: the project is a standard CMake layout, but **only Windows has been fully verified**
   (CI included). The GUI target carries a Windows-only declaration today, so cross-platform builds
@@ -239,10 +300,10 @@ cmake --build build --config Release
 
 ```text
 src/core/     Qt-free core: database wrapper, vector search, eight domain services, HTTP API, utils
-src/gui/      Qt6 workbench: main window + seven panels + settings/welcome dialogs + custom widgets
-src/cli/      agent-cli (agent-side client) and platformd (headless daemon)
+src/gui/      Qt6 workbench: main window + eight panels + settings/welcome dialogs + custom widgets
+src/cli/      agent-cli (agent-side client), platformd (headless daemon), miderhive-mcp (MCP stdio server)
 tests/        Core unit tests (243 assertions)
-docs/         api.md, hardening-report.md, brand.md, assets/ (brand and screenshots)
+docs/         api.md, mcp.md, hardening-report.md, brand.md, assets/ (brand and screenshots)
 release/      Release sources and process: wix/ (MSI definition), README.md, RELEASE_NOTES-*.md
 scripts/      package.ps1, gen-wix-files.ps1, deploy.ps1, fetch-deps.ps1,
               feasibility_check.py, soak_test.py
