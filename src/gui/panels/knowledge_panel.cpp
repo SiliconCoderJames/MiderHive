@@ -92,7 +92,21 @@ KnowledgePanel::KnowledgePanel(ah::Platform& platform, QWidget* parent)
     metaLabel_ = new QLabel(right);
     rl->addWidget(metaLabel_);
     detail_ = new QTextBrowser(right);
-    rl->addWidget(detail_, 1);
+    // 详情/空状态分页：全库为空时右侧直接给"模块是什么 + 怎么产生内容 + 显眼的新建按钮"
+    detailStack_ = new QStackedWidget(right);
+    detailStack_->addWidget(detail_);
+    emptyState_ = new ui::InlineEmpty(
+        "knowledge",
+        i18n::trs("还没有任何知识条目", "No knowledge entries yet"),
+        i18n::trs("知识库存放团队沉淀的经验与方案，供所有 Agent 检索引用；"
+                  "Agent 也可通过 POST /api/knowledge 直接写入。",
+                  "The knowledge base holds shared experience and solutions for every agent to "
+                  "retrieve; agents can also write via POST /api/knowledge."),
+        detailStack_);
+    emptyState_->setAction(i18n::trs("＋ 新建条目", "＋ New Entry"),
+                           [this] { onNewEntry(); });
+    detailStack_->addWidget(emptyState_);
+    rl->addWidget(detailStack_, 1);
     auto* vrow = new QHBoxLayout;
     versionCombo_ = new QComboBox(right);
     addVersionBtn_ = new QPushButton(i18n::trs("追加新版本", "Append Version"), right);
@@ -165,22 +179,12 @@ void KnowledgePanel::onSearch() {
 
     versionCombo_->clear();
     if (!hits_.empty()) {
+        detailStack_->setCurrentWidget(detail_);
         table_->selectRow(0);
         onSelectEntry(0);
     } else {
-        // 空状态：蜂巢母题 + 标题 + 出路提示（品牌触点，见 docs/brand.md §3）
-        ui::attachHexMotif(detail_->document());
-        detail_->setHtml(ui::th(
-            QString("<div style='text-align:center; margin-top:20px;'>"
-                    "<img src='hexmotif' width='96' height='70'>"
-                    "<div style='font-size:13px; font-weight:600; color:@text@; margin-top:6px;'>%1</div>"
-                    "<div style='color:@muted@; margin-top:6px;'>%2</div></div>")
-                .arg(i18n::trs("暂无知识条目", "No entries yet"))
-                .arg(i18n::trs("点击右上角「＋ 新建条目」沉淀第一条经验，或让任意已接入的 Agent 通过 "
-                               "<span style='font-family:@mono@;'>POST /api/knowledge</span> 写入",
-                               "Click「＋ New Entry」to add the first one, or let any connected "
-                               "agent write via <span style='font-family:@mono@;'>POST "
-                               "/api/knowledge</span>"))));
+        // 空状态：右侧整栏切到引导页（模块作用 + 如何产生内容 + 新建按钮）
+        detailStack_->setCurrentWidget(emptyState_);
     }
 }
 

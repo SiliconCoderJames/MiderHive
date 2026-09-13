@@ -33,6 +33,10 @@ import sys
 import urllib.error
 import urllib.request
 
+# GBK 控制台兜底：避免收尾中文/箭头字符在编码上把退出码带崩
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 BASE = os.environ.get("MH_BASE", "http://127.0.0.1:8790").rstrip("/")
 MASTER_KEY = os.environ.get("MH_MASTER_KEY", "e2e-master-key")
 AGENT_A = os.environ.get("MH_AGENT_A", "alpha-e2e")

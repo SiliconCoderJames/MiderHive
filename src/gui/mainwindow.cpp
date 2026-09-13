@@ -4,6 +4,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -12,6 +13,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSettings>
 #include <QShortcut>
 #include <QStatusBar>
 #include <QSystemTrayIcon>
@@ -484,6 +486,52 @@ void MainWindow::onRefresh() {
     int idx = stack_->currentIndex();
     if (idx >= 0 && idx < static_cast<int>(panels_.size())) panels_[static_cast<size_t>(idx)]->refresh();
     updateStatusBar();
+    checkOnboarding();  // 接入引导观察：新接入的 Agent 上线 → 「接入成功」+ 欢迎记忆
+}
+
+void MainWindow::checkOnboarding() {
+    QSettings s;
+    s.beginGroup("ui/onboardingPending");
+    const QStringList names = s.childKeys();
+    if (names.isEmpty()) {
+        s.endGroup();
+        return;
+    }
+    std::string err;
+    std::vector<ah::AgentInfo> agents;
+    if (!platform_.listAgents(agents, err)) {
+        s.endGroup();
+        return;
+    }
+    for (const QString& name : names) {
+        const QString toolId = s.value(name).toString();
+        for (const auto& a : agents) {
+            if (QString::fromStdString(a.name) != name || a.status != "online") continue;
+            const auto* tool = ui::integrations::toolById(toolId);
+            const QString toolName = tool ? tool->nameEn : toolId;
+            // 欢迎记忆（作者=该 Agent，写入「项目档案」区）：先移除登记再弹窗，
+            // 避免模态框期间 3s 轮询重入造成重复弹窗/重复写入
+            std::string merr;
+            ah::MemoryEntry mout;
+            const QString stamp = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm");
+            (void)platform_.memorySet(
+                name.toStdString(), "project", ("welcome/" + toolId).toStdString(),
+                i18n::trs("%1 于 %2 首次接入 MiderHive",
+                          "%1 joined MiderHive for the first time at %2")
+                    .arg(toolName, stamp)
+                    .toStdString(),
+                0, mout, merr);
+            s.remove(name);
+            QMessageBox::information(
+                this, i18n::trs("接入成功 🎉", "Connected 🎉"),
+                i18n::trs("%1 已以身份「%2」成功接入 MiderHive，一条欢迎记忆已写入「用户记忆 → 项目档案」。",
+                          "%1 has joined MiderHive as \"%2\". A welcome memory entry was written "
+                          "to User Memory → Project.")
+                    .arg(toolName, name));
+            break;
+        }
+    }
+    s.endGroup();
 }
 
 void MainWindow::updateStatusBar() {

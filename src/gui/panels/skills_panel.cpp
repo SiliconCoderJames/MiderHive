@@ -63,7 +63,19 @@ SkillsPanel::SkillsPanel(ah::Platform& platform, QWidget* parent)
     filterEdit_ = makeTableFilter(table_, this);
     toolbar->insertWidget(toolbar->indexOf(registerBtn), filterEdit_);
     detail_ = new QTextBrowser(splitter);
-    splitter->addWidget(detail_);
+    // 详情/空状态分页：全库为空时右侧整栏给"技能库是什么 + 怎么产生内容 + 注册按钮"
+    detailStack_ = new QStackedWidget(splitter);
+    detailStack_->addWidget(detail_);
+    emptyState_ = new ui::InlineEmpty(
+        "skills",
+        i18n::trs("还没有注册任何技能", "No skills registered yet"),
+        i18n::trs("技能是可被所有 Agent 调用的能力单元：先注册、后调用，每次调用都留痕形成使用热度。",
+                  "A skill is a capability any agent can invoke: register first, invoke later — "
+                  "every call is recorded as usage heat."),
+        detailStack_);
+    emptyState_->setAction(i18n::trs("＋ 注册技能", "＋ Register Skill"), [this] { onRegister(); });
+    detailStack_->addWidget(emptyState_);
+    splitter->addWidget(detailStack_);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 2);
     // 分栏宽度持久化：跨会话记住左右比例（主题/语言切换重建面板后同样恢复）
@@ -139,25 +151,16 @@ void SkillsPanel::refresh() {
     table_->resizeColumnsToContents();  // 按实际内容重算列宽，避免截断
     applyTableFilter(table_, filterEdit_->text());  // 行已重建，重放即时过滤态
     if (restoreRow >= 0) {
+        detailStack_->setCurrentWidget(detail_);
         table_->selectRow(restoreRow);
         onSelectSkill(restoreRow);
     } else if (!skills_.empty()) {
+        detailStack_->setCurrentWidget(detail_);
         table_->selectRow(0);
         onSelectSkill(0);
     } else {
-        // 空状态：蜂巢母题 + 标题 + 出路提示
-        ui::attachHexMotif(detail_->document());
-        detail_->setHtml(ui::th(
-            QString("<div style='text-align:center; margin-top:20px;'>"
-                    "<img src='hexmotif' width='96' height='70'>"
-                    "<div style='font-size:13px; font-weight:600; color:@text@; margin-top:6px;'>%1</div>"
-                    "<div style='color:@muted@; margin-top:6px;'>%2</div></div>")
-                .arg(i18n::trs("暂无注册技能", "No skills registered"))
-                .arg(i18n::trs("点击右上角「＋ 注册技能」，或让 Agent 通过 "
-                               "<span style='font-family:@mono@;'>POST /api/skills</span> 注册（先注册后调用）",
-                               "Click「＋ Register Skill」, or let an agent register via "
-                               "<span style='font-family:@mono@;'>POST /api/skills</span> "
-                               "(register before invoke)"))));
+        // 空状态：右侧整栏切到引导页（模块作用 + 如何产生内容 + 注册按钮）
+        detailStack_->setCurrentWidget(emptyState_);
     }
 }
 

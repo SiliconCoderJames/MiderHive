@@ -975,4 +975,60 @@ bool Platform::httpRunning() const {
     return http_ && http_->running();
 }
 
+Diagnostics Platform::diagnostics() {
+    // 全程持锁：探测只读（临时探针文件写完即删），避免并发下互相踩踏
+    std::lock_guard lock(mutex_);
+    Diagnostics d;
+    d.home_dir = home_dir_;
+    d.port = http_ ? http_->port() : 0;
+    d.http_running = http_ && http_->running();
+
+    // 数据目录可写：写探针文件再删（目录不存在则先补建——bootstrap 本应建好）
+    {
+        std::error_code ec;
+        fs::create_directories(home_dir_, ec);
+        const auto probe = fs::path(home_dir_) / ".diag-probe";
+        bool ok = false;
+        {
+            std::ofstream out(probe, std::ios::trunc);
+            ok = static_cast<bool>(out);
+        }
+        if (ok) fs::remove(probe, ec);
+        d.home_writable = ok;
+    }
+
+    // 数据库可读且核心表存在（bootstrapped_ 之外再做一次实际查询，防"假在跑"）
+    {
+        std::string qerr;
+        int64_t n = -1;
+        const bool ok = db_.query("SELECT COUNT(*) FROM settings", nullptr,
+                                  [&](Stmt& st) { n = st.i64(0); }, qerr);
+        d.db_ok = bootstrapped_ && ok && n >= 0;
+    }
+
+    // 明文密钥缓存：可读性 + 已注册 Agent 的条目覆盖（缺失=密钥不可恢复，修复=轮换）
+    {
+        std::vector<AgentInfo> agents;
+        std::string aerr;
+        if (!agents_.listAgents(agents, aerr)) agents.clear();
+        const auto keyPath = fs::path(home_dir_) / "config" / "agents.json";
+        nlohmann::json j;
+        bool readable = false;
+        {
+            std::ifstream in(keyPath);
+            if (in) {
+                j = nlohmann::json::parse(in, nullptr, false);
+                readable = !j.is_discarded() && j.is_object();
+            }
+        }
+        d.agents_json_readable = readable;
+        for (const auto& a : agents) {
+            const bool hasKey = readable && j.contains(a.name) && j[a.name].is_string() &&
+                                !j[a.name].get<std::string>().empty();
+            if (!hasKey) d.keyfile_missing.push_back(a.name);
+        }
+    }
+    return d;
+}
+
 }  // namespace ah

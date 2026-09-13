@@ -22,6 +22,15 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     buildHeader(root, "overview", "总览", "Overview", "预算消耗 · Agent 状态 · 事件流与告警，一屏掌握蜂巢动态",
                 "Budget, agent status, event stream and alerts at a glance");
 
+    // ---- 健康横幅（防呆）：紧跟页头，出问题时用户第一眼就能看到修复入口 ----
+    healthBox_ = new QWidget(this);
+    healthBox_->setStyleSheet("background:transparent;");
+    healthLay_ = new QVBoxLayout(healthBox_);
+    healthLay_->setContentsMargins(0, 0, 0, 0);
+    healthLay_->setSpacing(6);
+    healthBox_->setVisible(false);
+    root->addWidget(healthBox_);
+
     // ---- 第一行：KPI 磁贴（趋势小图 + 环比胶囊，先给结论再看图表）----
     auto* kpiRow = new QHBoxLayout();
     kpiRow->setSpacing(14);
@@ -251,10 +260,175 @@ QString DashboardPanel::kindOfEvent(const QString& action, const QString& target
     return "audit";
 }
 
+void DashboardPanel::refreshHealth() {
+    const ah::Diagnostics d = platform_.diagnostics();
+    struct Row {
+        QString text;
+        QString fixAgent;  // 非空 → 该行的修复动作是"给这个 Agent 轮换密钥"
+        QString detail;    // 非空 → 查看详情弹更完整的解释与出路
+    };
+    QVector<Row> rows;
+    QStringList sig;
+    if (!d.http_running) {
+        rows.push_back({i18n::trs("本机服务未运行：Agent 现在无法接入工作台。",
+                                  "Local service is not running: agents cannot reach the "
+                                  "workbench right now."),
+                        QString(), "http"});
+        sig << "http";
+    }
+    if (!d.home_writable) {
+        rows.push_back({i18n::trs("数据目录不可写：配置与数据无法保存。",
+                                  "Data directory is not writable: settings and data cannot be "
+                                  "saved."),
+                        QString(), "dir"});
+        sig << "dir";
+    }
+    if (!d.db_ok) {
+        rows.push_back({i18n::trs("数据库异常：无法读取核心数据表。",
+                                  "Database problem: core tables cannot be read."),
+                        QString(), "db"});
+        sig << "db";
+    }
+    if (!d.agents_json_readable) {
+        rows.push_back({i18n::trs("密钥缓存损坏或不可读：已接入的 Agent 可能全部掉线。",
+                                  "Key cache is corrupted or unreadable: connected agents may all "
+                                  "go offline."),
+                        QString(), "cache"});
+        sig << "cache";
+    }
+    for (const auto& n : d.keyfile_missing) {
+        const QString name = QString::fromStdString(n);
+        rows.push_back({i18n::trs("%1 的明文密钥已丢失：无法再查看或补配；若 Agent 端配置也丢了将无法接入，建议轮换密钥。",
+                                  "%1's plaintext key is gone: it cannot be viewed or re-shared; "
+                                  "if the agent side also lost it, rotation is the only way back.")
+                            .arg(name),
+                        name, QString()});
+        sig << "key:" + name;
+    }
+    const QString s = sig.join("|");
+    if (s == lastHealthSig_) return;
+    lastHealthSig_ = s;
+
+    // 重建横幅行（签名变化才会走到这里）
+    const auto& kids = healthBox_->children();
+    for (auto* c : kids)
+        if (qobject_cast<QFrame*>(c)) qobject_cast<QFrame*>(c)->deleteLater();
+    const QColor c = ui::warn();
+    for (const auto& r : rows) {
+        auto* row = new QFrame(healthBox_);
+        row->setStyleSheet(QString("QFrame { background:rgba(%1,%2,%3,28);"
+                                   " border-left:4px solid %4; border-radius:6px; }")
+                               .arg(c.red())
+                               .arg(c.green())
+                               .arg(c.blue())
+                               .arg(c.name()));
+        auto* hl = new QHBoxLayout(row);
+        hl->setContentsMargins(10, 6, 10, 6);
+        hl->setSpacing(8);
+        auto* ic = new QLabel(row);
+        ic->setPixmap(ui::makeIcon("errors", c, 15).pixmap(15, 15));
+        ic->setStyleSheet("background:transparent;");
+        hl->addWidget(ic);
+        auto* lb = new ui::WrappedLabel(2, r.text, row);
+        lb->setStyleSheet(QString("color:%1; font-size:12px; background:transparent;").arg(c.name()));
+        hl->addWidget(lb, 1);
+        if (!r.fixAgent.isEmpty()) {
+            auto* fix = new QPushButton(i18n::trs("轮换密钥修复", "Fix: rotate key"), row);
+            fix->setCursor(Qt::PointingHandCursor);
+            fix->setStyleSheet(ui::th("padding:3px 10px; font-size:11px;"));
+            connect(fix, &QPushButton::clicked, this,
+                    [this, name = r.fixAgent] { fixKeyfile(name); });
+            hl->addWidget(fix);
+        }
+        if (!r.detail.isEmpty()) {
+            auto* more = new QPushButton(i18n::trs("查看详情", "Details"), row);
+            more->setCursor(Qt::PointingHandCursor);
+            more->setStyleSheet(ui::th("padding:3px 10px; font-size:11px;"));
+            const QString code = r.detail;
+            connect(more, &QPushButton::clicked, this, [this, code] {
+                const QString home = QString::fromStdString(platform_.homeDir());
+                QString text;
+                if (code == "http")
+                    text = ui::humanError(i18n::trs("HTTP 服务未启动", "HTTP service not started"));
+                else if (code == "dir")
+                    text = ui::humanError(i18n::trs("数据目录不可写: %1", "data dir not writable: %1")
+                                              .arg(home)) +
+                           "\n" + home;
+                else if (code == "db")
+                    text = ui::humanError(
+                        i18n::trs("数据库异常或损坏", "database missing or corrupted"));
+                else
+                    text = ui::humanError(i18n::trs("密钥缓存损坏", "key cache corrupted"));
+                QMessageBox::information(this, i18n::trs("健康详情", "Health details"), text);
+            });
+            hl->addWidget(more);
+        }
+        healthLay_->addWidget(row);
+    }
+    healthBox_->setVisible(!rows.isEmpty());
+}
+
+void DashboardPanel::fixKeyfile(const QString& name) {
+    const auto ret = QMessageBox::question(
+        this, i18n::trs("轮换密钥", "Rotate key"),
+        i18n::trs("将为 %1 生成新密钥并写回本机缓存。旧密钥立即失效；之后请把新密钥更新到该 Agent "
+                  "的配置并重启它。继续吗？",
+                  "A new key will be generated for %1 and written to the local cache. The old key "
+                  "stops working immediately; afterwards update the agent's config with the new "
+                  "key and restart it. Continue?")
+            .arg(name));
+    if (ret != QMessageBox::Yes) return;
+    std::string key, err;
+    if (!platform_.agentRotateKey(ah::kManagerName, name.toStdString(), key, err)) {
+        QMessageBox::warning(this, i18n::trs("修复失败", "Fix failed"),
+                             ui::humanError(QString::fromStdString(err)));
+        return;
+    }
+    QMessageBox box(this);
+    box.setWindowTitle(i18n::trs("密钥已轮换", "Key rotated"));
+    box.setIcon(QMessageBox::Information);
+    box.setText(i18n::trs("%1 的新密钥已生成并写入本机缓存：", "A new key for %1 was generated "
+                                                         "and written to the local cache:")
+                        .arg(name) +
+                "\n\n" + QString::fromStdString(key) + "\n\n" +
+                i18n::trs("下一步：把新密钥更新到该 Agent 的配置（MIDERHIVE_AGENT_KEY 或注册命令），"
+                          "然后重启该 Agent。",
+                          "Next: update the agent's config with the new key (MIDERHIVE_AGENT_KEY or "
+                          "the register command), then restart the agent."));
+    auto* copyBtn = box.addButton(i18n::trs("复制密钥", "Copy key"), QMessageBox::ActionRole);
+    box.addButton(QMessageBox::Close);
+    box.exec();
+    if (box.clickedButton() == copyBtn) {
+        QApplication::clipboard()->setText(QString::fromStdString(key));
+        ui::Toast::show(this, i18n::trs("已复制，请粘贴到 Agent 配置并重启它",
+                                        "Copied — paste it into the agent config and restart it"));
+    }
+    lastHealthSig_.clear();  // 强制下轮重建横幅（密钥条目已恢复）
+}
+
 void DashboardPanel::showAgentActions(const QString& name, bool online) {
     QMenu menu(this);
-    menu.addAction(online ? i18n::trs("在线中", "online") : i18n::trs("离线", "offline"))
-        ->setEnabled(false);
+    if (online) {
+        menu.addAction(i18n::trs("在线中", "online"))->setEnabled(false);
+    } else {
+        // 防呆：离线卡片先给"为什么离线"的具体原因，再给对应的修复入口
+        const ah::Diagnostics d = platform_.diagnostics();
+        const bool keyMissing =
+            std::find(d.keyfile_missing.begin(), d.keyfile_missing.end(),
+                      name.toStdString()) != d.keyfile_missing.end();
+        const QString reason =
+            keyMissing
+                ? i18n::trs("离线排查：明文密钥缓存丢失（无法再查看/补配；轮换可重置）",
+                            "Diagnosis: plaintext key cache missing (cannot be viewed or "
+                            "re-shared; rotate to reset)")
+                : i18n::trs("离线排查：密钥正常，多为 Agent 未运行或端口/网络配置不符",
+                            "Diagnosis: key is fine — likely the agent is not running, or "
+                            "port/network mismatch");
+        menu.addAction("● " + reason)->setEnabled(false);
+        if (keyMissing)
+            menu.addAction(i18n::trs("轮换密钥修复", "Fix by rotating key"), this,
+                           [this, name] { fixKeyfile(name); });
+    }
     menu.addSeparator();
     // 离线 Agent 的出路：把接入命令直接复制走，用户不用去翻文档凑参数
     menu.addAction(i18n::trs("复制接入命令", "Copy connect command"), this, [this, name] {
@@ -279,6 +453,9 @@ void DashboardPanel::showAgentActions(const QString& name, bool online) {
 
 void DashboardPanel::refresh() {
     std::string err;
+
+    // 健康横幅先行：问题（端口/目录/库/密钥）在用户看数据前就摆上桌面
+    refreshHealth();
 
     // 逐日序列先取：KPI 的趋势小图与预算卡的迷你走势都用它（一次查询，两处复用）
     std::vector<ah::UsageDailyPoint> dailyPts;

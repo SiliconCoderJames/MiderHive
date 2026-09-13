@@ -266,13 +266,30 @@ public:
                                  .arg(dim.red()).arg(dim.green()).arg(dim.blue())
                                  .arg(dim.alpha()));
         lay->addWidget(hint_);
+        lay_ = lay;  // 供 setAction 追加动作按钮
     }
     QLabel* titleLabel() const { return title_; }
     QLabel* hintLabel() const { return hint_; }
+    // 可选动作按钮：空状态的"显眼下一步"（如「＋ 新建条目」）。不调用则不占布局，
+    // 既有用法零变化；调用后按钮出现在提示文字下方居中。
+    void setAction(const QString& text, std::function<void()> fn) {
+        if (!actionBtn_) {
+            actionBtn_ = new QPushButton(this);
+            actionBtn_->setObjectName("primary");
+            actionBtn_->setCursor(Qt::PointingHandCursor);
+            actionBtn_->setFixedHeight(30);
+            lay_->addWidget(actionBtn_, 0, Qt::AlignHCenter);
+        }
+        actionBtn_->setText(text);
+        lay_->update();
+        if (fn) connect(actionBtn_, &QPushButton::clicked, this, [fn = std::move(fn)] { fn(); });
+    }
 
 private:
     QLabel* title_ = nullptr;
     QLabel* hint_ = nullptr;
+    QPushButton* actionBtn_ = nullptr;
+    QVBoxLayout* lay_ = nullptr;
 };
 
 // ---- 骨架屏：首屏数据回来之前的占位块（微光扫过，表明"正在取数"而非"没有数据"）----

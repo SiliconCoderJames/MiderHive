@@ -22,6 +22,93 @@
 
 #include "i18n.h"
 
+namespace ui {
+
+// ---- 报错翻译（防呆）：把后端的技术报错翻译成用户能懂的一句话 + 下一步操作。 ----
+// 匹配按"关键片段"进行（错误文本可能是英文/中文/带路径），逐条试，命中即返回；
+// 都不命中时返回原文 + 通用指引，绝不吞信息。
+inline QString humanError(const QString& raw) {
+    const QString s = raw.toLower();
+    auto say = [](const QString& zh, const QString& en) { return i18n::trs(zh, en); };
+    if (s.contains("keyfile") || s.contains("master key") || s.contains("invalid master")) {
+        return say("检测到密钥问题：Agent 密钥或主密钥丢失/不匹配，已接入的 Agent 会连接失败。\n"
+                   "下一步：在设置 →「Agent 管理」里轮换密钥，然后把新密钥更新到 Agent 的配置文件并重启该 Agent。",
+                   "Key problem: an agent key or the master key is missing or does not match, so "
+                   "connected agents will fail.\nNext: rotate the key in Settings → Agents, update "
+                   "the agent's config with the new key, then restart that agent.");
+    }
+    if (s.contains("database is locked")) {
+        return say("数据库正被占用（可能有另一个工作台/平台进程同时在写）。\n"
+                   "下一步：关闭其他 MiderHive 实例后重试；若仍失败，稍等几秒再试（写入会自动等待最多 3 秒）。",
+                   "The database is locked (another workbench/platform process may be writing).\n"
+                   "Next: close other MiderHive instances and retry; otherwise wait a few seconds "
+                   "(writes already wait up to 3 s).");
+    }
+    if (s.contains("malformed") || s.contains("disk image") || s.contains("corrupt") ||
+        s.contains("not a database")) {
+        return say("数据库文件疑似损坏，无法继续读写。\n"
+                   "下一步：关闭工作台，用备份目录里最近一次备份恢复 platform.db，再重新启动。",
+                   "The database file appears to be corrupted.\nNext: close the workbench, restore "
+                   "platform.db from the latest backup, then start again.");
+    }
+    if (s.contains("in use") || s.contains("bind") || s.contains("listen") ||
+        s.contains("address")) {
+        return say("网络端口被占用，本机服务起不来，Agent 将无法接入。\n"
+                   "下一步：关闭占用该端口的程序，或设置环境变量 MIDERHIVE_PORT 换端口（两侧端口要一致）。",
+                   "The port is occupied, so the local service cannot start and agents cannot "
+                   "connect.\nNext: stop the program using the port, or set MIDERHIVE_PORT to "
+                   "switch (both sides must match).");
+    }
+    if (s.contains("already registered")) {
+        return say("该名称已被注册。\n下一步：换一个名字，或在设置 →「Agent 管理」里轮换这个 Agent 的密钥。",
+                   "This name is already registered.\nNext: pick another name, or rotate that "
+                   "agent's key in Settings → Agents.");
+    }
+    if (s.contains("version conflict")) {
+        return say("内容已被他人更新（版本冲突），为避免覆盖未予写入。\n"
+                   "下一步：刷新查看最新内容，基于新版本重新提交。",
+                   "The content was updated by someone else (version conflict); the write was "
+                   "refused to avoid overwriting.\nNext: refresh to see the latest version and "
+                   "re-submit on top of it.");
+    }
+    if (s.contains("not registered") || s.contains("not found")) {
+        return say("目标不存在（可能已被删除或名字拼写不符）。\n下一步：刷新列表确认名称后再试。",
+                   "The target does not exist (it may have been removed, or the name is "
+                   "misspelled).\nNext: refresh the list and check the name.");
+    }
+    if (s.contains("only zcode") || s.contains("manager") || s.contains("not allowed") ||
+        s.contains("forbidden")) {
+        return say("权限不足：该操作仅限管理者（zcode）。\n下一步：用管理者账号操作，或让管理者代为处理。",
+                   "Not allowed: this action is manager-only (zcode).\nNext: do it as the manager, "
+                   "or ask the manager to handle it.");
+    }
+    if (s.contains("too long")) {
+        return say("内容超出长度限制。\n下一步：精简内容后重试（限制见报错原文中的说明）。",
+                   "Content exceeds the length limit.\nNext: shorten it and retry (the limit is in "
+                   "the original message).");
+    }
+    if (s.contains("invalid") || s.contains("must be") || s.contains("required") ||
+        s.contains("missing")) {
+        return say("提交的内容不完整或格式不对。\n下一步：按提示补全/修正后重试；反复失败请截图报错原文反馈。",
+                   "The submitted content is incomplete or malformed.\nNext: fix it as suggested "
+                   "and retry; if it keeps failing, report the original message.");
+    }
+    if (s.contains("cannot reach platform") || s.contains("connection refused") ||
+        s.contains("timed out")) {
+        return say("连不上本机服务（可能工作台未启动或端口被改）。\n"
+                   "下一步：确认工作台正在运行、端口与 Agent 配置一致后重试。",
+                   "Cannot reach the local service (the workbench may be down or the port "
+                   "changed).\nNext: make sure the workbench is running and the port matches the "
+                   "agent config, then retry.");
+    }
+    return say("操作失败：", "Operation failed: ") + raw +
+           say("\n下一步：按原文提示处理；若与密钥/端口/数据库有关，可在总览页顶部的健康横幅查看修复入口。",
+               "\nNext: follow the original message; for key/port/database issues, use the health "
+               "banner at the top of the Overview page.");
+}
+
+}  // namespace ui
+
 // 填充表格一行（按列顺序），并去重设置 item；全文同时挂到 tooltip，
 // 列宽不足被截断时悬停即可看到完整内容。
 inline void setRow(QTableWidget* table, int row, std::initializer_list<QString> cells) {

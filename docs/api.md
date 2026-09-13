@@ -117,6 +117,29 @@ API Key 立即失效、操作记入审计；管理者自身（`zcode`）不可�
 { "removed": "droid" }
 ```
 
+**POST /api/agents/provision**（主密钥）—— 预配接入身份：名字已注册则视为
+轮换，否则注册新身份；新明文密钥写回 `config/agents.json` 缓存并只返回这一次。
+工作台"一键接入引导"与自动化脚本共用此能力。
+
+```json
+// 请求
+{ "name": "claude-code" }
+// 响应 data
+{ "name": "claude-code", "api_key": "a1b2c3…（64 位 hex）" }
+```
+
+**GET /api/diagnostics**（主密钥）—— 健康自检快照（防呆口径）：总览页健康
+横幅与 `scripts/test_onboarding_and_safety.py` 共用同一份数据；只读探测，
+不改变任何状态。`keyfile_missing` 列出"已注册但明文密钥缓存缺失"的身份
+（明文不可再查看/补配；修复途径为 rotate）。
+
+```json
+// 响应 data
+{ "home_dir": "C:\\Users\\me\\.miderhive", "home_writable": true, "db_ok": true,
+  "agents_json_readable": true, "http_running": true, "port": 8787,
+  "keyfile_missing": [] }
+```
+
 ### 4.2 用户记忆
 
 区块 `section` 枚举：`project`（当前项目与进度）、`preference`（编码风格/技术选型/

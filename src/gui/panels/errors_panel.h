@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "../widgets.h"
 #include "panel_base.h"
 
 class ErrorsPanel : public PanelBase {
@@ -21,6 +22,7 @@ public:
 
 private slots:
     void onResolve();
+    void onManualReport();  // 手动上报一条错误（用户侧补录，与 Agent 上报同一条管道）
 
 private:
     QComboBox* statusCombo_ = nullptr;
@@ -30,7 +32,7 @@ private:
     QTableWidget* table_ = nullptr;
     QTextBrowser* detail_ = nullptr;
     QLabel* infoLabel_ = nullptr;
-    QLabel* emptyLabel_ = nullptr;
+    ui::InlineEmpty* emptyState_ = nullptr;  // 无错误时的引导 + 手动上报入口
     QPushButton* resolveBtn_ = nullptr;
     std::vector<ah::ErrorReport> errors_;
 };

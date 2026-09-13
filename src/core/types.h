@@ -162,4 +162,16 @@ constexpr const char* kManagerName = "zcode";
 // 版本号来自 CMake 生成的 version.h（单一来源，界面/健康检查/安装包共用）
 constexpr const char* kPlatformVersion = MIDERHIVE_VERSION;
 
+// 健康自检快照（防呆）：工作台总览页健康横幅与 GET /api/diagnostics 共用同一份口径。
+// 所有字段只做"只读探测"，不改变任何状态。
+struct Diagnostics {
+    bool home_writable = false;              // 数据目录可写
+    bool db_ok = false;                      // 数据库可读且核心表存在
+    bool agents_json_readable = false;       // 明文密钥缓存可读
+    bool http_running = false;               // 本机 HTTP 服务在跑
+    int port = 0;                            // 计划/实际端口
+    std::string home_dir;                    // 数据目录（展示用）
+    std::vector<std::string> keyfile_missing;  // 已注册但明文密钥条目缺失的 Agent（修复=轮换密钥）
+};
+
 }  // namespace ah

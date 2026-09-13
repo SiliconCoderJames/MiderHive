@@ -10,12 +10,15 @@
 #include <QSettings>
 #include <QStringList>
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "core/platform.h"
 #include "core/util.h"
+#include "gui_util.h"
 #include "i18n.h"
 #include "mainwindow.h"
+#include "startup_check.h"
 #include "theme.h"
 
 namespace {
@@ -131,25 +134,48 @@ int main(int argc, char** argv) {
     QLocalServer instanceGuard;
     instanceGuard.listen(instanceKey);
 
-    ah::Platform platform(ah::defaultHomeDir());
-    std::string err;
-    if (!platform.bootstrap(err)) {
-        QMessageBox::critical(nullptr, "MiderHive 工作台",
-                              QString::fromStdString("平台初始化失败: " + err));
-        return 1;
-    }
-
-    // 内置 HTTP 服务供 Agent 接入（仅绑定 127.0.0.1）
+    // 启动自检（防呆）：初始化前把本机环境问题用"人话"摆出来（可关闭、双语、
+    // 附下一步操作），不静默失败也不崩溃；之后仍按原流程尝试初始化。
     int port = 8787;
     {
         std::string portEnv =
             ah::envOr({"MIDERHIVE_PORT", "AGENTHIVE_PORT", "ZCODE_PLATFORM_PORT"});
         if (!portEnv.empty()) port = std::atoi(portEnv.c_str());
     }
+    const QString homeDir = QString::fromStdString(ah::defaultHomeDir());
+    const QVector<ui::startup::Issue> issues = ui::startup::preflight(
+        homeDir, port, homeDir + "/platform.db", homeDir + "/config/agents.json");
+    if (!issues.isEmpty()) {
+        QMessageBox warnBox(QMessageBox::Warning, i18n::trs("MiderHive 启动自检", "MiderHive "
+                                                                          "startup check"),
+                            ui::startup::joinIssues(issues), QMessageBox::Close);
+        warnBox.exec();  // 可关闭：用户确认后继续启动，问题同时保留在总览页健康横幅
+    }
+
+    ah::Platform platform(ah::defaultHomeDir());
+    std::string err;
+    if (!platform.bootstrap(err)) {
+        QMessageBox::critical(nullptr, "MiderHive 工作台",
+                              i18n::trs("平台初始化失败，工作台无法继续运行。",
+                                        "Platform initialization failed; the workbench cannot "
+                                        "continue.") +
+                                  "\n" + ui::humanError(QString::fromStdString(err)));
+        return 1;
+    }
+
+    // 内置 HTTP 服务供 Agent 接入（仅绑定 127.0.0.1）
     std::string serr;
     if (!platform.startHttpServer(port, serr)) {
-        QMessageBox::warning(nullptr, "MiderHive 工作台",
-                             QString::fromStdString("HTTP 服务启动失败，Agent 将无法接入: " + serr));
+        // 端口被占用已在自检里说明过，这里不再重复弹窗（横幅会持续可见）
+        const bool alreadyTold = std::any_of(issues.begin(), issues.end(),
+                                             [](const ui::startup::Issue& i) {
+                                                 return i.code == "port_occupied";
+                                             });
+        if (!alreadyTold)
+            QMessageBox::warning(nullptr, "MiderHive 工作台",
+                                 i18n::trs("HTTP 服务启动失败，Agent 将无法接入。",
+                                           "HTTP service failed to start; agents cannot connect.") +
+                                     "\n" + ui::humanError(QString::fromStdString(serr)));
     }
 
     MainWindow w(platform);

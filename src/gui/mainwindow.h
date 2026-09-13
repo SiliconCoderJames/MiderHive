@@ -46,6 +46,9 @@ private:
     void openSettings(); // ⚙ 设置对话框（复用同一实例，关闭即删）
     void scheduleUpdateCheck();                // 启动后的自动检查（每天一次，可关）
     void promptUpdate(const ui::UpdateInfo&);  // 发现新版本时的选择框
+    // 接入引导观察：轮询 ui/onboardingPending 里的接入身份，Agent 上线即弹
+    // 「接入成功」并写入欢迎记忆（每个身份只发生一次，随后移除登记）
+    void checkOnboarding();
     // 跨面板下钻：切到指定面板并可带筛选条件（面板只登记意图，落地由这里负责）
     void goToPanel(const QString& panelId, const QString& filterKey = QString(),
                    const QString& filterValue = QString());

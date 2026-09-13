@@ -3,6 +3,7 @@
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QTableWidget>
 #include <QTextBrowser>
 #include <QLabel>
@@ -10,6 +11,7 @@
 
 #include <vector>
 
+#include "../widgets.h"
 #include "panel_base.h"
 
 class KnowledgePanel : public PanelBase {
@@ -35,6 +37,8 @@ private:
     QLabel* statsLabel_ = nullptr;
     QTableWidget* table_ = nullptr;
     QTextBrowser* detail_ = nullptr;
+    QStackedWidget* detailStack_ = nullptr;  // 详情 / 空状态 分页
+    ui::InlineEmpty* emptyState_ = nullptr;  // 全库为空时的引导 + 显眼动作按钮
     QLabel* metaLabel_ = nullptr;
     QComboBox* versionCombo_ = nullptr;
     QPushButton* addVersionBtn_ = nullptr;

@@ -167,6 +167,11 @@ public:
     int httpPort() const;
     bool httpRunning() const;
 
+    // ---- 健康自检（防呆）：总览页健康横幅与 GET /api/diagnostics 共用 ----
+    // 只读探测：数据目录可写、数据库可读且核心表存在、agents.json 可读、
+    // HTTP 服务状态、已注册但明文密钥缺失的 Agent 清单。不改变任何状态。
+    Diagnostics diagnostics();
+
     // ---- 向量工具 ----
     std::vector<float> embedText(const std::string& text);
     int embeddingDim() const;

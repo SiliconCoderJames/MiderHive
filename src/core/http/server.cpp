@@ -258,6 +258,37 @@ void HttpServer::setupRoutes() {
         send(res, ok(json{{"name", name}, {"api_key", apiKey}}));
     });
 
+    // ---- Agent 预配（主密钥）：给指定名字生成/轮换密钥并写入明文缓存——
+    // 与界面上的"接入引导"同一套能力，供脚本/自动化测试复用
+    srv.Post("/api/agents/provision", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!checkMaster(req, p, res)) return;
+        auto body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object() || !body.contains("name") ||
+            !body["name"].is_string()) {
+            send(res, fail(400, "name must be a string"));
+            return;
+        }
+        std::string err, apiKey;
+        const std::string name = body["name"].get<std::string>();
+        if (!p.agentProvision(kManagerName, name, apiKey, err)) { send(res, fail(400, err)); return; }
+        send(res, ok(json{{"name", name}, {"api_key", apiKey}}));
+    });
+
+    // ---- 健康自检（防呆）：总览页健康横幅与自动化测试共用同一份口径 ----
+    srv.Get("/api/diagnostics", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!checkMaster(req, p, res)) return;
+        const Diagnostics d = p.diagnostics();
+        json missing = json::array();
+        for (const auto& n : d.keyfile_missing) missing.push_back(n);
+        send(res, ok(json{{"home_dir", d.home_dir},
+                          {"home_writable", d.home_writable},
+                          {"db_ok", d.db_ok},
+                          {"agents_json_readable", d.agents_json_readable},
+                          {"http_running", d.http_running},
+                          {"port", d.port},
+                          {"keyfile_missing", missing}}));
+    });
+
     srv.Post("/api/agents/heartbeat", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;

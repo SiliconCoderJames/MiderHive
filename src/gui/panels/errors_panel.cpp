@@ -77,11 +77,17 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
     splitter->setStretchFactor(1, 3);
     layout->addWidget(splitter, 1);
 
-    // 空状态引导语
-    emptyLabel_ = new QLabel(i18n::trs("暂无错误，一切正常 ✓", "No errors — all clear ✓"), this);
-    emptyLabel_->setStyleSheet(ui::th("color:@ok@; font-size:14px;"));
-    emptyLabel_->setAlignment(Qt::AlignCenter);
-    layout->addWidget(emptyLabel_);
+    // 空状态：说明"这里会出现什么 + 怎么补充内容"，并给手动上报的显眼入口
+    emptyState_ = new ui::InlineEmpty(
+        "errors",
+        i18n::trs("暂无错误，一切正常 ✓", "No errors — all clear ✓"),
+        i18n::trs("Agent 运行中上报的错误会自动汇总到这里，按严重度分级，处理完登记解决说明。",
+                  "Errors reported by agents are collected here, ranked by severity; record a "
+                  "resolution note once handled."),
+        this);
+    emptyState_->setAction(i18n::trs("＋ 手动上报错误", "＋ Report an issue"),
+                           [this] { onManualReport(); });
+    layout->addWidget(emptyState_);
 
     connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) {
         if (row < 0 || row >= static_cast<int>(errors_.size())) return;
@@ -130,7 +136,7 @@ void ErrorsPanel::refresh() {
         }
     }
     fitTableColumns(table_, 1);  // 标题列吃剩余空间，避免窄列被截断 / 出现横向滚动条
-    emptyLabel_->setVisible(errors_.empty());
+    emptyState_->setVisible(errors_.empty());
     splitter_->setVisible(!errors_.empty());
     applyTableFilter(table_, filterEdit_->text());  // 行已重建，重放即时过滤态
 }
@@ -164,9 +170,49 @@ void ErrorsPanel::onResolve() {
     ah::ErrorReport out;
     std::string err;
     if (!platform_.errorResolve("user", e.uuid, notes->toPlainText().toStdString(), out, err)) {
-        ui::Toast::show(this, QString("解决失败: %1").arg(QString::fromStdString(err)), false);
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
         return;
     }
-    ui::Toast::show(this, "已登记解决 ✓");
+    ui::Toast::show(this, i18n::trs("已登记解决 ✓", "Resolution recorded ✓"));
+    refresh();
+}
+
+void ErrorsPanel::onManualReport() {
+    QDialog dlg(this);
+    dlg.setWindowTitle(i18n::trs("手动上报错误", "Report an issue"));
+    auto* form = new QFormLayout(&dlg);
+    auto* sev = new QComboBox(&dlg);
+    sev->addItem(i18n::trs("提示 info", "info"), QString("info"));
+    sev->addItem(i18n::trs("警告 warn", "warn"), QString("warn"));
+    sev->addItem(i18n::trs("严重 critical", "critical"), QString("critical"));
+    auto* title = new QLineEdit(&dlg);
+    title->setPlaceholderText(i18n::trs("一句话概括问题", "One-line summary"));
+    auto* detail = new QPlainTextEdit(&dlg);
+    detail->setPlaceholderText(i18n::trs("发生了什么、怎么复现、影响范围…",
+                                         "What happened, how to reproduce, impact…"));
+    form->addRow(i18n::trs("严重度", "Severity"), sev);
+    form->addRow(i18n::trs("标题", "Title"), title);
+    form->addRow(i18n::trs("详情", "Details"), detail);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    form->addRow(buttons);
+    if (dlg.exec() != QDialog::Accepted) return;
+    if (title->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, i18n::trs("缺少标题", "Title required"),
+                             i18n::trs("请先填写一句话概括，方便后续检索。",
+                                       "Add a one-line summary so it can be found later."));
+        return;
+    }
+    ah::ErrorReport out;
+    std::string err;
+    if (!platform_.errorReport("user", sev->currentData().toString().toStdString(), "manual",
+                               title->text().trimmed().toStdString(),
+                               detail->toPlainText().toStdString(), "", out, err)) {
+        QMessageBox::warning(this, i18n::trs("上报失败", "Report failed"),
+                             ui::humanError(QString::fromStdString(err)));
+        return;
+    }
+    ui::Toast::show(this, i18n::trs("已上报，可在列表中查看 ✓", "Reported — see it in the list ✓"));
     refresh();
 }

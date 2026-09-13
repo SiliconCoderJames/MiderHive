@@ -1,6 +1,7 @@
 #include "settings_dialog.h"
 
 #include "connect_dialog.h"
+#include "welcome_dialog.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -330,6 +331,17 @@ QWidget* SettingsDialog::buildAgentsPage() {
     auto* row = new QHBoxLayout();
     auto* refreshBtn = new QPushButton(i18n::trs("刷新", "Refresh"), page);
     connect(refreshBtn, &QPushButton::clicked, this, [this] { refreshAgents(); });
+    // 防呆出路：首次接入引导不只出现在首启，随时可以从设置里重新打开
+    auto* onboardBtn = new QPushButton(i18n::trs("重新打开接入引导", "Reopen onboarding"), page);
+    onboardBtn->setToolTip(i18n::trs(
+        "逐步引导你把 Claude Code / Cursor / Codex CLI 接入蜂巢（检测安装并生成配置）",
+        "Step-by-step guide to connect Claude Code / Cursor / Codex CLI (detects installs and "
+        "generates configs)"));
+    connect(onboardBtn, &QPushButton::clicked, this, [this] {
+        WelcomeDialog dlg(platform_, this);
+        dlg.exec();
+        refreshAgents();  // 引导中可能预配了新的接入身份
+    });
     auto* connectBtn =
         new QPushButton(i18n::trs("一键接入常用 Agent…", "Connect common agents…"), page);
     connect(connectBtn, &QPushButton::clicked, this, [this] {
@@ -411,6 +423,7 @@ QWidget* SettingsDialog::buildAgentsPage() {
         refreshAgents();
     });
     row->addWidget(refreshBtn);
+    row->addWidget(onboardBtn);
     row->addWidget(connectBtn);
     row->addWidget(rotateBtn);
     row->addWidget(removeBtn);

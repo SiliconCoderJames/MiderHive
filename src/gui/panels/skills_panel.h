@@ -3,11 +3,13 @@
 #include <QComboBox>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QTableWidget>
 #include <QTextBrowser>
 
 #include <vector>
 
+#include "../widgets.h"
 #include "panel_base.h"
 
 class SkillsPanel : public PanelBase {
@@ -27,5 +29,7 @@ private:
     QLineEdit* filterEdit_ = nullptr;
     QTableWidget* table_ = nullptr;
     QTextBrowser* detail_ = nullptr;
+    QStackedWidget* detailStack_ = nullptr;  // 详情 / 空状态 分页
+    ui::InlineEmpty* emptyState_ = nullptr;  // 全库为空时的引导 + 显眼动作按钮
     std::vector<ah::SkillInfo> skills_;
 };

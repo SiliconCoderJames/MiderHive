@@ -57,6 +57,14 @@ private:
     ui::InlineEmpty* agentsEmpty_ = nullptr;
     std::vector<ui::AlertCard*> alertCards_;
 
+    // ---- 健康横幅（防呆）：数据目录/数据库/端口/密钥缓存问题只在出问题时出现，
+    // 健康时零占位，不改既有版式。内容签名不变时不重建（3s 轮询不闪屏）。 ----
+    QWidget* healthBox_ = nullptr;
+    QVBoxLayout* healthLay_ = nullptr;
+    QString lastHealthSig_;
+    void refreshHealth();               // 轮询诊断 → 增量重建横幅
+    void fixKeyfile(const QString& name);  // 密钥丢失的修复动作：轮换密钥并展示新钥
+
     std::vector<ui::AgentCard*> agentCards_;
     ui::Skeleton* skeleton_ = nullptr;   // 首屏加载占位
 

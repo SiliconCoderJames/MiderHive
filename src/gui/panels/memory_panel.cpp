@@ -80,6 +80,20 @@ void MemoryPanel::refresh() {
         if (it->widget()) it->widget()->deleteLater();
         delete it;
     }
+    // 全库为空时：先给一条"模块是什么 + 显眼的写入入口"，再进各区块的空状态
+    if (entries_.empty()) {
+        auto* guide = new ui::InlineEmpty(
+            "memory",
+            i18n::trs("用户记忆还是空的", "User memory is empty"),
+            i18n::trs("记忆分项目档案 / 决策日志 / 偏好记录 / 设备环境 / 工作习惯五大区块，"
+                      "所有 Agent 共享同一份；写下第一条，协作就有了共同的背景。",
+                      "Memory has five sections (project, decisions, preferences, environment, "
+                      "work habits) shared by all agents; write the first entry to give every "
+                      "agent shared context."),
+            this);
+        guide->setAction(i18n::trs("＋ 写入记忆", "＋ Add memory"), [this] { onEdit(); });
+        sectionsLay_->insertWidget(sectionsLay_->count() - 1, guide);
+    }
     for (const auto& [title, section] : kSections) {
         std::vector<ah::MemoryEntry> group;
         for (const auto& m : entries_)
