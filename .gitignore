@@ -7,9 +7,12 @@ data/
 _stage/
 _stage-*/
 
-# ---- 发行目录：整体不入库（发行说明与产物经 GitHub Releases 发布）----
-# 打包所需的 WiX 源文件在 installer/MiderHive.wxs（入库）；本目录只留本地产物与说明。
-release/
+# ---- 发行目录：产物不入库（MSI/ZIP/校验和经 GitHub Releases 发布）----
+# 打包所需的 WiX 源文件在 installer/MiderHive.wxs（入库）；本目录只留本地产物。
+# 发行说明（RELEASE_NOTES-*.md）入库：release.yml 直接采用其作为 Release 正文，
+# 保证手动发布与 CI 发布文案一致（v1.1.0 的正文就曾退化为 fallback 文案）。
+release/*
+!release/RELEASE_NOTES-*.md
 
 # Python 脚本（可行性验证 / 演示数据播种）产生的字节码缓存
 __pycache__/

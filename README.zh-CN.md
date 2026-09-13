@@ -293,7 +293,7 @@ cmake --build build --config Release
 - 第三方依赖（sqlite-vec、nlohmann/json、cpp-httplib）由 FetchContent 自动拉取；
   GitHub 不可达时先跑 `powershell -File scripts\fetch-deps.ps1` 预取到 `vendor/`。
   SQLite amalgamation 走 sqlite.org 直链下载（脚本未预取），离线环境可自行放入 `vendor/`。
-- 出安装包：`powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.1.0`
+- 出安装包：`powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.1.1`
   （详见 [release/README.md](release/README.md)）。推 `v*` 标签会触发 CI 自动出包并发布 Release。
 - Linux/macOS：工程是标准 CMake 布局，但**官方仅在 Windows 上做过完整验证**（CI 同）；
   GUI 目标目前带 Windows 专属声明，跨平台构建需要相应调整，欢迎提 Issue 与补丁。
