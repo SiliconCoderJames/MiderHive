@@ -84,6 +84,7 @@ bool Platform::bootstrap(std::string& err) {
     db_.tryExec("ALTER TABLE agents ADD COLUMN salt TEXT NOT NULL DEFAULT '';");
     db_.tryExec("ALTER TABLE token_usage ADD COLUMN idempotency_key TEXT;");
     db_.tryExec("ALTER TABLE token_usage ADD COLUMN model TEXT NOT NULL DEFAULT '';");
+    db_.tryExec("ALTER TABLE skill_invocations ADD COLUMN reference_id TEXT;");
     db_.tryExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_idem "
                 "ON token_usage(idempotency_key) "
                 "WHERE idempotency_key IS NOT NULL AND idempotency_key != '';");
@@ -587,7 +588,7 @@ bool validateParamsAgainstSchema(const std::string& paramsJson, const std::strin
 bool Platform::skillInvoke(const std::string& caller, const std::string& skillName,
                            const std::string& paramsJson, const std::string& resultSummary,
                            const std::string& status, int64_t durationMs, int64_t tokensIn,
-                           int64_t tokensOut, std::string& err) {
+                           int64_t tokensOut, const std::string& referenceId, std::string& err) {
     std::lock_guard lock(mutex_);
     // 协作规则：新技能必须先注册再调用
     SkillInfo info;
@@ -602,12 +603,13 @@ bool Platform::skillInvoke(const std::string& caller, const std::string& skillNa
         return false;
     }
     if (status != "success" && status != "failed") { err = "status must be success|failed"; return false; }
+    if (referenceId.size() > 128) { err = "reference_id too long (<=128)"; return false; }
     // 记录调用、记账、审计是同一逻辑事件的三次写入：绑进一个事务，任一失败全部回滚。
     // 此前三次写入各自独立——记账失败会留下"有调用记录、无 token 账目"的半截状态，
     // 且审计写失败被静默忽略（违背 schema 的留痕承诺）。
     if (!db_.beginImmediate(err)) return false;
     if (!skills_.recordInvocation(skillName, caller, paramsJson, resultSummary, status, durationMs,
-                                  err)) {
+                                  referenceId, err)) {
         db_.rollback();
         return false;
     }

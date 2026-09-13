@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS skill_invocations (
     result_summary TEXT,
     status         TEXT NOT NULL,               -- success | failed
     duration_ms    INTEGER NOT NULL DEFAULT 0,
+    reference_id   TEXT,                        -- 协作上下文追溯：发起调用的消息/任务/错误 uuid（弱关联，可空）
     created_at     TEXT NOT NULL
 );
 
@@ -148,3 +149,4 @@ CREATE INDEX IF NOT EXISTS idx_audit_action        ON audit_log(action, created_
 CREATE INDEX IF NOT EXISTS idx_audit_time          ON audit_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_week          ON token_usage(week_start, agent);
 CREATE INDEX IF NOT EXISTS idx_invocations_skill   ON skill_invocations(skill_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_invocations_ref     ON skill_invocations(reference_id);

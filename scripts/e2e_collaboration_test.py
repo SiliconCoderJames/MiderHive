@@ -264,6 +264,31 @@ def main():
          status == 400 and "must be string" in str(msg),
          f"HTTP={status} message={msg}")
 
+    # ---- 20 A 指派任务消息给 B（协作上下文）----
+    data = expect_env(call("POST", "/api/messages",
+                           {"kind": "task", "recipient": AGENT_B,
+                            "subject": "请调用 e2e-hello", "body": "端到端追溯链验证任务"},
+                           name=AGENT_A, key=key_a),
+                      "A 指派任务消息给 B")
+    task_uuid = data.get("uuid", "")
+    step(20, "A 指派任务消息给 B", bool(task_uuid), f"uuid={task_uuid}")
+
+    # ---- 21 修复回归：B 带 reference_id（任务 uuid）调用技能 ----
+    status, payload = call("POST", f"/api/skills/{SKILL}/invoke",
+                           {"params": {"text": "traceable call"}, "result_summary": "带上下文的调用",
+                            "status": "success", "duration_ms": 3,
+                            "reference_id": task_uuid},
+                           name=AGENT_B, key=key_b)
+    step(21, "修复回归：B 带 reference_id 调用技能", status == 200, f"HTTP={status}")
+
+    # ---- 22 修复回归：调用记录可追溯到任务 uuid ----
+    data = expect_env(call("GET", f"/api/skills/{SKILL}/invocations", name=AGENT_A, key=key_a),
+                      "查询调用记录")
+    rec = next((r for r in data if r.get("reference_id") == task_uuid), None)
+    step(22, "修复回归：调用记录可追溯到发起协作的任务",
+         rec is not None and rec.get("caller_agent") == AGENT_B,
+         f"共 {len(data)} 条记录，命中 reference_id={rec.get('reference_id') if rec else '未找到'}")
+
     print("=" * 72)
     print(f"全部通过：{_passed} 步。A-B 协作链路（注册→记忆→技能→调用→错误互通→事件流）端到端可用。")
 

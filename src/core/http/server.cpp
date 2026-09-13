@@ -522,8 +522,10 @@ void HttpServer::setupRoutes() {
         int64_t duration = body.value("duration_ms", 0);
         int64_t tin = body.value("tokens_in", 0);
         int64_t tout = body.value("tokens_out", 0);
+        std::string referenceId = body.value("reference_id", "");
         std::string err;
-        if (!p.skillInvoke(actor, req.matches[1], params, result, status, duration, tin, tout, err)) {
+        if (!p.skillInvoke(actor, req.matches[1], params, result, status, duration, tin, tout,
+                           referenceId, err)) {
             send(res, fail(400, err));
             return;
         }
@@ -551,6 +553,7 @@ void HttpServer::setupRoutes() {
                            {"result_summary", i.result_summary},
                            {"status", i.status},
                            {"duration_ms", i.duration_ms},
+                           {"reference_id", i.reference_id.empty() ? json() : json(i.reference_id)},
                            {"created_at", i.created_at}});
         send(res, ok(arr));
     });

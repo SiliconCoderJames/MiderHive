@@ -97,10 +97,11 @@ bool SkillService::isRegistered(const std::string& name) {
 
 bool SkillService::recordInvocation(const std::string& skillName, const std::string& caller,
                                     const std::string& paramsJson, const std::string& resultSummary,
-                                    const std::string& status, int64_t durationMs, std::string& err) {
+                                    const std::string& status, int64_t durationMs,
+                                    const std::string& referenceId, std::string& err) {
     return db_.query(
         "INSERT INTO skill_invocations(skill_name, caller_agent, params, result_summary, status, "
-        "duration_ms, created_at) VALUES (?,?,?,?,?,?,?)",
+        "duration_ms, reference_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
         [&](Stmt& st) {
             st.bind(1, skillName);
             st.bind(2, caller);
@@ -108,7 +109,11 @@ bool SkillService::recordInvocation(const std::string& skillName, const std::str
             st.bind(4, resultSummary);
             st.bind(5, status);
             st.bind(6, durationMs);
-            st.bind(7, nowIso());
+            if (referenceId.empty())
+                st.bindNull(7);
+            else
+                st.bind(7, referenceId);
+            st.bind(8, nowIso());
         },
         nullptr, err);
 }
@@ -116,8 +121,8 @@ bool SkillService::recordInvocation(const std::string& skillName, const std::str
 bool SkillService::listInvocations(const std::string& skillName, int limit,
                                    std::vector<SkillInvocation>& out, std::string& err) {
     std::string sql =
-        "SELECT id, skill_name, caller_agent, params, result_summary, status, duration_ms, created_at "
-        "FROM skill_invocations";
+        "SELECT id, skill_name, caller_agent, params, result_summary, status, duration_ms, "
+        "reference_id, created_at FROM skill_invocations";
     if (!skillName.empty()) sql += " WHERE skill_name = ?";
     sql += " ORDER BY id DESC LIMIT ?";
     int idx = 1;
@@ -137,7 +142,8 @@ bool SkillService::listInvocations(const std::string& skillName, int limit,
             inv.result_summary = st.isNull(4) ? std::string() : st.text(4);
             inv.status = st.text(5);
             inv.duration_ms = st.i64(6);
-            inv.created_at = st.text(7);
+            inv.reference_id = st.isNull(7) ? std::string() : st.text(7);
+            inv.created_at = st.text(8);
             out.push_back(std::move(inv));
         },
         err);

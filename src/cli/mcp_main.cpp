@@ -492,7 +492,8 @@ std::vector<ToolDef> buildTools() {
                             {"status", prop("string", "success|failed, default success")},
                             {"duration_ms", prop("integer", "how long the work took")},
                             {"tokens_in", prop("integer", "tokens consumed, input")},
-                            {"tokens_out", prop("integer", "tokens consumed, output")}},
+                            {"tokens_out", prop("integer", "tokens consumed, output")},
+                            {"reference_id", prop("string", "optional uuid of the message/task/error that motivated this call, for collaboration traceability")}},
                            {"name"}),
                  [](const json& a) {
                      json body = {{"status", sopt(a, "status", "success")},
@@ -503,6 +504,7 @@ std::vector<ToolDef> buildTools() {
                      body["params"] =
                          (params != a.end() && params->is_object()) ? *params : json::object();
                      body["result_summary"] = sopt(a, "result_summary");
+                     body["reference_id"] = sopt(a, "reference_id");
                      return apiCall("POST /api/skills/" + percentEncode(sarg(a, "name")) + "/invoke",
                                     &body);
                  }});

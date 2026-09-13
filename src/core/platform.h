@@ -88,11 +88,12 @@ public:
     bool skillList(const std::string& categoryFilter, const std::string& ownerFilter,
                    std::vector<SkillInfo>& out, std::string& err);
     bool skillGet(const std::string& name, SkillInfo& out, std::string& err);
-    // 先注册后调用；记录调用 + Token + 审计。
+    // 先注册后调用；记录调用 + Token + 审计（同一事务）。referenceId 为可选的
+    // 协作上下文追溯（发起调用的消息/任务/错误 uuid），随调用记录一并落库。
     bool skillInvoke(const std::string& caller, const std::string& skillName,
                      const std::string& paramsJson, const std::string& resultSummary,
                      const std::string& status, int64_t durationMs, int64_t tokensIn,
-                     int64_t tokensOut, std::string& err);
+                     int64_t tokensOut, const std::string& referenceId, std::string& err);
     bool skillInvocations(const std::string& skillName, int limit,
                           std::vector<SkillInvocation>& out, std::string& err);
 

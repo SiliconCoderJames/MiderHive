@@ -22,7 +22,8 @@ public:
     bool isRegistered(const std::string& name);
     bool recordInvocation(const std::string& skillName, const std::string& caller,
                           const std::string& paramsJson, const std::string& resultSummary,
-                          const std::string& status, int64_t durationMs, std::string& err);
+                          const std::string& status, int64_t durationMs,
+                          const std::string& referenceId, std::string& err);
     bool listInvocations(const std::string& skillName, int limit,
                          std::vector<SkillInvocation>& out, std::string& err);
 

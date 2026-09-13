@@ -57,6 +57,7 @@ struct SkillInvocation {
     std::string result_summary;
     std::string status;
     int64_t duration_ms = 0;
+    std::string reference_id;   // 协作上下文追溯：发起本次调用的消息/任务/错误 uuid（弱关联，可空）
     std::string created_at;
 };
 

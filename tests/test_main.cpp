@@ -268,12 +268,12 @@ static void test_platform_end_to_end() {
         // 技能：先注册后调用
         step("skills");
         std::string err3;
-        CHECK(!p.skillInvoke("hermes", "ghost-skill", "{}", "", "success", 1, 0, 0, err3));
+        CHECK(!p.skillInvoke("hermes", "ghost-skill", "{}", "", "success", 1, 0, 0, "", err3));
         ah::SkillInfo sk;
         CHECK(p.skillRegister("hermes", "code-review", "代码审查", "审查代码并给出意见",
                               "开发", "{\"type\":\"object\"}", sk, err));
         CHECK(p.skillInvoke("claude", "code-review", "{\"file\":\"a.cpp\"}", "通过", "success",
-                            120, 3000, 2000, err));
+                            120, 3000, 2000, "msg-e2e-ref", err));
 
         // 记忆：两次 set 生成两个版本；base_version 冲突被拒
         step("memory");
@@ -409,7 +409,7 @@ static void test_platform_end_to_end() {
         CHECK_EQ(p.usageBudget(err), static_cast<int64_t>(4'242'000));
         // 超额（105.9%）：仅告警升级，不拦截技能调用（用量是观测不是限制）
         std::vector<ah::SkillInvocation> invs;
-        CHECK(p.skillInvoke("hermes", "code-review", "{}", "", "success", 1, 0, 0, err));
+        CHECK(p.skillInvoke("hermes", "code-review", "{}", "", "success", 1, 0, 0, "", err));
         CHECK(p.skillInvocations("code-review", 10, invs, err));
         CHECK(!invs.empty());  // 超额后调用仍被记录
 

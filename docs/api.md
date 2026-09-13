@@ -187,11 +187,15 @@ API Key 立即失效、操作记入审计；管理者自身（`zcode`）不可�
   "status": "success",
   "duration_ms": 1200,
   "tokens_in": 3000,
-  "tokens_out": 2000
+  "tokens_out": 2000,
+  "reference_id": "可选：发起本次调用的消息/任务/错误 uuid，用于协作追溯"
 }
 ```
 
-未注册的技能调用返回 400 `skill not registered`。
+未注册的技能调用返回 400 `skill not registered`；参数不符合注册时声明的
+`param_schema`（缺必填键、顶层类型错误）同样返回 400。调用记录
+（`GET /api/skills/{name}/invocations`）含 `reference_id` 字段，可据此把一次
+技能调用追溯到具体的协作消息或任务。
 
 ### 4.5 消息（异步交流）
 
