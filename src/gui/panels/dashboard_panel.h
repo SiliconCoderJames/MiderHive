@@ -62,6 +62,7 @@ private:
     QWidget* healthBox_ = nullptr;
     QVBoxLayout* healthLay_ = nullptr;
     QString lastHealthSig_;
+    bool healthDirty_ = false;  // 修复动作后强制下一轮重建（健康签名恰为空串，光 clear 会撞相等短路）
     void refreshHealth();               // 轮询诊断 → 增量重建横幅
     void fixKeyfile(const QString& name);  // 密钥丢失的修复动作：轮换密钥并展示新钥
 

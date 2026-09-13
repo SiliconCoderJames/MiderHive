@@ -1,11 +1,14 @@
-add_executable(miderhive WIN32
-    main.cpp
+# ---- GUI 源编成静态库：工作台 exe 与 GUI 全链路自测 exe（gui_selftest）共用 ----
+# 自测跑的就是发布代码本身（真实 MainWindow/WelcomeDialog/SettingsDialog + 同一套面板），
+# 而不是另写一份复刻流程——"自测通过"与"用户看到的行为"永远同源。
+# 注意：Qt 资源（:/theme、:/brand）挂在 exe 上而不是静态库上——静态库里的 rcc 初始化
+# 对象可能被链接器丢弃；exe 直连自己的资源对象没有这个问题。
+add_library(miderhive_gui STATIC
     mainwindow.cpp
     settings_dialog.cpp
     connect_dialog.cpp
     welcome_dialog.cpp
     update_checker.cpp
-    app.rc
     panels/dashboard_panel.cpp
     panels/usage_panel.cpp
     panels/knowledge_panel.cpp
@@ -15,15 +18,35 @@ add_executable(miderhive WIN32
     panels/errors_panel.cpp
     panels/logs_panel.cpp
 )
-target_link_libraries(miderhive PRIVATE miderhive_core Qt6::Widgets Qt6::Network Qt6::Svg)
+target_link_libraries(miderhive_gui PUBLIC miderhive_core Qt6::Widgets Qt6::Network Qt6::Svg)
+set_target_properties(miderhive_gui PROPERTIES AUTOMOC ON)
+
+add_executable(miderhive WIN32
+    main.cpp
+    app.rc
+)
+target_link_libraries(miderhive PRIVATE miderhive_gui)
 miderhive_add_version_resource(miderhive "miderhive" "MiderHive workbench" "miderhive.exe")
 set_target_properties(miderhive PROPERTIES AUTOMOC ON AUTORCC ON)
 qt_add_resources(miderhive "theme"
     PREFIX "/theme"
     FILES qss/dark.qss)
-qt_add_resources(miderhive "brand"
-    PREFIX "/brand"
-    FILES ../../docs/assets/logo.png)
+target_sources(miderhive PRIVATE brand.qrc)  # :/brand/logo.png（qt_add_resources 对源外文件会生成坏 alias，见 brand.qrc 注释）
+
+# ---- GUI 全链路自测（离屏）：引导 → 上线 → 欢迎记忆 → 密钥丢失 → 横幅修复 → 设置重入 ----
+# 由 scripts/verify_gui_selftest.py 拉起（提供隔离的 MIDERHIVE_HOME/PORT、offscreen
+# 平台与 Qt 运行时 PATH）。控制台子系统：报告走 stdout 供脚本断言退出码。
+if(BUILD_TESTS)
+    add_executable(gui_selftest
+        selftest_main.cpp
+    )
+    target_link_libraries(gui_selftest PRIVATE miderhive_gui)
+    set_target_properties(gui_selftest PROPERTIES AUTOMOC ON AUTORCC ON)
+    qt_add_resources(gui_selftest "theme"
+        PREFIX "/theme"
+        FILES qss/dark.qss)
+    target_sources(gui_selftest PRIVATE brand.qrc)
+endif()
 
 # ---- 可复现的 Qt 运行时部署 ----
 # 此前项目里没有任何 windeployqt 调用，Qt6*.dll 与 platforms/tls/... 插件是人工拷进

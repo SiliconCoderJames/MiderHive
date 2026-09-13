@@ -1,0 +1,10 @@
+<!DOCTYPE RCC>
+<!-- 品牌资源：仓库 logo 以稳定别名挂到 :/brand/logo.png。
+     不能用 qt_add_resources(FILES ../../docs/assets/logo.png)——它会把"相对源码目录的
+     路径"当作 alias，注册成 :/brand/../../docs/assets/logo.png，代码里的
+     :/brand/logo.png 永远读不到（图标静默回退/托盘无图标）。 -->
+<RCC version="1.0">
+  <qresource prefix="/brand">
+    <file alias="logo.png">../../docs/assets/logo.png</file>
+  </qresource>
+</RCC>

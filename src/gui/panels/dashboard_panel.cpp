@@ -306,7 +306,10 @@ void DashboardPanel::refreshHealth() {
         sig << "key:" + name;
     }
     const QString s = sig.join("|");
-    if (s == lastHealthSig_) return;
+    // healthDirty_：修复动作（如轮换密钥）已让现场变好，但"健康"的签名恰好也是空串，
+    // 与 clear() 后的 lastHealthSig_ 相等会短路返回——旧告警横幅将永远挂在页面上。
+    if (!healthDirty_ && s == lastHealthSig_) return;
+    healthDirty_ = false;
     lastHealthSig_ = s;
 
     // 重建横幅行（签名变化才会走到这里）
@@ -403,7 +406,7 @@ void DashboardPanel::fixKeyfile(const QString& name) {
         ui::Toast::show(this, i18n::trs("已复制，请粘贴到 Agent 配置并重启它",
                                         "Copied — paste it into the agent config and restart it"));
     }
-    lastHealthSig_.clear();  // 强制下轮重建横幅（密钥条目已恢复）
+    healthDirty_ = true;  // 强制下轮重建横幅（密钥条目已恢复；健康签名恰为空串，仅 clear 会撞相等）
 }
 
 void DashboardPanel::showAgentActions(const QString& name, bool online) {
