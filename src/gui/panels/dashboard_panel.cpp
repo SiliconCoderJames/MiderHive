@@ -62,7 +62,9 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     budgetStats_ = new QLabel(budgetCard_);
     budgetStats_->setTextFormat(Qt::RichText);
     budgetStats_->setStyleSheet(ui::th("font-family:'@mono@'; font-size:12px; color:@muted@;"));
-    budgetStats_->setWordWrap(true);
+    // 不换行：三行都是短数字，开 wordWrap 只会让 minimumSizeHint 虚高，
+    // 把预算卡（进而整行）的最小高度撑大，底行被顶出视口（布局审计实测）
+    budgetStats_->setWordWrap(false);
     statsCol->addWidget(budgetStats_);
     budgetSpark_ = new ui::Sparkline(budgetCard_);
     budgetSpark_->setToolTip(i18n::trs("最近 14 天逐日消耗", "daily tokens, last 14 days"));
@@ -110,7 +112,9 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     trendChart_->setOnBarClick([this](int) { drillTo("usage", "range", "14"); });
     trl->addWidget(trendChart_, 1);
     mainRow->addWidget(trendCard_, 4);
-    root->addLayout(mainRow, 4);
+    // 只有主行吸收多余高度（图表越高越好读）；KPI 与其余行都按内容取高，
+    // 这样小窗口下不会把底行顶出视口，大窗口下也不会把事件流拉出死区
+    root->addLayout(mainRow, 1);
 
     // ---- 第三行：Agent 状态网格 + 模型分布 ----
     auto* midRow = new QHBoxLayout();
@@ -147,7 +151,7 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     });
     ml->addWidget(modelChart_, 1);
     midRow->addWidget(modelCard_, 2);
-    root->addLayout(midRow, 3);
+    root->addLayout(midRow);          // 按内容取高（Agent 网格行数由数据决定）
 
     // ---- 第四行：事件流（类型过滤 + 点击下钻）+ 告警 ----
     auto* bottomRow = new QHBoxLayout();
@@ -155,6 +159,9 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
 
     tlCard_ = new QGroupBox(i18n::trs("事件流", "Event Stream"), this);
     tlCard_->setObjectName("card");
+    // 显式最小高度会覆盖布局从子控件推算的最小值：事件流的换行标签曾把卡片最小高度
+    // 撑到 384px，整页被顶出视口（事件流/告警掉到折页之下）。240 ≈ 过滤行 + 6 行事件。
+    tlCard_->setMinimumHeight(240);
     auto* tl = new QVBoxLayout(tlCard_);
     tl->setContentsMargins(10, 16, 10, 8);
     tl->setSpacing(8);
@@ -178,8 +185,9 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     eventStack_ = new QStackedWidget(tlCard_);
     timeline_ = new QListWidget(eventStack_);
     timeline_->setAlternatingRowColors(true);
-    // 封顶：事件流是"最近动态"的窗口，不该无限吃掉首屏高度（完整审计在「操作日志」面板）
-    timeline_->setMaximumHeight(168);
+    // 封顶：事件流是"最近动态"的窗口，不该无限吃掉首屏高度（完整审计在「操作日志」面板）。
+    // 高度取整行数（6 × 33px ≈ 200），避免最后一行被切成半行——布局审计会报 CLIPPED。
+    timeline_->setMaximumHeight(200);
     // 经 ui::th() 生成：等宽字体族与字号随主题/字号档位缩放
     timeline_->setStyleSheet(ui::th(
         "QListWidget { font-family:@mono@,monospace; font-size:11px; }"
@@ -202,6 +210,7 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
 
     alertCard_ = new QGroupBox(i18n::trs("告警", "Alerts"), this);
     alertCard_->setObjectName("card");
+    alertCard_->setMinimumHeight(240);  // 同 tlCard_：封住换行标签撑大的最小高度
     auto* wl = new QVBoxLayout(alertCard_);
     wl->setContentsMargins(10, 16, 10, 8);
     wl->setSpacing(8);
@@ -213,7 +222,9 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     wl->addWidget(emptyAlerts_);
     alertsLay_ = wl;
     bottomRow->addWidget(alertCard_, 2);
-    root->addLayout(bottomRow, 3);
+    // 底行按内容取高：此前它带 stretch，卡片被拉到 380px 而列表只有 168px，
+    // 既留出大片死区，又把整页推高到必须滚动才能看到事件流/告警（布局审计实测越界 142px）
+    root->addLayout(bottomRow);
 
     // ---- 首屏骨架屏：数据回来前铺一层占位，避免"空面板"被误读成"没有数据" ----
     skeleton_ = new ui::Skeleton(this);
@@ -543,14 +554,13 @@ void DashboardPanel::rebuildEventStream(const std::vector<ah::AuditRecord>& reco
     const QString want = eventFilter_->currentData().toString();
     QString joined = want;
     int shown = 0;
-    QList<QListWidgetItem*> pending;
-    timeline_->clear();
+    QList<QListWidgetItem*> pending;   // 先构建待上屏条目：内容签名未变时整体丢弃，不清列表
     for (const auto& r : records) {
         const QString action = QString::fromStdString(r.action);
         const QString target = QString::fromStdString(r.target);
         const QString kind = kindOfEvent(action, target);
         if (!want.isEmpty() && kind != want) continue;
-        if (shown >= 8) break;  // 事件流是窗口不是清单：8 条足够"抬头看一眼"
+        if (shown >= 6) break;  // 事件流是窗口不是清单：6 条足够"抬头看一眼"
         const QString raw = QString::fromStdString(r.created_at);
         auto* item = new QListWidgetItem(
             ui::makeIcon(kind == "agents" ? "overview" : kind,
@@ -565,14 +575,20 @@ void DashboardPanel::rebuildEventStream(const std::vector<ah::AuditRecord>& reco
                              .arg(localStamp(raw) + " · " + QString::fromStdString(r.actor) +
                                       " · " + action + " · " + target)
                              .arg(kind));
-        timeline_->addItem(item);
+        pending.append(item);
         ++shown;
         joined += "|" + raw + action + target;
     }
-    // 内容未变时不重建，避免 3s 刷新闪烁
-    const bool changed = joined != lastTimeline_;
+    if (joined == lastTimeline_) {
+        // 内容未变：丢弃待上屏条目、保留现有列表（3s 刷新不再闪烁，选中/滚动位置不丢）
+        qDeleteAll(pending);
+        eventStack_->setCurrentWidget(shown == 0 ? static_cast<QWidget*>(eventEmpty_)
+                                                 : static_cast<QWidget*>(timeline_));
+        return;
+    }
     lastTimeline_ = joined;
-    (void)changed;
+    timeline_->clear();
+    timeline_->addItems(pending);
     eventStack_->setCurrentWidget(shown == 0 ? static_cast<QWidget*>(eventEmpty_)
                                              : static_cast<QWidget*>(timeline_));
 }

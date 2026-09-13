@@ -113,6 +113,27 @@ inline QString fmtCompact(qint64 v) {
 inline QIcon makeIcon(const QString& kind, const QColor& color, int px = 18,
                       const QColor& selectedColor = {});
 
+// ---- 换行标签：wordWrap 的 QLabel 会把 minimumSizeHint 按"最长单词宽度"折算高度，
+// 实测把告警卡的最小高度从单行 ~20px 撑到 ~79px（4 张卡 = 384px），整页因此被顶出视口、
+// 事件流与告警掉到折页之下。这里给最小高度封顶：宽度够时按一行算，窄窗口下仍会换行
+// （真实高度由 sizeHint 决定），既不失窄窗口的换行保护，也不再虚高。
+class WrappedLabel : public QLabel {
+public:
+    explicit WrappedLabel(int maxMinLines, const QString& text, QWidget* parent = nullptr)
+        : QLabel(text, parent), maxMinLines_(maxMinLines) {
+        setWordWrap(true);
+    }
+    QSize minimumSizeHint() const override {
+        QSize s = QLabel::minimumSizeHint();
+        const int lineH = fontMetrics().lineSpacing();
+        s.setHeight(qMin(s.height(), lineH * maxMinLines_ + 4));
+        return s;
+    }
+
+private:
+    int maxMinLines_ = 2;
+};
+
 // ---- 趋势小图：指标卡里的迷你面积折线（无坐标轴，只表达"走向"）----
 // 现状数字只能说明"现在多少"，看不出"在涨还是在跌"；小图补上趋势维度，
 // 让指标卡从"一个数"变成"一个数 + 一条走势"。
@@ -233,15 +254,12 @@ public:
         icon->setAlignment(Qt::AlignCenter);
         icon->setPixmap(makeIcon(iconKind, muted(), 22).pixmap(22, 22));
         lay->addWidget(icon, 0, Qt::AlignHCenter);
-        title_ = new QLabel(title, this);
+        title_ = new WrappedLabel(2, title, this);
         title_->setAlignment(Qt::AlignCenter);
         title_->setStyleSheet(th("color:@muted@; font-size:12px; font-weight:600;"));
-        title_->setWordWrap(true);
         lay->addWidget(title_);
-        hint_ = new QLabel(hint, this);
+        hint_ = new WrappedLabel(2, hint, this);
         hint_->setAlignment(Qt::AlignCenter);
-        hint_->setWordWrap(true);
-        hint_->setStyleSheet(th("color:@muted@; font-size:11px;"));
         QColor dim = muted();
         dim.setAlpha(170);
         hint_->setStyleSheet(QString("color:rgba(%1,%2,%3,%4); font-size:11px;")
@@ -982,6 +1000,10 @@ private:
     }
 };
 
+// ---- 换行标签：wordWrap 的 QLabel 会把 minimumSizeHint 按"最长单词宽度"折算高度，
+// WrappedLabel 的完整定义在文件前部（InlineEmpty 等前部控件依赖它）：
+// 给 wordWrap 标签的最小高度封顶，宽度够时按一行算，窄窗口下仍会换行。
+
 // ---- 告警卡片：红=阻断 / 橙=警告 / 黄=注意 ----
 // 前置声明：卡片需要一个与导航同源的矢量图标；定义在文件末尾（同为 inline）。
 // 默认参数留在这里（文件前部的空状态控件就要按 3 参调用），末尾那处不再重复给默认值。
@@ -1012,9 +1034,10 @@ public:
         ic->setStyleSheet("background:transparent;");
         ic->setFixedWidth(15);
         lay->addWidget(ic);
-        auto* label = new QLabel(text, this);
-        label->setWordWrap(true);
-        label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::MinimumExpanding);
+        auto* label = new WrappedLabel(2, text, this);
+        label->setText(text);
+        label->setToolTip(text);   // 换行/省略时全文仍可读
+        label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         label->setStyleSheet(QString("color:%1; font-size:12px; background:transparent;").arg(c.name()));
         lay->addWidget(label, 1);
     }
