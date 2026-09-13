@@ -16,6 +16,7 @@ add_executable(miderhive WIN32
     panels/logs_panel.cpp
 )
 target_link_libraries(miderhive PRIVATE miderhive_core Qt6::Widgets Qt6::Network Qt6::Svg)
+miderhive_add_version_resource(miderhive "miderhive" "MiderHive workbench" "miderhive.exe")
 set_target_properties(miderhive PROPERTIES AUTOMOC ON AUTORCC ON)
 qt_add_resources(miderhive "theme"
     PREFIX "/theme"

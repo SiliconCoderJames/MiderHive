@@ -43,6 +43,19 @@ list(GET _ver_parts 1 MIDERHIVE_VERSION_MINOR)
 list(GET _ver_parts 2 MIDERHIVE_VERSION_PATCH)
 message(STATUS "MiderHive version: ${MIDERHIVE_VERSION} (installer: ${MIDERHIVE_VERSION_NUMERIC})")
 
+# ---- exe 的 VERSIONINFO 资源：每个可执行文件一份，配置期由 version.rc.in 生成 ----
+# 此前四个 exe 都没有版本资源：文件属性 → 详细信息里的产品版本/文件版本全是空白，
+# 资源管理器"产品版本"列与部署/遥测工具同样读不到。版本号仍以 version.h 为单一来源，
+# 这里只是把同一个值写进 PE 资源，避免又出现"三处版本各说各话"。
+function(miderhive_add_version_resource target internal_name file_desc original_name)
+    set(MIDERHIVE_INTERNAL_NAME "${internal_name}")
+    set(MIDERHIVE_FILE_DESC "${file_desc}")
+    set(MIDERHIVE_ORIGINAL_NAME "${original_name}")
+    set(_rc "${CMAKE_BINARY_DIR}/generated/version_${target}.rc")
+    configure_file(${CMAKE_SOURCE_DIR}/version.rc.in ${_rc} @ONLY)
+    target_sources(${target} PRIVATE ${_rc})
+endfunction()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
