@@ -588,7 +588,7 @@ void DashboardPanel::rebuildEventStream(const std::vector<ah::AuditRecord>& reco
     }
     lastTimeline_ = joined;
     timeline_->clear();
-    timeline_->addItems(pending);
+    for (auto* item : pending) timeline_->addItem(item);  // addItems 只收 QStringList，条目须逐个上屏
     eventStack_->setCurrentWidget(shown == 0 ? static_cast<QWidget*>(eventEmpty_)
                                              : static_cast<QWidget*>(timeline_));
 }
