@@ -193,6 +193,42 @@ def main():
     step(11, "附加：B 能读到 A 写的共享记忆", hit is not None and hit.get("author") == AGENT_A,
          f"project 区共 {len(data)} 条，命中 author={hit.get('author') if hit else '未找到'}")
 
+    # ---- 12 A 添加知识条目（为搜索回归做准备）----
+    data = expect_env(call("POST", "/api/knowledge",
+                           {"title": "E2E 部署流程知识", "content": "MiderHive 使用 CMake 与 Qt6 构建，"
+                            "平台监听 127.0.0.1，Agent 经 HTTP API 协作。", "category": "e2e"},
+                           name=AGENT_A, key=key_a),
+                      "A 添加知识条目")
+    step(12, "A 添加知识条目", bool(data.get("uuid")), f"uuid={data.get('uuid')}")
+
+    # ---- 13 修复回归：合法 mode=semantic 可用，且 match_mode 为归一后的小写 ----
+    status, payload = call("POST", "/api/knowledge/search",
+                           {"query": "部署流程", "mode": "semantic", "limit": 5},
+                           name=AGENT_B, key=key_b)
+    ok13 = status == 200 and isinstance(payload, dict) and payload.get("code") == 0
+    mm = payload.get("data", [{}])[0].get("match_mode") if ok13 and payload.get("data") else None
+    step(13, "修复回归：mode=semantic 搜索正常，match_mode 归一为小写", ok13,
+         f"HTTP={status} 命中={len(payload.get('data') or [])} match_mode={mm or '（空结果，无回显字段）'}")
+
+    # ---- 14 修复回归：未知 mode 必须被明确拒绝（不得静默降级为 keyword）----
+    status, payload = call("POST", "/api/knowledge/search",
+                           {"query": "部署流程", "mode": "vector"},
+                           name=AGENT_B, key=key_b)
+    msg = payload.get("message") if isinstance(payload, dict) else repr(payload)
+    step(14, "修复回归：未知 mode='vector' 被明确拒绝 HTTP 400",
+         status == 400,
+         f"HTTP={status} message={msg}")
+
+    # ---- 15 修复回归：mode 大小写错误被归一为合法值，且 match_mode 诚实回显 ----
+    status, payload = call("POST", "/api/knowledge/search",
+                           {"query": "部署流程", "mode": "Semantic"},
+                           name=AGENT_B, key=key_b)
+    rows = payload.get("data") or [] if isinstance(payload, dict) else []
+    mm = rows[0].get("match_mode") if rows else None
+    step(15, "修复回归：mode='Semantic' 归一为 semantic（不再静默降级/原样回显）",
+         status == 200 and mm == "semantic",
+         f"HTTP={status} match_mode={mm}")
+
     print("=" * 72)
     print(f"全部通过：{_passed} 步。A-B 协作链路（注册→记忆→技能→调用→错误互通→事件流）端到端可用。")
 

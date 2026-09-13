@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <stdexcept>
 #include <thread>
@@ -382,14 +383,23 @@ void HttpServer::setupRoutes() {
         std::string mode = body.value("mode", "keyword");
         int limit = body.value("limit", 20);
         std::string tag = body.value("tag", "");
-        SearchMode m = (mode == "semantic") ? SearchMode::Semantic : SearchMode::Keyword;
+        // 词表严格校验：此前 mode 大小写不符或未知时会被静默降级为 keyword 搜索，
+        // 而 match_mode 又原样回显调用方的输入——调用方以为做了语义搜索（静默失败）。
+        // 现改为：先归一为小写，非法值直接 400 并说明合法取值；match_mode 回显归一后的值。
+        std::string norm = mode;
+        for (char& c : norm) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (norm != "keyword" && norm != "semantic") {
+            send(res, fail(400, "invalid mode: '" + mode + "' (expected keyword or semantic)"));
+            return;
+        }
+        SearchMode m = (norm == "semantic") ? SearchMode::Semantic : SearchMode::Keyword;
         std::vector<KnowledgeHit> hits;
         std::string err;
         if (!p.knowledgeSearch(query, m, limit, tag, hits, err)) { send(res, fail(400, err)); return; }
         json arr = json::array();
         for (const auto& h : hits) {
             json j = knowledgeToJson(h.entry, h.score);
-            j["match_mode"] = mode;
+            j["match_mode"] = norm;
             arr.push_back(j);
         }
         send(res, ok(arr));
