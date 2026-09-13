@@ -258,6 +258,13 @@ the same over HTTP. Restore lives in the same place (master key required).
 - Hardening regressions: reserved identities cannot be registered, registration role allow-list,
   point-to-point message read isolation, 1 MiB request-body cap, unified 400 envelope for field
   type errors — each covered by unit tests and verified over HTTP;
+- **35 offscreen GUI assertions** ([scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py),
+  build target `gui_selftest`): drives the real workbench UI headlessly through first-run
+  onboarding → agent online → "Connected" popup + welcome memory → keyfile-loss health banner →
+  rotate-key fix (old key 401, new key 200) → Settings re-entry;
+- **14 platform assertions** ([scripts/test_onboarding_and_safety.py](scripts/test_onboarding_and_safety.py)):
+  provisioning, heartbeat, welcome memory, keyfile-loss diagnostics and key-rotation semantics
+  over HTTP;
 - Release pipeline: `scripts/package.ps1` produces the MSI, portable ZIP, the `latest.json` update
   manifest and checksums in one command, with a **runnability self-check** (main binary, Qt
   plugins, MSVC runtime, license files) and **ICE validation** of the MSI;
@@ -267,6 +274,8 @@ the same over HTTP. Restore lives in the same place (master key required).
 ```bash
 ctest --test-dir build -C Release                 # unit tests
 python scripts/feasibility_check.py 8787          # integration (workbench must be running)
+python scripts/verify_gui_selftest.py             # offscreen GUI end-to-end (no human needed)
+python scripts/test_onboarding_and_safety.py      # platform onboarding/key-rotation over HTTP
 ```
 
 > Note: the ASan and soak figures in `docs/hardening-report.md` are one-off local measurements by
