@@ -165,8 +165,10 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
         }
     }
 
-    // 快捷键：Ctrl+1..8 切面板，F5 手动刷新，Ctrl+F 聚焦本面板即时过滤，Ctrl+, 打开设置
-    for (int i = 0; i < 8; ++i) {
+    // 快捷键：Ctrl+1..9 切面板（按导航项数量自适应），F5 手动刷新，
+    // Ctrl+F 聚焦本面板即时过滤，Ctrl+, 打开设置
+    const int navCount = qMin(nav_->count(), 9);
+    for (int i = 0; i < navCount; ++i) {
         auto* sc = new QShortcut(QKeySequence(QString("Ctrl+%1").arg(i + 1)), this);
         connect(sc, &QShortcut::activated, this, [this, i] { nav_->setCurrentRow(i); });
     }
@@ -199,7 +201,8 @@ void MainWindow::buildNav() {
         "QListWidget::item:selected { background:@selbg@; color:@seltext@;"
         " font-weight:600; border-left:3px solid @brand@; }"));
     // 程序化线性图标：随主题着色，错误项恒红、选中态换亮色（替代大小不一的 emoji）
-    const std::vector<std::tuple<const char*, const char*, const char*>> items{
+    // 顺序必须与 panelFactories_ 一致（两者共同描述"有哪些面板"）
+    navItems_ = {
         {"overview", "总览", "Overview"},
         {"usage", "用量分析", "Usage"},
         {"knowledge", "知识库", "Knowledge"},
@@ -209,12 +212,32 @@ void MainWindow::buildNav() {
         {"errors", "错误报告", "Errors"},
         {"audit", "操作日志", "Audit"},
     };
-    for (const auto& [kind, zh, en] : items) {
+    for (const auto& it : navItems_) {
         // 图标与文字一律中性色；「错误报告」有未解决错误时由 updateStatusBar
         // 换红色图标 + 追加计数，避免侧栏在没有错误时也长期处于告警色
-        auto* it = new QListWidgetItem(ui::makeIcon(kind, ui::muted(), 18, ui::selText()),
-                                       "  " + i18n::trs(zh, en));
-        nav_->addItem(it);
+        const QString kind = it.id == "overview" ? "overview" : it.id;
+        auto* item = new QListWidgetItem(ui::makeIcon(kind, ui::muted(), 18, ui::selText()),
+                                        "  " + i18n::trs(it.zh, it.en));
+        item->setData(Qt::UserRole, it.id);  // 稳定 id：徽标/下钻都按 id 定位，不用下标
+        nav_->addItem(item);
+    }
+}
+
+int MainWindow::navRowOf(const QString& panelId) const {
+    if (!nav_) return -1;
+    for (int i = 0; i < nav_->count(); ++i)
+        if (nav_->item(i)->data(Qt::UserRole).toString() == panelId) return i;
+    return -1;
+}
+
+void MainWindow::goToPanel(const QString& panelId, const QString& filterKey,
+                           const QString& filterValue) {
+    const int row = navRowOf(panelId);
+    if (row < 0) return;
+    nav_->setCurrentRow(row);  // 触发 onNavChanged → refresh
+    if (row < static_cast<int>(panels_.size()) && !filterKey.isEmpty()) {
+        // 筛选要在页面刷出来之后再应用（applyFilter 内部自己会再刷一次）
+        panels_[static_cast<size_t>(row)]->applyFilter(filterKey, filterValue);
     }
 }
 
@@ -244,6 +267,10 @@ void MainWindow::rebuildPanels() {
     }
     for (auto& f : panelFactories_) {
         PanelBase* panel = f(platform_, this);
+        // 下钻通道：面板发意图，主窗口负责切页 + 传筛选（面板之间不互相持有引用）
+        panel->setNavigator([this](const QString& id, const QString& key, const QString& value) {
+            goToPanel(id, key, value);
+        });
         // 每个面板套一层滚动容器：窗口偏小或字号调大时内容可滚动可达。
         // 原先面板直接进 QStackedWidget，最小高度之和超出视口时底部内容会被裁掉。
         auto* scroll = new QScrollArea(stack_);
@@ -495,15 +522,18 @@ void MainWindow::updateStatusBar() {
         }
         seenOpenErrors_ = openErrors_;
         const QString label = i18n::trs("错误报告", "Errors");
-        if (auto* errItem = nav_->item(5)) {
+        // 按 id 定位「错误报告」项：此前写死 nav_->item(5)，插入新面板后下标错位，
+        // 结果把「Agent 交流」那一行改成了"错误报告"，侧栏出现两个同名项。
+        const int errRow = navRowOf("errors");
+        if (auto* errItem = errRow >= 0 ? nav_->item(errRow) : nullptr) {
             const bool has = openErrors_ > 0;
             errItem->setText(has ? QString("  %1   (%2)").arg(label).arg(openErrors_)
                                  : "  " + label);
             errItem->setIcon(ui::makeIcon("errors", has ? ui::danger() : ui::muted(), 18,
                                           has ? ui::danger() : ui::selText()));
             errItem->setForeground(QBrush(has ? ui::danger()
-                                              : (nav_->currentRow() == 5 ? ui::selText()
-                                                                         : ui::muted())));
+                                              : (nav_->currentRow() == errRow ? ui::selText()
+                                                                             : ui::muted())));
             errItem->setToolTip(has ? i18n::trs("%1 条未解决错误", "%1 unresolved error(s)")
                                           .arg(openErrors_)
                                     : i18n::trs("暂无未解决错误", "no unresolved errors"));

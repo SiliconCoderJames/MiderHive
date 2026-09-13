@@ -46,10 +46,22 @@ private:
     void openSettings(); // ⚙ 设置对话框（复用同一实例，关闭即删）
     void scheduleUpdateCheck();                // 启动后的自动检查（每天一次，可关）
     void promptUpdate(const ui::UpdateInfo&);  // 发现新版本时的选择框
+    // 跨面板下钻：切到指定面板并可带筛选条件（面板只登记意图，落地由这里负责）
+    void goToPanel(const QString& panelId, const QString& filterKey = QString(),
+                   const QString& filterValue = QString());
+    // 面板 id → 导航行号（按 id 查找，不用硬编码下标：插入新面板不会错位）
+    int navRowOf(const QString& panelId) const;
 
     ah::Platform& platform_;
     QListWidget* nav_ = nullptr;
     QStackedWidget* stack_ = nullptr;
+    // 导航项定义（id, 中文, English）——与 panelFactories_ 同序，是"面板清单"的单一来源
+    struct NavItem {
+        QString id;
+        const char* zh;
+        const char* en;
+    };
+    std::vector<NavItem> navItems_;
     std::vector<PanelBase*> panels_;
     std::vector<std::function<PanelBase*(ah::Platform&, QWidget*)>> panelFactories_;
     QWidget* side_ = nullptr;

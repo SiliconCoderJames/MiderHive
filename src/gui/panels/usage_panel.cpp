@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -108,6 +109,15 @@ UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
     auto* ml = new QVBoxLayout(modelCard_);
     ml->setContentsMargins(8, 16, 8, 6);
     modelChart_ = new ui::HBarChart(modelCard_);
+    // 页内下钻：点模型条 → 直接把"模型"筛选设为该模型（同一页上下联动，不用跳走）
+    modelChart_->setOnEntryClick([this](int idx) {
+        if (idx < 0 || idx >= modelChart_->entries().size()) return;
+        populate_ = true;
+        const int at = modelCombo_->findText(modelChart_->entries()[idx].first);
+        if (at > 0) modelCombo_->setCurrentIndex(at);
+        populate_ = false;
+        refresh();
+    });
     ml->addWidget(modelChart_, 1);
     midRow->addWidget(modelCard_, 2);
     root->addLayout(midRow, 3);
@@ -131,7 +141,24 @@ UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
     // Agent 明细是这张页面的"结论区"：给它可用高度下限，行数多时靠自身滚动条，
     // 不把整页撑到必须滚动才能看全（面板外层已有滚动容器）
     agentTable_->setMinimumHeight(200);
-    tl->addWidget(agentTable_, 1);
+    // 双击某行 → 直接把「Agent」筛选设为它（页内下钻，和点模型条是一对）
+    connect(agentTable_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+        if (auto* it = agentTable_->item(row, 0)) {
+            populate_ = true;
+            const int at = agentCombo_->findText(it->text());
+            if (at > 0) agentCombo_->setCurrentIndex(at);
+            populate_ = false;
+            refresh();
+        }
+    });
+    tableEmpty_ = new ui::InlineEmpty(
+        "usage", i18n::trs("该筛选下暂无用量", "no usage under this filter"),
+        i18n::trs("放宽时间范围，或把 Agent / 模型切回「全部」",
+                  "widen the range, or set agent / model back to all"), tableCard_);
+    tableStack_ = new QStackedWidget(tableCard_);
+    tableStack_->addWidget(agentTable_);
+    tableStack_->addWidget(tableEmpty_);
+    tl->addWidget(tableStack_, 1);
     root->addWidget(tableCard_, 5);
 
     rebuildAgentCombo();
@@ -220,10 +247,13 @@ void UsagePanel::refresh() {
         models.push_back({QString::fromStdString(bd.per_model[i].model), bd.per_model[i].tokens});
     modelChart_->setEntries(models);
 
-    // ---- Agent 明细表：占比列按用量着色，精确值进 tooltip ----
+    // ---- Agent 明细表：占比列按用量着色，精确值进 tooltip，数字列等宽 ----
     agentTable_->setSortingEnabled(false);  // 填充期间禁排序，行号与数据对齐
     const int rows = static_cast<int>(bd.per_agent.size());
     agentTable_->setRowCount(rows);
+    // 数字列等宽：多行数字上下对齐，量级差异一眼可比（仪表盘惯例）
+    QFont monoFont = agentTable_->font();
+    monoFont.setFamily(ui::mono());
     for (int i = 0; i < rows; ++i) {
         const auto& r = bd.per_agent[size_t(i)];
         const double share =
@@ -236,17 +266,22 @@ void UsagePanel::refresh() {
         auto* inItem = new QTableWidgetItem(ui::fmtCompact(r.in));
         inItem->setToolTip(formatNum(r.in));
         inItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        inItem->setFont(monoFont);
         auto* outItem = new QTableWidgetItem(ui::fmtCompact(r.out));
         outItem->setToolTip(formatNum(r.out));
         outItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        outItem->setFont(monoFont);
         auto* totalItem = new QTableWidgetItem(ui::fmtCompact(r.tokens));
         totalItem->setToolTip(formatNum(r.tokens));
         totalItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        totalItem->setFont(monoFont);
         auto* callsItem = new QTableWidgetItem(QString::number(r.calls));
         callsItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        callsItem->setFont(monoFont);
         auto* shareItem = new QTableWidgetItem(QString("%1%").arg(share, 0, 'f', 1));
         shareItem->setForeground(ui::usageColor(share / 100.0));
         shareItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        shareItem->setFont(monoFont);
         // 排序按数值而非文本：把原始值藏进 data(Qt::UserRole)
         inItem->setData(Qt::UserRole, qlonglong(r.in));
         outItem->setData(Qt::UserRole, qlonglong(r.out));
@@ -260,7 +295,10 @@ void UsagePanel::refresh() {
         agentTable_->setItem(i, 5, shareItem);
     }
     agentTable_->setSortingEnabled(true);
-    agentTable_->sortItems(3, Qt::DescendingOrder);  // 默认按合计降序
+    if (rows > 0) agentTable_->sortItems(3, Qt::DescendingOrder);  // 默认按合计降序
+    // 空状态：该筛选下没有数据时给"怎么放宽"的出路，而不是一张空表
+    tableStack_->setCurrentWidget(rows == 0 ? static_cast<QWidget*>(tableEmpty_)
+                                           : static_cast<QWidget*>(agentTable_));
 }
 
 void UsagePanel::onEditBudget() {
@@ -278,6 +316,32 @@ void UsagePanel::onEditBudget() {
         QMessageBox::warning(this, i18n::trs("调整失败", "Adjustment failed"),
                              QString::fromStdString(err));
     }
+}
+
+void UsagePanel::applyFilter(const QString& key, const QString& value) {
+    // 下钻落地：把来源面板的上下文变成这里的筛选条件（找不到就补一个选项，
+    // 例如没有用量记录的 Agent 也应能作为筛选值出现）
+    populate_ = true;
+    if (key == "range") {
+        const int days = value.toInt();
+        rangeCombo_->setCurrentIndex(days <= 7 ? 0 : (days <= 14 ? 1 : 2));
+    } else if (key == "agent" && !value.isEmpty()) {
+        int at = agentCombo_->findText(value);
+        if (at < 0) {
+            agentCombo_->addItem(value);
+            at = agentCombo_->count() - 1;
+        }
+        agentCombo_->setCurrentIndex(at);
+    } else if (key == "model" && !value.isEmpty()) {
+        int at = modelCombo_->findText(value);
+        if (at < 0) {
+            modelCombo_->addItem(value);
+            at = modelCombo_->count() - 1;
+        }
+        modelCombo_->setCurrentIndex(at);
+    }
+    populate_ = false;
+    refresh();
 }
 
 void UsagePanel::retranslate() {

@@ -10,13 +10,16 @@ class QComboBox;
 class QGroupBox;
 class QLabel;
 class QPushButton;
+class QStackedWidget;
 class QTableWidget;
 
 class UsagePanel : public PanelBase {
 public:
-    UsagePanel(ah::Platform& platform, QWidget* parent = nullptr);
+    explicit UsagePanel(ah::Platform& platform, QWidget* parent = nullptr);
     void refresh() override;
     void retranslate() override;
+    // 作为下钻目标：接收 "agent" / "model" / "range" 三类筛选
+    void applyFilter(const QString& key, const QString& value) override;
 
 private:
     void onEditBudget();
@@ -49,4 +52,6 @@ private:
     // ---- Agent 明细表 ----
     QGroupBox* tableCard_ = nullptr;
     QTableWidget* agentTable_ = nullptr;
+    QStackedWidget* tableStack_ = nullptr;
+    ui::InlineEmpty* tableEmpty_ = nullptr;
 };

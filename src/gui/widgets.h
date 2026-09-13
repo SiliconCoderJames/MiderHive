@@ -108,6 +108,205 @@ inline QString fmtCompact(qint64 v) {
     return s + (mega ? "M" : "k");
 }
 
+// 前置声明：文件前部的控件（空状态等）就要用图标工厂；真正的定义在文件末尾。
+// 与末尾那处声明同签名，重复声明合法。
+inline QIcon makeIcon(const QString& kind, const QColor& color, int px = 18,
+                      const QColor& selectedColor = {});
+
+// ---- 趋势小图：指标卡里的迷你面积折线（无坐标轴，只表达"走向"）----
+// 现状数字只能说明"现在多少"，看不出"在涨还是在跌"；小图补上趋势维度，
+// 让指标卡从"一个数"变成"一个数 + 一条走势"。
+class Sparkline : public QWidget {
+public:
+    explicit Sparkline(QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumHeight(30);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setStyleSheet("background:transparent;");
+    }
+    void setSeries(const QVector<qint64>& series, const QColor& c) {
+        series_ = series;
+        color_ = c.isValid() ? c : accent();
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        if (series_.size() < 2) return;
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const qreal pad = 2.0;
+        const qreal w = width() - pad * 2;
+        const qreal h = height() - pad * 2;
+        qint64 mx = 1, mn = series_.front();
+        for (qint64 v : series_) { mx = qMax(mx, v); mn = qMin(mn, v); }
+        if (mx == mn) mn = 0;  // 全平：贴着上沿画不出走势，退化为从 0 起
+        QPolygonF line;
+        for (int i = 0; i < series_.size(); ++i) {
+            const qreal x = pad + w * i / qreal(series_.size() - 1);
+            const qreal y = pad + h * (1.0 - double(series_[i] - mn) / double(mx - mn));
+            line << QPointF(x, y);
+        }
+        // 面积填充：本色低透明度，视觉上轻，不抢主数值
+        QPolygonF area = line;
+        area << QPointF(line.back().x(), pad + h) << QPointF(line.front().x(), pad + h);
+        QLinearGradient g(0, 0, 0, height());
+        QColor c0 = color_;
+        c0.setAlpha(86);
+        QColor c1 = color_;
+        c1.setAlpha(6);
+        g.setColorAt(0.0, c0);
+        g.setColorAt(1.0, c1);
+        p.setPen(Qt::NoPen);
+        p.setBrush(g);
+        p.drawPolygon(area);
+        p.setPen(QPen(color_, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawPolyline(line);
+        // 末点强调：当前值的位置一眼可见
+        p.setPen(Qt::NoPen);
+        p.setBrush(color_);
+        p.drawEllipse(line.back(), 2.4, 2.4);
+    }
+
+private:
+    QVector<qint64> series_;
+    QColor color_ = accent();
+};
+
+// ---- 微条：指标卡里的一行分段条（在线/离线、严重度构成等）----
+// 比例构成用"条"表达比再写一行文字更快读懂，也把数字与图形放在同一个视觉单元里。
+class MicroStrip : public QWidget {
+public:
+    explicit MicroStrip(QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumHeight(8);
+        setMaximumHeight(8);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setStyleSheet("background:transparent;");
+    }
+    void setSegments(const QVector<QPair<QColor, int>>& segs) {
+        segs_ = segs;
+        setToolTip(tooltip_);
+        update();
+    }
+    void setTooltipText(const QString& t) {
+        tooltip_ = t;
+        setToolTip(t);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        int total = 0;
+        for (const auto& s : segs_) total += qMax(0, s.second);
+        if (total <= 0) return;
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const qreal h = 6.0;
+        const qreal y = (height() - h) / 2.0;
+        qreal x = 0;
+        for (const auto& s : segs_) {
+            if (s.second <= 0) continue;
+            const qreal w = width() * double(s.second) / double(total);
+            p.setPen(Qt::NoPen);
+            p.setBrush(s.first);
+            p.drawRoundedRect(QRectF(x, y, qMax(w - 1.5, 1.5), h), 3, 3);
+            x += w;
+        }
+    }
+
+private:
+    QVector<QPair<QColor, int>> segs_;
+    QString tooltip_;
+};
+
+// ---- 紧凑空状态：图标 + 主文案 + 出路提示（可选动作按钮）----
+// 比一行裸文字多两件事：说明"这里会有什么"，以及"下一步该做什么"。
+class InlineEmpty : public QFrame {
+public:
+    InlineEmpty(const QString& iconKind, const QString& title, const QString& hint,
+                QWidget* parent = nullptr)
+        : QFrame(parent) {
+        setStyleSheet("background:transparent; border:none;");
+        auto* lay = new QVBoxLayout(this);
+        lay->setContentsMargins(10, 14, 10, 14);
+        lay->setSpacing(6);
+        auto* icon = new QLabel(this);
+        icon->setAlignment(Qt::AlignCenter);
+        icon->setPixmap(makeIcon(iconKind, muted(), 22).pixmap(22, 22));
+        lay->addWidget(icon, 0, Qt::AlignHCenter);
+        title_ = new QLabel(title, this);
+        title_->setAlignment(Qt::AlignCenter);
+        title_->setStyleSheet(th("color:@muted@; font-size:12px; font-weight:600;"));
+        title_->setWordWrap(true);
+        lay->addWidget(title_);
+        hint_ = new QLabel(hint, this);
+        hint_->setAlignment(Qt::AlignCenter);
+        hint_->setWordWrap(true);
+        hint_->setStyleSheet(th("color:@muted@; font-size:11px;"));
+        QColor dim = muted();
+        dim.setAlpha(170);
+        hint_->setStyleSheet(QString("color:rgba(%1,%2,%3,%4); font-size:11px;")
+                                 .arg(dim.red()).arg(dim.green()).arg(dim.blue())
+                                 .arg(dim.alpha()));
+        lay->addWidget(hint_);
+    }
+    QLabel* titleLabel() const { return title_; }
+    QLabel* hintLabel() const { return hint_; }
+
+private:
+    QLabel* title_ = nullptr;
+    QLabel* hint_ = nullptr;
+};
+
+// ---- 骨架屏：首屏数据回来之前的占位块（微光扫过，表明"正在取数"而非"没有数据"）----
+class Skeleton : public QWidget {
+public:
+    explicit Skeleton(QWidget* parent = nullptr) : QWidget(parent) {
+        setStyleSheet("background:transparent;");
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        timer_.setInterval(16);
+        connect(&timer_, &QTimer::timeout, this, [this] {
+            phase_ += 0.02;
+            if (phase_ > 1.4) phase_ = -0.4;
+            update();
+        });
+    }
+    void setRows(int rows) { rows_ = qMax(1, rows); update(); }
+    void start() { timer_.start(); show(); }
+    void stop() { timer_.stop(); hide(); }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QColor base = line();
+        base.setAlpha(120);
+        const int h = qMax(10, height() / rows_ - 10);
+        for (int i = 0; i < rows_; ++i) {
+            const QRectF r(0, i * (h + 10), width(), h);
+            p.setPen(Qt::NoPen);
+            p.setBrush(base);
+            p.drawRoundedRect(r, 8, 8);
+            // 微光带：从左到右扫过，暗示加载中
+            QLinearGradient g(r.left() + r.width() * (phase_ - 0.25), 0,
+                              r.left() + r.width() * (phase_ + 0.25), 0);
+            QColor hi = fieldHover();
+            hi.setAlpha(150);
+            QColor none = base;
+            none.setAlpha(0);
+            g.setColorAt(0.0, none);
+            g.setColorAt(0.5, hi);
+            g.setColorAt(1.0, none);
+            p.setBrush(g);
+            p.drawRoundedRect(r, 8, 8);
+        }
+    }
+
+private:
+    int rows_ = 4;
+    double phase_ = -0.4;
+    QTimer timer_;
+};
+
 // ---- 环形进度：中间显示 已用/总额/百分比，临近预算橙→红，进度弧平滑动画 ----
 class RingProgress : public QWidget {
 public:
@@ -269,6 +468,18 @@ public:
         setStyleSheet("background:transparent;");  // 见 RingProgress：避免卡片内出现暗框
         setMouseTracking(true);  // 悬停行高亮 + tooltip：光看条长读不出确切数字
     }
+    // 点击下钻：把"看到某一行"直接接到"看这一行的细节"（回调按序号交给面板处理）
+    void setOnEntryClick(std::function<void(int)> fn) {
+        onClick_ = std::move(fn);
+        setCursor(onClick_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    }
+    const QVector<QPair<QString, qint64>>& entries() const { return entries_; }
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        if (e->button() != Qt::LeftButton || !onClick_) return;
+        const int n = entries_.size();
+        const int idx = (n > 0) ? int(e->position().y()) / qMax(1, height() / n) : -1;
+        if (idx >= 0 && idx < n) onClick_(idx);
+    }
     // 悬停行：给出精确数值（千分位），并在绘制时高亮该行
     void mouseMoveEvent(QMouseEvent* e) override {
         const int n = entries_.size();
@@ -321,7 +532,11 @@ protected:
             return;
         }
         qint64 maxV = 1;
-        for (const auto& e : entries_) maxV = qMax(maxV, e.second);
+        qint64 sumV = 0;
+        for (const auto& e : entries_) {
+            maxV = qMax(maxV, e.second);
+            sumV += qMax<qint64>(0, e.second);
+        }
         int rowH = height() / entries_.size();
         int labelW = qMin(110, width() / 4);
         int valueW = 110;
@@ -369,14 +584,16 @@ protected:
             sheen.setColorAt(1.0, bar.lighter(140));
             p.setBrush(sheen);
             p.drawRoundedRect(QRect(barX, y + rowH / 2 - 5, qMax(w, 4), 10), 5, 5);
-            // 数值 + 占比（等宽）
+            // 数值 + 占比（等宽）。占比 = 该项 / 全部之和——不能用 bar 长度那个比例：
+            // 它带着入场动画的瞬时进度，动画途中会显示出"18%"这种与事实不符的占比。
             QFont mf = p.font();
             mf.setFamily(mono());
             p.setFont(mf);
             p.setPen(QPen(muted()));
+            const double share = sumV > 0 ? 100.0 * double(entries_[i].second) / double(sumV) : 0.0;
             p.drawText(QRect(width() - valueW, y, valueW, rowH), Qt::AlignVCenter,
                        QString("%1 · %2%").arg(fmt(entries_[i].second))
-                           .arg(ratio * 100, 0, 'f', 0));
+                           .arg(share, 0, 'f', 0));
             p.setFont(f);
         }
     }
@@ -386,6 +603,7 @@ private:
     double sweep_ = 1.0;
     int hovered_ = -1;
     QPointer<QVariantAnimation> anim_;
+    std::function<void(int)> onClick_;
 };
 
 // ---- 主题色卡：迷你界面预览（底色/侧栏/文本线/强调块/品牌点），点击选择主题 ----
@@ -477,6 +695,19 @@ public:
         setStyleSheet("background:transparent;");  // 见 RingProgress：避免卡片内出现暗框
         setMouseTracking(true);  // 柱顶只有紧凑标注（34.2k），悬停给出确切数值
     }
+    // 点击下钻：按横坐标定位柱子（与悬停同一套坐标换算）
+    void setOnBarClick(std::function<void(int)> fn) {
+        onClick_ = std::move(fn);
+        setCursor(onClick_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    }
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        if (e->button() != Qt::LeftButton || !onClick_) return;
+        const int n = entries_.size();
+        if (n <= 0 || width() <= 4) return;
+        const double slot = double(width() - 4) / n;
+        const int idx = int((e->position().x() - 2) / qMax(1.0, slot));
+        if (idx >= 0 && idx < n) onClick_(idx);
+    }
     // 悬停柱：tooltip 给出「日期: 数值」，并把该柱提亮
     void mouseMoveEvent(QMouseEvent* e) override {
         const int n = entries_.size();
@@ -553,8 +784,19 @@ protected:
             p.setPen(QPen(dim));
             for (double r : {0.0, 0.5, 1.0}) {
                 double y = plot.bottom() - plot.height() * r;
-                p.drawText(QRectF(0, y - 8, axisW - 5, 16), Qt::AlignRight | Qt::AlignVCenter,
-                           fmtCompact(qint64(maxV * r)));
+                // 刻度单位统一：同一根轴上不允许出现 "1.1M" 与 "571k" 混排——
+                // 按轴最大值选定单位，全部刻度共用（读数时不必来回换算量级）
+                const qint64 v = qint64(maxV * r);
+                QString lbl;
+                if (v == 0)
+                    lbl = "0";  // 零点写 "0M" 别扭：它不属于任何量级
+                else if (maxV >= 1000000)
+                    lbl = QString::number(v / 1000000.0, 'f', 1) + "M";
+                else if (maxV >= 1000)
+                    lbl = QString::number(v / 1000.0, 'f', 0) + "k";
+                else
+                    lbl = QString::number(v);
+                p.drawText(QRectF(0, y - 8, axisW - 5, 16), Qt::AlignRight | Qt::AlignVCenter, lbl);
             }
         }
         const int n = entries_.size();
@@ -577,10 +819,13 @@ protected:
             p.setPen(Qt::NoPen);
             p.setBrush(sheen);
             if (h > 0.5) p.drawRoundedRect(bar, 3, 3);
-            // 顶部数值（峰值亮色，其余弱化）
-            p.setPen(QPen(isMax ? brand() : muted()));
-            p.drawText(QRectF(cx - slot / 2, bar.top() - valueH + 2, slot, valueH),
-                       Qt::AlignCenter, fmtCompact(entries_[i].second));
+            // 顶部数值（峰值亮色，其余弱化）；0 值柱不标注——否则轴线上会多出一个 "0"，
+            // 和 Y 轴刻度撞在一起，像是两个不同的零点
+            if (entries_[i].second > 0) {
+                p.setPen(QPen(isMax ? brand() : muted()));
+                p.drawText(QRectF(cx - slot / 2, bar.top() - valueH + 2, slot, valueH),
+                           Qt::AlignCenter, fmtCompact(entries_[i].second));
+            }
             // 底部日期 MM-DD
             QString day = entries_[i].first;
             if (day.size() >= 10) day = day.mid(5);
@@ -595,6 +840,7 @@ private:
     double sweep_ = 1.0;
     int hovered_ = -1;
     QPointer<QVariantAnimation> anim_;
+    std::function<void(int)> onClick_;
 };
 
 // ---- Toast：右下角气泡提示（成功绿 / 失败红），1.8s 自动消失 ----
@@ -681,6 +927,18 @@ public:
         });
         pulse_->start();
     }
+    // 点击卡片 = 打开该 Agent 的操作入口（离线卡用来复制接入命令等，见 dashboard）。
+    // 鼠标变成手型是"可点击"的通用暗示，避免用户以为卡片只是展示。
+    void setOnActivate(std::function<void()> fn) {
+        onClick_ = std::move(fn);
+        setCursor(onClick_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        setToolTip(onClick_ ? i18n::trs("点击查看可执行操作", "click for available actions")
+                            : QString());
+    }
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && onClick_) onClick_();
+        QFrame::mouseReleaseEvent(e);
+    }
     // lastSeenRel/lastSeenAbs：由调用方用 ui::relTime 生成的相对文案 + 本地绝对时刻
     // （tooltip），避免控件层依赖时间格式化，也避免在卡片里出现裸 ISO 串。
     void setAgent(const QString& name, const QString& status, const QString& role,
@@ -715,6 +973,7 @@ private:
     QTimer* pulse_ = nullptr;
     bool online_ = false;
     bool pulseOn_ = true;
+    std::function<void()> onClick_;
     void updateDot() {
         dot_->setText(online_ ? QString("<span style='color:%1;'>●</span>")
                                     .arg(pulseOn_ ? ok().name() : ok().darker(150).name())
@@ -724,9 +983,10 @@ private:
 };
 
 // ---- 告警卡片：红=阻断 / 橙=警告 / 黄=注意 ----
-// 前置声明：卡片需要一个与导航同源的矢量图标；定义在文件末尾（同为 inline）
-inline QIcon makeIcon(const QString& kind, const QColor& color, int px = 18,
-                      const QColor& selectedColor = {});
+// 前置声明：卡片需要一个与导航同源的矢量图标；定义在文件末尾（同为 inline）。
+// 默认参数留在这里（文件前部的空状态控件就要按 3 参调用），末尾那处不再重复给默认值。
+inline QIcon makeIcon(const QString& kind, const QColor& color, int px,
+                      const QColor& selectedColor);
 
 class AlertCard : public QFrame {
 public:
@@ -758,6 +1018,21 @@ public:
         label->setStyleSheet(QString("color:%1; font-size:12px; background:transparent;").arg(c.name()));
         lay->addWidget(label, 1);
     }
+    // 点击告警 → 跳到能处理它的面板（下钻）：告警卡是入口，不是终点
+    void setOnClick(std::function<void()> fn) {
+        onClick_ = std::move(fn);
+        if (onClick_) {
+            setCursor(Qt::PointingHandCursor);
+            setToolTip(i18n::trs("点击前往处理", "click to handle"));
+        }
+    }
+    void mouseReleaseEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton && onClick_) onClick_();
+        QFrame::mouseReleaseEvent(e);
+    }
+
+private:
+    std::function<void()> onClick_;
 };
 
 // ---- KPI 磁贴：一屏顶部的关键数字（标题 / 大号数值 / 说明 + 图标徽章）----
@@ -778,10 +1053,13 @@ public:
         col->setContentsMargins(0, 0, 0, 0);
         col->setSpacing(1);
         title_ = new QLabel(this);
-        title_->setStyleSheet(th("color:@muted@; font-size:11px; background:transparent;"));
+        title_->setStyleSheet(th("color:@muted@; font-size:11px; background:transparent;"
+                                " letter-spacing:0.3px;"));
         value_ = new QLabel(this);
+        // 数值用等宽字体：多张卡并排时数字位对齐，扫读时不会因字宽跳动（仪表盘惯例）
         value_->setStyleSheet(
-            th("color:@text@; font-size:23px; font-weight:700; background:transparent;"));
+            th("color:@text@; font-family:'@mono@'; font-size:23px; font-weight:700;"
+               " background:transparent;"));
         value_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         // 数值 + 环比胶囊同一行：变化量挨着数字，扫一眼就知道"涨了还是跌了"
         delta_ = new QLabel(this);
@@ -792,10 +1070,24 @@ public:
         valueRow->addWidget(value_);
         valueRow->addWidget(delta_, 0, Qt::AlignVCenter);
         valueRow->addStretch(1);
+        // 迷你可视化槽位：趋势小图（连续性指标）或微条（构成型指标）二选一
+        miniHolder_ = new QWidget(this);
+        miniHolder_->setStyleSheet("background:transparent;");
+        miniLay_ = new QVBoxLayout(miniHolder_);
+        miniLay_->setContentsMargins(0, 2, 0, 0);  // 小图铺满可用宽度（图标在右侧列外）
+        miniLay_->setSpacing(2);
+        miniHolder_->setVisible(false);
+        spark_ = new Sparkline(miniHolder_);
+        strip_ = new MicroStrip(miniHolder_);
+        miniLay_->addWidget(spark_);
+        miniLay_->addWidget(strip_);
+        spark_->setVisible(false);
+        strip_->setVisible(false);
         cap_ = new QLabel(this);
         cap_->setStyleSheet(th("color:@muted@; font-size:11px; background:transparent;"));
         col->addWidget(title_);
         col->addLayout(valueRow);
+        col->addWidget(miniHolder_);
         col->addWidget(cap_);
         lay->addLayout(col, 1);
         icon_ = new QLabel(this);
@@ -815,9 +1107,28 @@ public:
         value_->setText(value);
         cap_->setText(caption);
         value_->setStyleSheet(
-            th(QString("color:%1; font-size:23px; font-weight:700; background:transparent;")
+            th(QString("color:%1; font-family:'@mono@'; font-size:23px; font-weight:700;"
+                       " background:transparent;")
                    .arg((valueColor.isValid() ? valueColor : text()).name())));
         paintIcon(iconColor.isValid() ? iconColor : accent());
+    }
+    // 趋势小图：给连续性指标（Token 消耗等）补上"走势"这一维
+    void setSparkline(const QVector<qint64>& series, const QColor& c) {
+        spark_->setSeries(series, c.isValid() ? c : accent());
+        spark_->setVisible(series.size() >= 2);
+        strip_->setVisible(false);
+        miniHolder_->setVisible(series.size() >= 2);
+        setMinimumHeight(series.size() >= 2 ? 100 : 68);
+    }
+    // 微条：给构成型指标（在线/离线、严重度构成）表达比例
+    void setMicroStrip(const QVector<QPair<QColor, int>>& segs, const QString& tip) {
+        strip_->setSegments(segs);
+        strip_->setTooltipText(tip);
+        const bool use = !segs.isEmpty();
+        strip_->setVisible(use);
+        spark_->setVisible(false);
+        miniHolder_->setVisible(use);
+        setMinimumHeight(use ? 84 : 68);
     }
     void setToolTipAll(const QString& tip) {
         setToolTip(tip);
@@ -827,6 +1138,7 @@ public:
     }
     // 环比/占比胶囊：小号语义色徽标贴在数值右侧；传空文本即隐藏
     void setDelta(const QString& text, const QColor& c) {
+        if (!deltaTip_.isEmpty()) delta_->setToolTip(deltaTip_);
         if (text.isEmpty()) {
             delta_->setVisible(false);
             return;
@@ -841,6 +1153,11 @@ public:
                                      .arg(c.blue())));
         delta_->setVisible(true);
     }
+    // 胶囊的含义（"跟什么比"）单独说明：只有百分比时用户不知道参照系
+    void setDeltaTooltip(const QString& tip) {
+        deltaTip_ = tip;
+        delta_->setToolTip(tip);
+    }
 
 private:
     QString iconKind_;
@@ -849,6 +1166,11 @@ private:
     QLabel* cap_ = nullptr;
     QLabel* delta_ = nullptr;
     QLabel* icon_ = nullptr;
+    QWidget* miniHolder_ = nullptr;
+    QVBoxLayout* miniLay_ = nullptr;
+    Sparkline* spark_ = nullptr;
+    MicroStrip* strip_ = nullptr;
+    QString deltaTip_;
     QColor iconPainted_;
     void paintIcon(const QColor& c) {
         if (iconPainted_.isValid() && iconPainted_ == c) return;  // 颜色未变则跳过重绘

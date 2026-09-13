@@ -5,6 +5,7 @@
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <functional>
 
 #include "../i18n.h"
 #include "../theme.h"
@@ -24,8 +25,22 @@ public:
         if (headerTitle_) headerTitle_->setText(i18n::trs(zhTitle_, enTitle_));
         if (headerSub_) headerSub_->setText(i18n::trs(zhSub_, enSub_));
     }
+    // ---- 跨面板下钻 ----
+    // 由主窗口注入：面板只管"跳到哪个面板、带什么筛选"，导航与筛选落地由 MainWindow 负责。
+    // （面板之间不互相持有引用，加面板不会牵动其它面板。）
+    using Navigator =
+        std::function<void(const QString& panelId, const QString& key, const QString& value)>;
+    void setNavigator(Navigator n) { navigate_ = std::move(n); }
+    // 作为下钻目标时接收筛选条件（如用量页的 agent/model/range）；不关心的面板忽略即可
+    virtual void applyFilter(const QString& /*key*/, const QString& /*value*/) {}
 
 protected:
+    // 面板内部触发下钻（图表点击、卡片点击等）
+    void drillTo(const QString& panelId, const QString& key = QString(),
+                 const QString& value = QString()) const {
+        if (navigate_) navigate_(panelId, key, value);
+    }
+
     // 页头：图标徽章 + 品牌饰条 + 面板标题/说明竖列，统一各面板的视觉节奏（双语，可重译）
     void buildHeader(QVBoxLayout* layout, const QString& iconKind, const QString& zhTitle,
                      const QString& enTitle, const QString& zhSub, const QString& enSub) {
@@ -72,6 +87,7 @@ protected:
     ah::Platform& platform_;
 
 private:
+    Navigator navigate_;
     QLabel* headerTitle_ = nullptr;
     QLabel* headerSub_ = nullptr;
     QString zhTitle_, enTitle_, zhSub_, enSub_;
