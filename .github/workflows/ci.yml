@@ -120,3 +120,25 @@ jobs:
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
+
+      # 1.1.1 的招牌能力（首次接入引导、密钥丢失横幅、一键轮换）在 GUI 层，feasibility 与 MCP
+      # 两条链路都覆盖不到。这两条脚本此前只在发版前本地跑：招牌功能真回归了 CI 也不会红，
+      # 等于没有防线。gui_selftest 跑的是真实 MainWindow/WelcomeDialog（不是另写的复刻流程），
+      # 以 offscreen 无头方式驱动，无需人工点击。
+      - name: GUI end-to-end self-test (offscreen, 35 assertions)
+        shell: pwsh
+        run: |
+          python scripts/verify_gui_selftest.py --build build
+          if ($LASTEXITCODE -ne 0) {
+            throw "GUI self-test failed - onboarding / health banner / key rotation regressed"
+          }
+
+      # 同一条主线的后端口径：预配身份、心跳上线、欢迎记忆、密钥缓存丢失诊断、轮换后旧钥立即失效
+      - name: Onboarding and key-rotation self-test (14 assertions)
+        shell: pwsh
+        env:
+          MH_PLATFORMD: build\src\cli\Release\platformd.exe
+          MH_PORT: "19092"
+        run: |
+          python scripts/test_onboarding_and_safety.py
+          if ($LASTEXITCODE -ne 0) { throw "onboarding/key-rotation self-test failed" }

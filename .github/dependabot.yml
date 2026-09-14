@@ -1,0 +1,17 @@
+# 依赖更新提示。
+#
+# CI 与发布流水线里的第三方 action 一律钉全量 commit SHA（防供应链投毒，见 workflows 里的注释）：
+# 标签可被移动而 SHA 不可变。代价是**不会自动跟随上游的安全修复**——pinning 的标准配套就是
+# 让 Dependabot 盯着这些 SHA。按月、按组合并成单个 PR，避免刷屏。
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns: ["*"]

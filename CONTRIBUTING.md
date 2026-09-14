@@ -59,10 +59,17 @@ python scripts/test_onboarding_and_safety.py       # onboarding + key rotation o
 python scripts/mcp_check.py 8787 <mcp-exe> zcode <key>   # MCP stdio JSON-RPC
 ```
 
-What CI runs on every push and PR: build, a check that the GUI binary actually exists, `ctest`,
-plus the feasibility and MCP integration checks against a real `platformd` on a scratch data
-directory. The offscreen GUI self-test and the onboarding script are run locally (and before a
-release) — please run them if your change touches the GUI, onboarding or key handling.
+What CI runs on every push and PR: the build, a check that the GUI binary actually exists, `ctest`,
+the feasibility and MCP integration checks against a real `platformd` on a scratch data directory,
+and **both self-tests above** — the offscreen GUI end-to-end (`gui_selftest`) and the
+onboarding/key-rotation script. A regression in first-run onboarding, the health banner or key
+rotation therefore turns the badge red instead of shipping.
+
+> Run the offscreen GUI self-test **one at a time**: it drives the real application, whose settings
+> live in the per-user `QSettings` store (registry keys under `HKCU\Software\miderhive\…`), so two
+> concurrent runs — or a run overlapping a manual onboarding session — can fail spuriously. CI is a
+> single job, so it is unaffected. (Isolating that store for the test process is a known
+> improvement, tracked as a follow-up.)
 
 ## Ground rules that matter in review
 

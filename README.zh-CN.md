@@ -275,9 +275,12 @@ Windows 图标缓存，运行 `ie4uinit.exe -show` 或重启资源管理器。
 ```bash
 ctest --test-dir build -C Release                 # 单元测试
 python scripts/feasibility_check.py 8787          # 集成验证（需先启动工作台）
-python scripts/verify_gui_selftest.py             # 离屏 GUI 全链路自测（无需人工）
-python scripts/test_onboarding_and_safety.py      # 平台接入/密钥轮换（HTTP 实测）
+python scripts/verify_gui_selftest.py             # 离屏 GUI 全链路自测（无需人工，CI 也跑）
+python scripts/test_onboarding_and_safety.py      # 平台接入/密钥轮换（HTTP 实测，CI 也跑）
 ```
+
+以上**全部由 CI 在每次推送与 PR 上执行**——构建、单元测试、可行性检查、MCP 检查，以及这两条自测。
+换句话说：首次接入引导、健康横幅或密钥轮换一旦回归，CI 直接变红，不会带着问题发版。
 
 > 注：`docs/hardening-report.md` 中的 ASan / 浸泡数据是作者本机一次性实测结果，仓库内没有对应的
 > 可复现脚本与 CI 任务（`soak_test.py` 不含内存采样），请以"本机实测"而非"可复现结论"理解。

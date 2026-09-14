@@ -302,9 +302,13 @@ the same over HTTP. Restore lives in the same place (master key required).
 ```bash
 ctest --test-dir build -C Release                 # unit tests
 python scripts/feasibility_check.py 8787          # integration (workbench must be running)
-python scripts/verify_gui_selftest.py             # offscreen GUI end-to-end (no human needed)
-python scripts/test_onboarding_and_safety.py      # platform onboarding/key-rotation over HTTP
+python scripts/verify_gui_selftest.py             # offscreen GUI end-to-end (no human needed; CI runs it too)
+python scripts/test_onboarding_and_safety.py      # platform onboarding/key-rotation over HTTP (CI runs it too)
 ```
+
+**CI enforces all of the above** on every push and pull request — build, unit tests, the feasibility
+and MCP checks, and both self-tests. A regression in the first-run onboarding, the health banner or
+key rotation turns the badge red instead of shipping.
 
 > Note: the ASan and soak figures in `docs/hardening-report.md` are one-off local measurements by
 > the author. The repository has no reproducible script or CI job for them (`soak_test.py` does no
