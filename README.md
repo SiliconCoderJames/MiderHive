@@ -13,6 +13,7 @@ where your data never leaves your PC.
 
 [![CI](https://github.com/SiliconCoderJames/MiderHive/actions/workflows/ci.yml/badge.svg)](https://github.com/SiliconCoderJames/MiderHive/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SiliconCoderJames/MiderHive?color=0ea5e9)](https://github.com/SiliconCoderJames/MiderHive/releases)
+[![Downloads](https://img.shields.io/github/downloads/SiliconCoderJames/MiderHive/total?color=22c55e)](https://github.com/SiliconCoderJames/MiderHive/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0ea5e9.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-f59e0b.svg)
 ![Qt6](https://img.shields.io/badge/Qt-6-22c55e.svg)
@@ -21,7 +22,15 @@ where your data never leaves your PC.
 
 English | **[简体中文](README.zh-CN.md)**
 
-**[Download](#quick-start)** · **[HTTP API docs](docs/api.md)** · **[FAQ](#faq)** · **[Release notes](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[Contributing](#contributing)**
+**[Download](#quick-start)** · **[HTTP API docs](docs/api.md)** · **[MCP setup](docs/mcp.md)** · **[FAQ](#faq)** · **[Release notes](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[Discussions](https://github.com/SiliconCoderJames/MiderHive/discussions)** · **[Contributing](#contributing)** · **[Security](SECURITY.md)**
+
+**New in 1.1.1** — first-run onboarding (connect Claude Code / Cursor / Codex CLI with one paste)
+and foolproof design (startup self-check, health banners, one-click key rotation).
+**[Release notes →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.1.1)**
+
+<img src="docs/assets/screenshot-dashboard.png" alt="MiderHive workbench overview" width="100%"/>
+
+<em>The workbench — agent status, token spend, the shared brain and the live event stream in one screen</em>
 
 </div>
 
@@ -57,11 +66,6 @@ English | **[简体中文](README.zh-CN.md)**
 | Operations | Consistent snapshots via `VACUUM INTO`, administrative deletes (master key only), manual maintenance |
 
 ## Screenshots
-
-<p align="center">
-  <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive workbench overview" width="100%"/>
-  <br/><em>Overview — KPIs, agent status, health banners and the live event stream</em>
-</p>
 
 <p align="center">
   <img src="docs/assets/screenshot-onboarding.png" alt="First-run onboarding: pick Claude Code / Cursor / Codex CLI, detect the local install and generate the MCP config" width="55%"/>
@@ -381,13 +385,19 @@ Personal memory stays in its local layered store; reusable experience goes into 
 ## Contributing
 
 Issues and PRs are welcome: bug fixes, documentation, new embedding models, extra workbench panels.
-Please make sure `ctest` is green and include reproduction steps or screenshots.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the build/test setup, the ground rules that matter in
+review, and how releases are cut — and please make sure `ctest` is green with reproduction steps or
+screenshots attached.
+
+Found a security problem? **Don't open a public issue** — report it privately, see
+**[SECURITY.md](SECURITY.md)** for scope and channels.
 
 ## Contact and community
 
 - Bug reports → [GitHub Issues](https://github.com/SiliconCoderJames/MiderHive/issues)
 - Feature discussions → [GitHub Discussions](https://github.com/SiliconCoderJames/MiderHive/discussions)
-- Email → `13371891127@139.com` (for security issues please email instead of opening a public issue)
+- Security vulnerabilities → [private advisory](https://github.com/SiliconCoderJames/MiderHive/security/advisories/new)
+  or email `13371891127@139.com` (never a public issue)
 
 <a id="sponsor"></a>
 

@@ -1,0 +1,86 @@
+name: 🐛 Bug 报告 / Bug report
+description: 工作台、接口或 Agent 接入出问题了 / Something in the workbench, HTTP API or agent onboarding is broken
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **安全漏洞请勿在此公开**：请走 [私密报告渠道](https://github.com/SiliconCoderJames/MiderHive/security/advisories/new)，细节见 [SECURITY.md](https://github.com/SiliconCoderJames/MiderHive/blob/master/SECURITY.md)。
+        > **Security issues must be reported privately** — see SECURITY.md.
+        >
+        > 中英文都可以，用你最顺手的那种写。/ Chinese or English, whichever you prefer.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 现象 / What happened
+      description: 你看到的现象，以及你原本想做什么。有报错原文就贴原文。
+      placeholder: 点「调整预算」保存后弹窗没关，预算也没变；操作日志里出现 error.memory ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 能稳定复现最好；只出现过一次也说明清楚。
+      placeholder: |
+        1. 启动工作台（数据目录全新 / 已有历史数据）
+        2. 用 claude 身份 POST /api/knowledge ...
+        3. 打开「知识库」面板 → 出现 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 vs 实际行为 / Expected vs actual
+      placeholder: |
+        期望：
+        实际：
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / Version
+      description: 工作台左下角显示的版本号，或安装包文件名里的版本。
+      placeholder: "1.1.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式 / Install type
+      options:
+        - MSI 安装包 / MSI installer
+        - 便携 ZIP / portable ZIP
+        - 源码构建 / built from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 系统 / OS
+      placeholder: Windows 11 23H2 x64
+    validations:
+      required: true
+  - type: input
+    id: agents
+    attributes:
+      label: 接入的 Agent / Agents connected
+      description: 不涉及接入问题时可以留空。
+      placeholder: Claude Code / Codex CLI / Cursor / 自研脚本
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志与截图 / Logs and screenshots
+      description: |
+        最有用的三样：工作台「操作日志」面板内容、`platformd.exe` 的控制台输出、
+        以及界面截图。粘贴时请先去掉任何真实密钥（`X-Api-Key` / `master.key` / `agents.json` 里的值）。
+      placeholder: 粘贴或拖拽图片 / paste text or drag images here
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认 / Before submitting
+      options:
+        - label: 我已搜索过现有 issue 与 Discussions，没有重复 / I searched existing issues and discussions
+          required: true
+        - label: 这不是安全漏洞（是的话我走私密渠道）/ This is not a security vulnerability
+          required: true

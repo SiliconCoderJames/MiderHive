@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 使用提问 / Questions & ideas
+    url: https://github.com/SiliconCoderJames/MiderHive/discussions
+    about: 装不上、连不上、不知道某个面板怎么用——先到 Discussions 聊，别开 issue。 / How-to questions, setup help and open-ended ideas belong in Discussions.
+  - name: 🔐 安全漏洞 / Report a vulnerability
+    url: https://github.com/SiliconCoderJames/MiderHive/security/advisories/new
+    about: 请走私密渠道，不要在公开 issue 里贴漏洞细节。 / Please report privately — never in a public issue. See SECURITY.md.
+  - name: 📖 文档 / Docs
+    url: https://github.com/SiliconCoderJames/MiderHive/blob/master/README.md
+    about: 安装、接入、HTTP API、MCP 配置与常见问题。 / Install, quick start, HTTP API, MCP setup and FAQ.

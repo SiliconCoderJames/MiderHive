@@ -12,6 +12,7 @@
 
 [![CI](https://github.com/SiliconCoderJames/MiderHive/actions/workflows/ci.yml/badge.svg)](https://github.com/SiliconCoderJames/MiderHive/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SiliconCoderJames/MiderHive?color=0ea5e9)](https://github.com/SiliconCoderJames/MiderHive/releases)
+[![Downloads](https://img.shields.io/github/downloads/SiliconCoderJames/MiderHive/total?color=22c55e)](https://github.com/SiliconCoderJames/MiderHive/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0ea5e9.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-f59e0b.svg)
 ![Qt6](https://img.shields.io/badge/Qt-6-22c55e.svg)
@@ -20,7 +21,14 @@
 
 **[English](README.md) | 简体中文**
 
-**[下载安装](#快速开始)** · **[HTTP 接口文档](docs/api.md)** · **[常见问题](#常见问题)** · **[发行说明](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[参与贡献](#参与贡献)**
+**[下载安装](#快速开始)** · **[HTTP 接口文档](docs/api.md)** · **[MCP 接入](docs/mcp.md)** · **[常见问题](#常见问题)** · **[发行说明](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[讨论区](https://github.com/SiliconCoderJames/MiderHive/discussions)** · **[参与贡献](#参与贡献)** · **[安全策略](SECURITY.md)**
+
+**1.1.1 新增**——首启接入引导（一次粘贴接入 Claude Code / Cursor / Codex CLI）与全链路防呆设计
+（启动自检、健康横幅、明文密钥一键轮换）。**[发行说明 →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.1.1)**
+
+<img src="docs/assets/screenshot-dashboard.png" alt="MiderHive 工作台总览" width="100%"/>
+
+<em>工作台：一屏看清 Agent 状态、Token 消耗、共享大脑与实时事件流</em>
 
 </div>
 
@@ -56,11 +64,6 @@
 | 运维 | 备份与恢复（`VACUUM INTO` 一致快照）、管理性删除（主密钥）、手动维护 |
 
 ## 界面预览
-
-<p align="center">
-  <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive 工作台总览" width="100%"/>
-  <br/><em>总览页：KPI 磁贴、Agent 状态、健康横幅与实时事件流</em>
-</p>
 
 <p align="center">
   <img src="docs/assets/screenshot-onboarding.png" alt="首次接入引导：选择 Claude Code / Cursor / Codex CLI，自动检测安装并生成 MCP 配置" width="55%"/>
@@ -350,13 +353,17 @@ MiderHive 是**蜂巢**，同作者的 [**Miderforge**](https://github.com/Silic
 ## 参与贡献
 
 欢迎 Issue 与 PR：修 bug、补文档、接入新嵌入模型、给工作台加面板都可以。
+构建/测试方式、评审时看重的地基规则、发版流程见 **[CONTRIBUTING.md](CONTRIBUTING.md)**；
 提交前请确保 `ctest` 全绿，并附上复现步骤或截图。
+
+发现安全问题？**请勿公开提 Issue**，走私密渠道，范围与方式见 **[SECURITY.md](SECURITY.md)**。
 
 ## 联系与社区
 
 - Bug 反馈 → [GitHub Issues](https://github.com/SiliconCoderJames/MiderHive/issues)
 - 功能讨论 → [GitHub Discussions](https://github.com/SiliconCoderJames/MiderHive/discussions)
-- 邮件 → `13371891127@139.com`（安全漏洞请勿公开提 Issue，优先邮件）
+- 安全漏洞 → [私密报告](https://github.com/SiliconCoderJames/MiderHive/security/advisories/new)
+  或邮件 `13371891127@139.com`（请勿公开提 Issue）
 
 <a id="sponsor"></a>
 

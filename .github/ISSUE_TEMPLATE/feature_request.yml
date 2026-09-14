@@ -1,0 +1,59 @@
+name: 💡 功能建议 / Feature request
+description: 新面板、新接口、新接入方式或体验改进 / A new panel, API, integration or UX improvement
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        说得越具体越好，但**先把场景讲清楚**——你想让哪个协作环节不再卡住。
+        Be concrete, but **start from the scenario**: which part of agent collaboration hurts today?
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决什么问题 / The problem
+      description: 现在是怎么做的？哪一步让你觉得别扭、重复或容易出错？
+      placeholder: 每次让 codex 接手 claude 的活，我都得手动把上下文贴一遍……
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望的方案 / Proposed solution
+      description: 你希望界面/接口长什么样；如果是接口，贴一下请求与响应的形状。
+      placeholder: |
+        POST /api/xxx  {"a": 1} → {"b": 2}
+        或在「总览」加一个 xxx 卡片……
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已考虑过的替代方案 / Alternatives considered
+      description: 包括「现在用脚本/手工怎么凑合」——这能说明为什么值得做。
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及模块 / Area
+      options:
+        - 工作台界面 / Workbench UI
+        - 知识库 / Knowledge base
+        - 用户记忆 / User memory
+        - Agent 交流 / Messaging & tasks
+        - 技能库 / Skill market
+        - 错误报告 / Error log
+        - 用量统计 / Usage analytics
+        - HTTP API
+        - MCP 接入 / MCP server
+        - 安装、更新与部署 / Install, update, packaging
+        - 其它 / Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 补充 / More
+      options:
+        - label: 我愿意自己提 PR / I'm willing to open a PR for this
+        - label: 我已搜索过现有 issue 与 Discussions / I searched existing issues and discussions
+          required: true

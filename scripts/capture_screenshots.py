@@ -20,6 +20,7 @@ import argparse
 import ctypes
 import ctypes.wintypes
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -39,8 +40,28 @@ from PIL import ImageGrab  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOW_TITLE_PREFIX = "MiderHive"
-DEMO_HOME = os.path.join(os.path.expanduser("~"), ".miderhive-demo-shots")
 SETTINGS_KEY = r"Software\miderhive\MiderHive 多 Agent 协作工作台"
+
+
+def _demo_home():
+    """演示数据目录：优先用盘根的固定路径。
+
+    截图会公开（README 首屏），状态栏与接入命令都会显示这个路径——放在用户目录下会把
+    登录用户名（这台机器上是 "Administrator"）印进公开截图，容易被误读成"需要管理员权限"，
+    而 README 明确说免管理员安装。盘根路径既中性又不泄露用户名；创建失败再退回用户目录。
+    """
+    override = os.environ.get("MIDERHIVE_SHOTS_HOME")
+    if override:
+        return override
+    preferred = "C:\\MiderHive-Demo"
+    try:
+        os.makedirs(preferred, exist_ok=True)
+        return preferred
+    except OSError:
+        return os.path.join(os.path.expanduser("~"), ".miderhive-demo")
+
+
+DEMO_HOME = _demo_home()
 
 
 def log(msg):
@@ -283,29 +304,44 @@ def seed(base, home):
         ("PowerShell 5.1 传参防截断",
          "给子进程传 -DKEY=1.0.0 这类带点号的参数必须整体加引号，否则会被截断成 KEY=1 且不报错。",
          ["powershell"], "踩坑"),
+        ("Qt6 高 DPI 下截图要用物理像素",
+         "PrintWindow + GetDIBits 拿到的就是物理像素；混用逻辑坐标会让裁剪框整体偏移一个缩放比例。",
+         ["qt6", "dpi"], "经验"),
+        ("cpp-httplib 请求体上限与超时",
+         "默认没有请求体上限，公网暴露前必须 set_payload_max_length；本机服务也要设，防误传大文件占内存。",
+         ["httplib", "安全"], "经验"),
     ]
     for title, content, tags, cat in kn:
         http(base, "POST", "/api/knowledge",
              {"title": title, "content": content, "tags": tags, "category": cat}, h("claude"))
 
-    http(base, "POST", "/api/memory",
-         {"section": "project", "key": "当前迭代",
-          "value": "首次接入引导与防呆设计已合入 master；下一轮评估本地嵌入模型（ONNX bge）。", "base_version": 0},
-         h("claude"))
+    mem = [
+        ("project", "当前迭代", "首次接入引导与防呆设计已合入 master；下一轮评估本地嵌入模型（ONNX bge）。"),
+        ("preferences", "回复风格", "中文优先、先给结论再给依据；代码改动要说明影响面，不要静默改行为。"),
+        ("environment", "开发机", "Windows 11 + VS2022 + Qt 6.8.3；构建用 cmake --preset full，出包走 scripts/package.ps1。"),
+        ("decisions", "为什么只监听 127.0.0.1", "协作数据包含明文密钥与私人笔记，默认不开外网监听；要跨机就自己架反向代理。"),
+    ]
+    for section, key, value in mem:
+        http(base, "POST", "/api/memory",
+             {"section": section, "key": key, "value": value, "base_version": 0}, h("claude"))
 
-    http(base, "POST", "/api/skills",
-         {"name": "release-package", "display_name": "出包流水线",
-          "description": "package.ps1 一条命令出 MSI + ZIP + latest.json，并做可运行性自检",
-          "category": "构建发布"}, h("codex"))
-    http(base, "POST", "/api/skills",
-         {"name": "db-backup", "display_name": "数据库快照",
-          "description": "VACUUM INTO 一致性快照到备份目录，恢复需主密钥",
-          "category": "运维"}, h("claude"))
+    skills = [
+        ("release-package", "出包流水线", "package.ps1 一条命令出 MSI + ZIP + latest.json，并做可运行性自检", "构建发布", "codex"),
+        ("db-backup", "数据库快照", "VACUUM INTO 一致性快照到备份目录，恢复需主密钥", "运维", "claude"),
+        ("api-smoke", "接口冒烟", "起一个隔离数据目录，把 provisioning/心跳/知识/用量主链路跑一遍", "测试", "codex"),
+        ("log-digest", "日志摘要", "把 platformd 输出按错误级别归类，只把 warning 以上推给值班 Agent", "运维", "cursor"),
+    ]
+    for name, disp, desc, cat, actor in skills:
+        http(base, "POST", "/api/skills",
+             {"name": name, "display_name": disp, "description": desc, "category": cat}, h(actor))
 
     http(base, "POST", "/api/messages",
          {"kind": "note", "subject": "构建提示",
           "body": "发行包请走 scripts/package.ps1，不要手动 windeployqt——自检会拦住缺插件/缺运行库的包。"},
          h("claude"))
+    http(base, "POST", "/api/messages",
+         {"kind": "question", "recipient": "claude", "subject": "知识库分页参数用哪种？",
+          "body": "limit/offset 还是 cursor？想跟用量面板的查询风格保持一致。"}, h("cursor"))
     http(base, "POST", "/api/messages",
          {"kind": "task", "recipient": "codex", "subject": "补齐 usage 面板空状态文案",
           "body": "预算未设置时给一句说明，避免新用户以为用量没在统计。"}, h("claude"))
@@ -321,14 +357,80 @@ def seed(base, home):
     http(base, "POST", f"/api/errors/{e2['uuid']}/resolve",
          {"notes": "persistAgentKey 改为临时文件 + 原子替换，附带损坏文件拒绝解析的显式报错。"}, h("cursor"))
 
-    calls = [("claude", 12400, 3450, "deepseek-chat"), ("claude", 8200, 2100, "deepseek-chat"),
-             ("codex", 15200, 5600, "gpt-5.3-codex"), ("codex", 6400, 1900, "gpt-5.3-codex"),
-             ("cursor", 4300, 1200, "composer-1")]
-    for i, (name, ti, to, model) in enumerate(calls):
-        http(base, "POST", "/api/usage/report",
-             {"tokens_in": ti, "tokens_out": to, "model": model,
-              "call_type": "chat", "idempotency_key": f"seed-{i}"}, h(name))
-    log("演示数据就绪（3 Agent / 3 知识 / 2 技能 / 2 错误 / 用量 5 笔）")
+    # 用量另行由 backdate_usage() 直接写库（HTTP 上报接口不接受时间戳）
+    log("演示数据就绪（3 Agent / 5 知识 / 4 记忆 / 4 技能 / 3 消息 / 2 错误）")
+    return keys
+
+
+# 演示用量规模：贴近真实多 Agent 日常（单位 = tokens）；每 Agent 每天一笔，
+# 保证「各 Agent 本周用量」在任何一天出图都有三条柱子
+AGENT_DAILY = {  # agent -> (model, 工作日输入区间, 周末输入区间)
+    "claude": ("deepseek-chat", (300_000, 800_000), (80_000, 260_000)),
+    "codex": ("gpt-5.3-codex", (250_000, 850_000), (70_000, 240_000)),
+    "cursor": ("composer-1", (90_000, 260_000), (30_000, 90_000)),
+}
+
+
+def nice_budget(x):
+    """取「整」预算值（1/1.5/2/2.5/3/4/5/6/8 × 10^n），让占比落在 40%~50%。"""
+    exp = 10 ** int(math.floor(math.log10(max(1.0, x))))
+    for m in (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10):
+        if m * exp >= x:
+            return int(m * exp)
+    return int(10 * exp)
+
+
+def build_usage_series(now):
+    """生成最近 14 天的用量明细（确定性伪随机，出图稳定）。
+
+    按「今天」相对生成、而非写死日期：今天是周一时「本周」只有一天，若把用量固定铺在
+    更早的日期上，预算环与本周用量条会几乎全空——演示数据必须跨周界仍然合理。
+    """
+    import random
+    from datetime import timedelta
+
+    rnd = random.Random(20260913)
+    rows = []  # (days_back, agent, model, tokens_in, tokens_out)
+    for back in range(14):
+        weekend = (now - timedelta(days=back)).weekday() >= 5
+        for agent, (model, wd_range, we_range) in AGENT_DAILY.items():
+            lo, hi = we_range if weekend else wd_range
+            ti = rnd.randrange(lo, hi, 1000)
+            rows.append((back, agent, model, ti, int(ti * rnd.uniform(0.26, 0.36))))
+    return rows
+
+
+def backdate_usage(home):
+    """把用量铺满最近 14 天：直接改库（HTTP 上报接口不接受时间戳）。
+
+    口径与 usage_service 一致：created_at 为 UTC ISO8601（%Y-%m-%dT%H:%M:%SZ），
+    week_start 为该日期所在周的周一（%Y-%m-%d）——两者必须同改，否则周聚合会串周。
+    返回本周（周一至今）合计 tokens，供预算反推。
+    """
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    db = os.path.join(home, "platform.db")
+    now = datetime.now(timezone.utc)
+    rows = build_usage_series(now)
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM token_usage")
+    for i, (back, agent, model, ti, to) in enumerate(rows):
+        day = now - timedelta(days=back)
+        created = (day.replace(hour=9 + i % 10, minute=(i * 7) % 60, second=0,
+                               microsecond=0)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        week_start = (day - timedelta(days=day.weekday())).strftime("%Y-%m-%d")
+        con.execute(
+            "INSERT INTO token_usage(agent, week_start, tokens_in, tokens_out, call_type,"
+            " model, reference_id, idempotency_key, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (agent, week_start, ti, to, "chat", model, None, f"seed-{i}", created))
+    con.commit()
+    week_total = con.execute(
+        "SELECT COALESCE(SUM(tokens_in + tokens_out), 0) FROM token_usage WHERE week_start = ?",
+        ((now - timedelta(days=now.weekday())).strftime("%Y-%m-%d"),)).fetchone()[0]
+    con.close()
+    log(f"用量已铺满 14 天（{len(rows)} 笔，本周合计 {week_total:,} tokens）")
+    return week_total
 
 
 def terminate(proc):
@@ -367,10 +469,29 @@ def main():
     try:
         with SettingsGuard() as guard:
             # ---- ① 总览页 ----
-            log("启动工作台（总览页）……")
+            log("启动工作台并注入演示数据……")
             gui = subprocess.Popen([exe], env=env)
             wait_health(base, timeout=30)
-            seed(base, DEMO_HOME)
+            keys = seed(base, DEMO_HOME)
+            # 用量需要回填历史日期，只能在应用停止时改库（HTTP 上报接口不接受时间戳）
+            terminate(gui)
+            week_total = backdate_usage(DEMO_HOME)
+
+            log("重新启动工作台（总览页）……")
+            gui = subprocess.Popen([exe], env=env)
+            wait_health(base, timeout=30)
+            # 重启后补一次心跳：在线状态以最近心跳计算，避免卡片显示离线
+            for name, task in (("claude", "重构登录模块：抽取验证码服务"),
+                               ("codex", "为技能市场补充调用示例"),
+                               ("cursor", "修复 /api/knowledge 分页参数")):
+                http(base, "POST", "/api/agents/heartbeat", {"current_task": task},
+                     {"X-Agent-Name": name, "X-Api-Key": keys[name]})
+            # 预算按本周实际用量反推：占比稳定落在 40%~50%，预算环才有信息量
+            # （用固定大预算时，周一刚开工这类场景会显示成接近 0%）
+            mk = open(os.path.join(DEMO_HOME, "config", "master.key"), encoding="utf-8").read().strip()
+            budget = nice_budget(week_total / 0.48)
+            http(base, "PUT", "/api/usage/budget", {"budget": budget}, {"X-Master-Key": mk})
+            log(f"演示预算 {budget:,}（本周已用 {week_total:,}，占比 {week_total / budget:.0%}）")
             hwnd, _title = find_window_ctypes(WINDOW_TITLE_PREFIX)
             raise_window(hwnd)
             time.sleep(4)  # 3s 轮询：Agent 卡片翻绿、事件流出现
