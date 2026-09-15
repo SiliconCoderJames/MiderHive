@@ -24,7 +24,7 @@ jobs:
     steps:
       # 第三方 action 一律钉全量 commit SHA（SHA 经 git ls-remote 向官方仓库查证）,
       # 标签可被移动而 SHA 不可变,防供应链投毒;注释里保留人可读的版本号
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # checkout 的 GITHUB_TOKEN 仅 checkout 需要,不留在 runner 磁盘上
           persist-credentials: false
