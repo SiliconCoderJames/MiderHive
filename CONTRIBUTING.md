@@ -74,11 +74,10 @@ and **both self-tests above** — the offscreen GUI end-to-end (`gui_selftest`) 
 onboarding/key-rotation script. A regression in first-run onboarding, the health banner or key
 rotation therefore turns the badge red instead of shipping.
 
-> Run the offscreen GUI self-test **one at a time**: it drives the real application, whose settings
-> live in the per-user `QSettings` store (registry keys under `HKCU\Software\miderhive\…`), so two
-> concurrent runs — or a run overlapping a manual onboarding session — can fail spuriously. CI is a
-> single job, so it is unaffected. (Isolating that store for the test process is a known
-> improvement, tracked as a follow-up.)
+> The offscreen GUI self-test **isolates its `QSettings`**: `gui_selftest` points the INI backend at
+> a scratch directory (`QSettings::setDefaultFormat(IniFormat)` + `setPath`, see
+> `src/gui/selftest_main.cpp`), so it never touches your real `HKCU\Software\miderhive` store and
+> concurrent runs are safe.
 
 ## Ground rules that matter in review
 

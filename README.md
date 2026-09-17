@@ -358,14 +358,17 @@ cmake --build build --config Release
 ## Project layout
 
 ```text
-src/core/     Qt-free core: database wrapper, vector search, eight domain services, HTTP API, utils
+src/core/     Qt-free core: database wrapper, vector search, eight domain services, HTTP API, utils,
+              integrations.hpp (per-client connect config generation + writing)
 src/gui/      Qt6 workbench: main window + eight panels + settings/welcome dialogs + custom widgets
-src/cli/      agent-cli (agent-side client), platformd (headless daemon), miderhive-mcp (MCP stdio server)
+src/cli/      agent-cli (agent-side client, also `connect-snippet`/`apply-config`),
+              platformd (headless daemon), miderhive-mcp (MCP stdio server)
 tests/        Core unit tests (501 assertions)
 docs/         api.md, mcp.md, hardening-report.md, brand.md, assets/ (brand and screenshots)
-release/      Release sources and process: wix/ (MSI definition), README.md, RELEASE_NOTES-*.md
+installer/    MiderHive.wxs (MSI definition used by package.ps1)
+release/      Release process: README.md, RELEASE_NOTES-*.md (MSI/ZIP artifacts are built, not stored)
 scripts/      package.ps1, gen-wix-files.ps1, deploy.ps1, fetch-deps.ps1,
-              feasibility_check.py, soak_test.py, mcp_check.py,
+              feasibility_check.py, soak_test.py, mcp_check.py, verify_clients.py,
               verify_gui_selftest.py (offscreen GUI end-to-end), test_onboarding_and_safety.py
 ```
 
