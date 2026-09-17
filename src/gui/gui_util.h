@@ -95,6 +95,32 @@ inline QString humanError(const QString& raw) {
                    "The target does not exist (it may have been removed, or the name is "
                    "misspelled).\nNext: refresh the list and check the name.");
     }
+    // 认证/限流/唯一约束：必须排在"验证兜底"之前——401 里没有 invalid/missing 之类
+    // 关键词会漏判，UNIQUE 反而会被兜底误判成"提交的内容不对"。
+    if (s.contains("401") || s.contains("unauthorized") || s.contains("403") ||
+        s.contains("api key") || s.contains("api-key")) {
+        return say("身份或密钥不对（401/403）。\n"
+                   "下一步：在设置 →「Agent 管理」轮换该 Agent 的密钥，更新到 Agent 配置后重启它。",
+                   "Rejected as unauthorized (401/403).\nNext: rotate that agent's key in "
+                   "Settings → Agents, update the agent's config, then restart it.");
+    }
+    if (s.contains("429") || s.contains("rate limit") || s.contains("too many requests")) {
+        return say("请求太频繁，被限流了（429）。\n下一步：等几秒再试；若持续出现，检查是否有脚本在循环调用。",
+                   "Rate limited (429): requests are coming in too fast.\nNext: wait a few seconds "
+                   "and retry; if it keeps happening, check for a loop hammering the API.");
+    }
+    if (s.contains("unique constraint") || s.contains("already exists")) {
+        return say("同名内容已存在（唯一约束冲突）。\n下一步：换一个名字，或改为给已有条目追加新版本。",
+                   "Something with that name already exists (unique constraint).\nNext: pick another "
+                   "name, or append a new version to the existing entry instead.");
+    }
+    if (s.contains("certificate") || s.contains("tls") || s.contains("ssl")) {
+        return say("安全连接（TLS/证书）校验失败。\n"
+                   "下一步：确认系统时间正确；若提示来自陌生地址，不要忽略，先核实目标再操作。",
+                   "TLS/certificate verification failed.\nNext: make sure the system clock is "
+                   "correct; if the address is unfamiliar, do not ignore this — verify the target "
+                   "first.");
+    }
     if (s.contains("only zcode") || s.contains("manager only") || s.contains("not allowed") ||
         s.contains("forbidden")) {
         return say("权限不足：该操作仅限管理者（zcode）。\n下一步：用管理者账号操作，或让管理者代为处理。",

@@ -429,6 +429,18 @@ int main(int argc, char** argv) {
         chk(bind.contains("端口") || bind.contains("port"), "humanError: 端口占用 → 人话");
         const QString unknown = ui::humanError("zzz-unknown-err");
         chk(unknown.contains("zzz-unknown-err"), "humanError: 未知错误保留原文兜底");
+        // C1：新补的四个分支——认证/限流/唯一约束/TLS
+        const QString unauth = ui::humanError("HTTP 401 unauthorized");
+        chk(unauth.contains("密钥") || unauth.toLower().contains("key"),
+            "humanError: 401 → 密钥轮换指引");
+        const QString rate = ui::humanError("429 too many requests");
+        chk(rate.contains("限流") || rate.toLower().contains("rate"), "humanError: 429 → 限流指引");
+        const QString uniq = ui::humanError("UNIQUE constraint failed: agents.name");
+        chk(uniq.contains("已存在") || uniq.toLower().contains("already exists"),
+            "humanError: 唯一约束 → 改名/追加版本指引");
+        const QString tls = ui::humanError("certificate verify failed");
+        chk(tls.contains("证书") || tls.toLower().contains("cert") || tls.contains("TLS"),
+            "humanError: TLS → 证书校验指引");
     }
 
     // A3 启动自检：全新目录无问题；端口被占 → port_occupied
@@ -560,6 +572,29 @@ int main(int argc, char** argv) {
                            .arg(offenders.mid(0, 6).join(" | ")));
             for (const auto& o : offenders) printNow("   [en-cjk] " + o);
         }
+
+        // C2：切语言走 retranslate 后，面板状态必须被保住——
+        // 过滤词不丢、控件总数不翻倍（翻倍 = 有人又在整页重建，旧面板没释放）。
+        QLineEdit* knowledgeFilter = nullptr;
+        for (auto* e : w.findChildren<QLineEdit*>())
+            if (e->placeholderText().contains("知识库") ||
+                e->placeholderText().contains("knowledge", Qt::CaseInsensitive))
+                knowledgeFilter = e;
+        if (knowledgeFilter) {
+            knowledgeFilter->setText("qt");
+            i18n::apply(i18n::Lang::En);
+            chk(knowledgeFilter->text() == "qt",
+                "切语言后面板过滤词保留（retranslate 不重建面板）");
+            knowledgeFilter->clear();
+        } else {
+            chk(false, "未找到知识面板过滤框（无法验证过滤词保留）");
+        }
+        const int widgetsBefore = static_cast<int>(w.findChildren<QWidget*>().size());
+        i18n::apply(i18n::Lang::Zh);
+        QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        const int widgetsAfter = static_cast<int>(w.findChildren<QWidget*>().size());
+        chk(widgetsAfter <= widgetsBefore + 8,
+            QString("切语言不再整页重建（控件数 %1 → %2）").arg(widgetsBefore).arg(widgetsAfter));
 
         i18n::apply(i18n::Lang::Zh);  // 还原：后续流程仍按中文跑
     }

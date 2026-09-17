@@ -259,7 +259,10 @@ void MainWindow::applyLanguage() {
     int row = nav_->currentRow();
     buildNav();
     if (row >= 0) nav_->setCurrentRow(row);
-    rebuildPanels();  // 面板整体重建：ctor 里的 trs() 随新语言重新求值
+    // 只重译，不再整页重建：保住每个面板的滚动位置、选中行、过滤词与展开状态。
+    // 面板已全部实现 retranslate()（含 dashboard 的健康横幅强制重建）；
+    // 漏译由 gui_selftest 的「英文模式全控件扫描」断言把守，漏一处即红。
+    for (auto* panel : panels_) panel->retranslate();
     updateStatusBar();
 }
 
