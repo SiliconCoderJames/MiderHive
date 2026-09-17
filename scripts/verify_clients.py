@@ -15,6 +15,9 @@
 原则：**有则验、无则 SKIP**。未安装不算失败；--strict 时 SKIP/FAIL 都算失败，
 供发版前强制全量验证。所有临时文件用完即删。
 
+注意：客户端**检测**基于 Windows 路径（%LOCALAPPDATA%、%USERPROFILE%、~），
+非 Windows 平台目前会全部 SKIP（与本项目当前仅验证 Windows 的范围一致）。
+
 用法:
   python scripts/verify_clients.py [--agent-cli EXE] [--strict]
 依赖: 仅 Python 3.11+（tomllib）标准库；yaml 为可选（缺失则跳过 hermes 的解析断言）。
@@ -243,6 +246,8 @@ def main():
         return 2
 
     print("==== MiderHive 客户端接入验证（agent-cli: %s）====" % cli)
+    if os.name != "nt":
+        print("提示：客户端检测基于 Windows 路径，非 Windows 平台会全部 SKIP。")
     print()
 
     if claude_available():

@@ -289,7 +289,7 @@ the same over HTTP. Restore lives in the same place (master key required).
 
 ## Quality and verification
 
-- **501 unit-test assertions**: SHA-256 and constant-time key comparison, version comparison,
+- **599 unit-test assertions**: SHA-256 and constant-time key comparison, version comparison,
   embedder, outbound URL guard, platform end-to-end, auth and message-visibility hardening
   regressions, legacy database migration, per-dimension vector tables + legacy vector-table
   migration, FTS5 keyword search (Chinese substring, case folding, legacy index rebuild) and
@@ -331,6 +331,10 @@ key rotation turns the badge red instead of shipping.
 > Note: the ASan and soak figures in `docs/hardening-report.md` are one-off local measurements by
 > the author. The repository has no reproducible script or CI job for them (`soak_test.py` does no
 > memory sampling), so treat them as "measured once locally" rather than "reproducible results".
+> The search-path numbers in the same report (FTS vs LIKE vs semantic) come from
+> [scripts/bench_search.py](scripts/bench_search.py), which **is** re-runnable — and its own
+> output says the same thing: at 10k rows all three paths sit on the same per-request latency
+> floor, so the FTS win is structural, not measured.
 
 ## Build and package it yourself
 
@@ -363,7 +367,7 @@ src/core/     Qt-free core: database wrapper, vector search, eight domain servic
 src/gui/      Qt6 workbench: main window + eight panels + settings/welcome dialogs + custom widgets
 src/cli/      agent-cli (agent-side client, also `connect-snippet`/`apply-config`),
               platformd (headless daemon), miderhive-mcp (MCP stdio server)
-tests/        Core unit tests (501 assertions)
+tests/        Core unit tests (599 assertions)
 docs/         api.md, mcp.md, hardening-report.md, brand.md, assets/ (brand and screenshots)
 installer/    MiderHive.wxs (MSI definition used by package.ps1)
 release/      Release process: README.md, RELEASE_NOTES-*.md (MSI/ZIP artifacts are built, not stored)
