@@ -93,7 +93,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/vendor/json AND NOT FETCHCONTENT_SOURCE_DIR_NLOHMA
     set(FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON ${CMAKE_SOURCE_DIR}/vendor/json CACHE PATH "local vendor")
 endif()
 
-# SQLite official amalgamation (pinned)
+# SQLite official amalgamation (pinned; URL_HASH = 官方 zip 的 SHA256，防下载被篡改)
 # The amalgamation archive extracts into a versioned top-level directory
 # (sqlite-amalgamation-<version>/), so the version is kept in one place and
 # reused for both the download URL and the on-disk source path.
@@ -103,19 +103,28 @@ set(SQLITE_AMALGAMATION_URL
     "https://www.sqlite.org/2024/sqlite-amalgamation-${SQLITE_AMALGAMATION_VERSION}.zip")
 FetchContent_Declare(sqlite
     URL ${SQLITE_AMALGAMATION_URL}
+    URL_HASH SHA256=77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 # sqlite-vec: vector search extension, compiled statically into the app
+# 版本单一来源：GIT_TAG 钉 commit SHA（SHA 经官方仓库查证；tag 可被移动而 SHA 不可变），
+# 模板占位符共用下面这组版本变量。
+set(SQLITE_VEC_VERSION_MAJOR 0)
+set(SQLITE_VEC_VERSION_MINOR 1)
+set(SQLITE_VEC_VERSION_PATCH 6)
+set(SQLITE_VEC_VERSION
+    "${SQLITE_VEC_VERSION_MAJOR}.${SQLITE_VEC_VERSION_MINOR}.${SQLITE_VEC_VERSION_PATCH}")
 FetchContent_Declare(sqlite_vec
     GIT_REPOSITORY https://github.com/asg017/sqlite-vec.git
-    GIT_TAG v0.1.6)
-# nlohmann/json
+    # v${SQLITE_VEC_VERSION}
+    GIT_TAG 639fca5739fe056fdc98f3d539c4cd79328d7dc7)
+# nlohmann/json（v3.11.3）
 FetchContent_Declare(nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3)
-# cpp-httplib (header-only HTTP server/client)
+    GIT_TAG 9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03)
+# cpp-httplib (header-only HTTP server/client, v0.16.3)
 FetchContent_Declare(httplib
     GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-    GIT_TAG v0.16.3)
+    GIT_TAG af56b7ec0ba9d18b788ed064f76d936eb52c5db5)
 
 FetchContent_MakeAvailable(sqlite sqlite_vec nlohmann_json httplib)
 
@@ -142,12 +151,12 @@ endif()
 # Its sqlite-vec.h is a template with ${VERSION} placeholders -- generate it.
 file(READ ${sqlite_vec_SOURCE_DIR}/sqlite-vec.h.tmpl _vec_h_tmpl)
 set(_d "$")
-string(REPLACE "${_d}{VERSION}"       "0.1.6"       _vec_h_tmpl "${_vec_h_tmpl}")
-string(REPLACE "${_d}{VERSION_MAJOR}" "0"           _vec_h_tmpl "${_vec_h_tmpl}")
-string(REPLACE "${_d}{VERSION_MINOR}" "1"           _vec_h_tmpl "${_vec_h_tmpl}")
-string(REPLACE "${_d}{VERSION_PATCH}" "6"           _vec_h_tmpl "${_vec_h_tmpl}")
-string(REPLACE "${_d}{DATE}"          "2024-08-21"  _vec_h_tmpl "${_vec_h_tmpl}")
-string(REPLACE "${_d}{SOURCE}"        "sqlite-vec.c" _vec_h_tmpl "${_vec_h_tmpl}")
+string(REPLACE "${_d}{VERSION}"       "${SQLITE_VEC_VERSION}"       _vec_h_tmpl "${_vec_h_tmpl}")
+string(REPLACE "${_d}{VERSION_MAJOR}" "${SQLITE_VEC_VERSION_MAJOR}" _vec_h_tmpl "${_vec_h_tmpl}")
+string(REPLACE "${_d}{VERSION_MINOR}" "${SQLITE_VEC_VERSION_MINOR}" _vec_h_tmpl "${_vec_h_tmpl}")
+string(REPLACE "${_d}{VERSION_PATCH}" "${SQLITE_VEC_VERSION_PATCH}" _vec_h_tmpl "${_vec_h_tmpl}")
+string(REPLACE "${_d}{DATE}"          "2024-08-21"                  _vec_h_tmpl "${_vec_h_tmpl}")
+string(REPLACE "${_d}{SOURCE}"        "sqlite-vec.c"                _vec_h_tmpl "${_vec_h_tmpl}")
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/generated/sqlite-vec.h "${_vec_h_tmpl}")
 
 add_library(sqlite_vec_static STATIC ${sqlite_vec_SOURCE_DIR}/sqlite-vec.c)
