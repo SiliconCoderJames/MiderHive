@@ -267,6 +267,39 @@ std::vector<ToolDef> buildTools() {
 
     // ---- 协作面：谁在、记什么、查什么、说什么、报什么、会什么 ----
 
+    // 自检入口：MCP 客户端最常问的一句话是"我到底连上了没有"。把"平台可达 + 我是谁 +
+    // 蜂巢里还有谁 + 本周用量"压成一次调用，新手不必先学会拼三个端点再判断。
+    t.push_back({"hive_status",
+                 "One-call connectivity check: is the platform reachable, which identity am I "
+                 "using, who else is in the hive, and how many tokens were used this week. "
+                 "Call this first if you are unsure whether MiderHive is up.",
+                 objSchema({}, {}),
+                 [](const json&) {
+                     ApiResult health = apiCall("GET /api/health", nullptr);
+                     if (!health.ok) return health;  // 平台不可达：如实回报连接错误
+                     ApiResult agents = apiCall("GET /api/agents", nullptr);
+                     ApiResult usage = apiCall("GET /api/usage/summary", nullptr);
+                     json peers = json::array();
+                     int online = 0;
+                     if (agents.ok && agents.data.is_array()) {
+                         for (const auto& a : agents.data) {
+                             if (a.value("status", "") == "online") ++online;
+                             peers.push_back(a);
+                         }
+                     }
+                     ApiResult out;
+                     out.ok = true;
+                     out.data = {{"you", g_id.name},
+                                 {"connected", true},
+                                 {"platform", health.data},
+                                 {"online_count", online},
+                                 {"peers", peers},
+                                 {"usage_this_week", usage.ok ? usage.data : json::object()}};
+                     if (!agents.ok) out.data["peers_error"] = agents.message;
+                     if (!usage.ok) out.data["usage_error"] = usage.message;
+                     return out;
+                 }});
+
     t.push_back({"agents_list",
                  "List all agents in the hive with role, online status and current task. "
                  "Call first to see who is available.",
@@ -379,6 +412,39 @@ std::vector<ToolDef> buildTools() {
                      return apiCall("GET /api/knowledge?" + q, nullptr);
                  }});
 
+    t.push_back({"knowledge_get",
+                 "Read the latest version of one knowledge entry by uuid.",
+                 objSchema({{"uuid", prop("string", "knowledge entry uuid")}}, {"uuid"}),
+                 [](const json& a) {
+                     return apiCall("GET /api/knowledge/" + percentEncode(sarg(a, "uuid")), nullptr);
+                 }});
+
+    t.push_back({"knowledge_versions",
+                 "List every historical version of one knowledge entry, newest first. "
+                 "Versions are append-only: nothing is ever overwritten.",
+                 objSchema({{"uuid", prop("string", "knowledge entry uuid")}}, {"uuid"}),
+                 [](const json& a) {
+                     return apiCall(
+                         "GET /api/knowledge/" + percentEncode(sarg(a, "uuid")) + "/versions",
+                         nullptr);
+                 }});
+
+    t.push_back({"knowledge_add_version",
+                 "Append a new version to an existing knowledge entry (knowledge_get or "
+                 "knowledge_search to find its uuid). The previous version is kept, so this is "
+                 "how you refine shared know-how instead of creating a duplicate entry. "
+                 "Omit title to keep the current one.",
+                 objSchema({{"uuid", prop("string", "knowledge entry uuid")},
+                            {"content", prop("string", "new full content (<=100000 chars)")},
+                            {"title", prop("string", "optional new title; omit to keep current")}},
+                           {"uuid", "content"}),
+                 [](const json& a) {
+                     json body = {{"content", sarg(a, "content")}, {"title", sopt(a, "title")}};
+                     return apiCall("POST /api/knowledge/" + percentEncode(sarg(a, "uuid")) +
+                                        "/versions",
+                                    &body);
+                 }});
+
     t.push_back({"message_send",
                  "Send a message. kind=note (default) or task or question. "
                  "Omit recipient to broadcast to everyone; tasks start as pending and can be "
@@ -422,6 +488,19 @@ std::vector<ToolDef> buildTools() {
                  [](const json& a) {
                      json body = {{"status", sarg(a, "status")}};
                      return apiCall("POST /api/messages/" + percentEncode(sarg(a, "uuid")) + "/status", &body);
+                 }});
+
+    t.push_back({"message_reply",
+                 "Reply to a message (message_list to find its uuid). Replying also marks the "
+                 "parent message as read, so this is the normal way to answer a question or "
+                 "report progress back on a task.",
+                 objSchema({{"uuid", prop("string", "uuid of the message being replied to")},
+                            {"body", prop("string", "reply text (<=50000 chars)")}},
+                           {"uuid", "body"}),
+                 [](const json& a) {
+                     json body = {{"body", sarg(a, "body")}};
+                     return apiCall("POST /api/messages/" + percentEncode(sarg(a, "uuid")) + "/reply",
+                                    &body);
                  }});
 
     t.push_back({"error_report",
@@ -509,10 +588,82 @@ std::vector<ToolDef> buildTools() {
                                     &body);
                  }});
 
+    t.push_back({"skill_register",
+                 "Publish a skill to the hive's skill market so any agent can discover and "
+                 "invoke it (skill_list to browse, skill_invoke to log a call). Registering is "
+                 "idempotent per name. param_schema is a JSON Schema object describing the "
+                 "arguments callers must pass; later invocations are validated against it.",
+                 objSchema({{"name", prop("string", "unique skill name (<=64 chars), e.g. code-review")},
+                            {"description", prop("string", "what the skill does (<=2000 chars)")},
+                            {"display_name", prop("string", "human-friendly title")},
+                            {"category", prop("string", "optional grouping label")},
+                            {"param_schema", prop("object", "optional JSON Schema for the arguments")}},
+                           {"name", "description"}),
+                 [](const json& a) {
+                     json body = {{"name", sarg(a, "name")},
+                                  {"description", sarg(a, "description")},
+                                  {"display_name", sopt(a, "display_name")},
+                                  {"category", sopt(a, "category")}};
+                     auto schema = a.find("param_schema");
+                     if (schema != a.end() && !schema->is_null()) {
+                         if (!schema->is_object())
+                             throw std::runtime_error("param_schema must be an object");
+                         body["param_schema"] = *schema;
+                     }
+                     return apiCall("POST /api/skills", &body);
+                 }});
+
     t.push_back({"usage_summary",
                  "This week's token usage: total, budget, remaining, alert level, per-agent split.",
                  objSchema({}, {}),
                  [](const json&) { return apiCall("GET /api/usage/summary", nullptr); }});
+
+    t.push_back({"usage_report",
+                 "Report the tokens a model call consumed so the hive's budget view stays "
+                 "accurate. Pass an idempotency_key to make retries safe: a repeated key is "
+                 "counted once and the response reports duplicate=true. The response carries the "
+                 "live weekly balance and alert level — observation only, it never blocks you.",
+                 objSchema({{"tokens_in", prop("integer", "prompt/input tokens (>=0)")},
+                            {"tokens_out", prop("integer", "completion/output tokens (>=0)")},
+                            {"model", prop("string", "optional model name, e.g. claude-sonnet-4")},
+                            {"call_type", prop("string", "optional label, e.g. chat|skill|review")},
+                            {"reference_id", prop("string", "optional uuid or label tying this spend to a task")},
+                            {"idempotency_key", prop("string", "optional unique key so a retry is not double-counted (<=200 chars)")}},
+                           {}),
+                 [](const json& a) {
+                     json body = {{"tokens_in", iopt(a, "tokens_in", 0)},
+                                  {"tokens_out", iopt(a, "tokens_out", 0)},
+                                  {"model", sopt(a, "model")},
+                                  {"call_type", sopt(a, "call_type")},
+                                  {"reference_id", sopt(a, "reference_id")},
+                                  {"idempotency_key", sopt(a, "idempotency_key")}};
+                     return apiCall("POST /api/usage/report", &body);
+                 }});
+
+    t.push_back({"usage_daily",
+                 "Day-by-day token usage for the last N days (missing days filled with 0).",
+                 objSchema({{"days", prop("integer", "1..90, default 14")}}, {}),
+                 [](const json& a) {
+                     return apiCall("GET /api/usage/daily?days=" +
+                                        std::to_string(iopt(a, "days", 14)),
+                                    nullptr);
+                 }});
+
+    t.push_back({"usage_breakdown",
+                 "Token usage sliced by time range, agent and model in one call — the same data "
+                 "the Usage panel shows. Use it to answer 'who spent what on which model'.",
+                 objSchema({{"days", prop("integer", "1..90, default 14")},
+                            {"agent", prop("string", "optional agent name filter")},
+                            {"model", prop("string", "optional model name filter")}},
+                           {}),
+                 [](const json& a) {
+                     std::string q = "days=" + std::to_string(iopt(a, "days", 14));
+                     std::string agent = sopt(a, "agent");
+                     std::string model = sopt(a, "model");
+                     if (!agent.empty()) q += "&agent=" + percentEncode(agent);
+                     if (!model.empty()) q += "&model=" + percentEncode(model);
+                     return apiCall("GET /api/usage/breakdown?" + q, nullptr);
+                 }});
 
     return t;
 }
@@ -577,10 +728,20 @@ void dispatch(Session& s, const json& req, bool needReply) {
                          {"title", "MiderHive"},
                          {"version", ah::kPlatformVersion}}},
                        {"instructions",
-                        "Tools for a local-first multi-agent hive: shared memory, knowledge base "
-                        "(keyword/semantic search), messaging (note/task/question, broadcast by "
-                        "omitting recipient), error reports, skills and token usage. The hive is "
-                        "127.0.0.1-only; be a good teammate: heartbeat, write memory, report errors."}};
+                        "Tools for a local-first multi-agent hive (127.0.0.1 only). "
+                        "Start with hive_status to confirm you are connected, then agents_list "
+                        "to see teammates. Shared user memory: memory_list / memory_write / "
+                        "memory_history (read it at startup so you do not re-ask what the user "
+                        "already answered). Shared knowledge: knowledge_search (mode=semantic is "
+                        "best for natural-language questions), knowledge_add, and "
+                        "knowledge_add_version to refine an existing entry without overwriting "
+                        "it. Coordination: message_send with kind=note|task|question (omit "
+                        "recipient to broadcast), message_list, message_reply, "
+                        "message_set_status. Failures: error_report, and error_resolve to close "
+                        "the loop. Skills: skill_list, skill_register, skill_invoke. Cost: "
+                        "usage_report after model calls, usage_summary / usage_daily / "
+                        "usage_breakdown to inspect it. Be a good teammate: heartbeat, write "
+                        "memory, distil knowledge, report errors."}};
         replyResult(result);
         return;
     }
