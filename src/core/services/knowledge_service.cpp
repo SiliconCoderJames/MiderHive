@@ -49,8 +49,11 @@ bool KnowledgeService::ensureVecTableFor(size_t dim, std::string& err) {
 
 bool KnowledgeService::initVectorStore(std::string& err) {
     // 旧库迁移：老版本只有一张固定维度的 knowledge_vec；现在按维度分表。
-    // vec0 虚拟表不支持 ALTER/RENAME，只能"新建-复制-删除"；旧表随即删除，
-    // 因此迁移天然幂等（第二次启动时 hasLegacy 已为 false）。
+    // vec0 虚拟表不支持 ALTER/RENAME，只能"新建-复制-删除"。
+    // 幂等且并发安全（工作台与 platformd 可能同时首启）：
+    //   * INSERT 带 NOT IN 守卫——两边都复制也不会重复；
+    //   * DROP 用 IF EXISTS——对方先删了也不再报错；
+    //   * 复制后旧表随即删除，后续启动 hasLegacy 恒为 false。
     bool hasLegacy = false;
     if (!db_.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_vec'",
                    nullptr,
@@ -60,29 +63,49 @@ bool KnowledgeService::initVectorStore(std::string& err) {
         const size_t builtinDim = static_cast<size_t>(embedder_.dim());
         if (!ensureVecTableFor(builtinDim, err)) return false;
         if (!db_.execScript("INSERT INTO " + vecTableFor(builtinDim) +
-                                "(entry_id, embedding) SELECT entry_id, embedding FROM knowledge_vec",
+                                "(entry_id, embedding) SELECT entry_id, embedding FROM knowledge_vec "
+                                "WHERE entry_id NOT IN (SELECT entry_id FROM " +
+                                vecTableFor(builtinDim) + ")",
                             err))
             return false;
-        if (!db_.execScript("DROP TABLE knowledge_vec", err)) return false;
+        if (!db_.execScript("DROP TABLE IF EXISTS knowledge_vec", err)) return false;
     }
     return ensureVecTableFor(static_cast<size_t>(embedder_.dim()), err);
 }
 
 bool KnowledgeService::initSearchIndex(std::string& err) {
-    // 存量库升级：schema 已把 FTS 表建出来，但旧数据还没有索引 → 一次性 rebuild。
-    // rebuild 从外部内容表全量重建（先清后灌），因此天然幂等。
-    int64_t ftsRows = -1;
-    int64_t entryRows = -1;
-    if (!db_.query("SELECT COUNT(*) FROM knowledge_fts", nullptr,
-                   [&](Stmt& st) { ftsRows = st.i64(0); }, err))
+    // 用 settings 里的索引版本标记判断要不要重建全文索引。
+    //   * 旧库（升级前）：既没有 knowledge_fts 表也没有标记 → 这里一次性 rebuild 并打标记；
+    //   * 之后：标记命中直接返回，启动零成本。
+    //   * 需要强制重建时（例如手工删过索引表），删掉这行标记即可：
+    //       DELETE FROM settings WHERE key='fts_index_version';
+    //
+    // **不能**用 SELECT COUNT(*) FROM knowledge_fts 判断：外部内容表的无 MATCH 查询会被
+    // FTS5 转发到正文表，空索引也照样返回正文行数（实测），据此判断必然漏掉重建。
+    const char* kKey = "fts_index_version";
+    const char* kVersion = "1";
+    std::string cur;
+    bool found = false;
+    if (!db_.query("SELECT value FROM settings WHERE key=?",
+                   [&](Stmt& st) { st.bind(1, std::string(kKey)); },
+                   [&](Stmt& st) {
+                       cur = st.text(0);
+                       found = true;
+                   },
+                   err))
         return false;
-    if (!db_.query("SELECT COUNT(*) FROM knowledge_entries", nullptr,
-                   [&](Stmt& st) { entryRows = st.i64(0); }, err))
+    if (found && cur == kVersion) return true;
+
+    if (!db_.execScript("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')", err))
         return false;
-    if (entryRows > 0 && ftsRows == 0) {
-        if (!db_.execScript("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')", err))
-            return false;
-    }
+    if (!db_.query("INSERT INTO settings(key, value) VALUES(?,?) "
+                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                   [&](Stmt& st) {
+                       st.bind(1, std::string(kKey));
+                       st.bind(2, std::string(kVersion));
+                   },
+                   nullptr, err))
+        return false;
     return true;
 }
 

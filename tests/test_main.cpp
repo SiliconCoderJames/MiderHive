@@ -1155,6 +1155,59 @@ static void test_semantic_tag_pushdown() {
     fs::remove_all(tmp, ec);
 }
 
+// 存量库 FTS 重建：正文已有数据、但没有全文索引（老 schema 没有 knowledge_fts 表）→
+// 启动时 initSearchIndex 应一次性 rebuild，之后关键词检索可用。这条路径此前完全没覆盖。
+static void test_fts_rebuild_legacy() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_frb_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        ah::KnowledgeEntry e;
+        CHECK(p.knowledgeCreate("hermes", "老库正文",
+                                "legacy content without fts index rebuild666 marker", {}, "tech",
+                                {}, "", e, err));
+        p.shutdown();
+    }
+    // 忠实模拟"升级前的旧库"：既没有全文索引表，也没有索引版本标记。
+    // （只删表不删标记不叫旧库——那是手工破坏，恢复路径见 initSearchIndex 注释。）
+    {
+        sqlite3* db = nullptr;
+        CHECK(sqlite3_open(dbPath.string().c_str(), &db) == SQLITE_OK);
+        char* msg = nullptr;
+        CHECK(sqlite3_exec(db,
+                           "DROP TABLE IF EXISTS knowledge_fts;"
+                           "DELETE FROM settings WHERE key='fts_index_version';",
+                           nullptr, nullptr, &msg) == SQLITE_OK);
+        sqlite3_free(msg);
+        sqlite3_close(db);
+    }
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));  // 这里应触发 FTS rebuild 并打上版本标记
+        std::vector<ah::KnowledgeHit> hits;
+        CHECK(p.knowledgeSearch("rebuild666", ah::SearchMode::Keyword, 10, "", hits, err));
+        CHECK(!hits.empty());
+        // 重建后再插入的新条目也要能被索引到（触发器已恢复）
+        ah::KnowledgeEntry e2;
+        CHECK(p.knowledgeCreate("hermes", "新条目", "post rebuild entry fresh999 marker", {},
+                                "tech", {}, "", e2, err));
+        CHECK(p.knowledgeSearch("fresh999", ah::SearchMode::Keyword, 10, "", hits, err));
+        CHECK(!hits.empty() && hits[0].entry.uuid == e2.uuid);
+        // 重复 bootstrap 幂等（索引非空，不再 rebuild）
+        p.shutdown();
+        CHECK(p.bootstrap(err));
+        CHECK(p.knowledgeSearch("rebuild666", ah::SearchMode::Keyword, 10, "", hits, err));
+        CHECK(!hits.empty());
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1175,6 +1228,7 @@ int main() {
     run("embedding_dims", test_embedding_dims);
     run("legacy_vec_migration", test_legacy_vec_migration);
     run("keyword_fts", test_keyword_fts);
+    run("fts_rebuild_legacy", test_fts_rebuild_legacy);
     run("semantic_tag_pushdown", test_semantic_tag_pushdown);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);

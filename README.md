@@ -289,10 +289,12 @@ the same over HTTP. Restore lives in the same place (master key required).
 
 ## Quality and verification
 
-- **291 unit-test assertions**: SHA-256 and constant-time key comparison, version comparison,
+- **501 unit-test assertions**: SHA-256 and constant-time key comparison, version comparison,
   embedder, outbound URL guard, platform end-to-end, auth and message-visibility hardening
-  regressions, legacy database migration;
-- **39 integration assertions** ([scripts/feasibility_check.py](scripts/feasibility_check.py)):
+  regressions, legacy database migration, per-dimension vector tables + legacy vector-table
+  migration, FTS5 keyword search (Chinese substring, case folding, legacy index rebuild) and
+  semantic tag-filter recall;
+- **44 integration assertions** ([scripts/feasibility_check.py](scripts/feasibility_check.py)):
   a full multi-agent lifecycle including Chinese retrieval, the async task state machine,
   idempotent reporting and usage alerts;
 - Hardening regressions: reserved identities cannot be registered, registration role allow-list,
@@ -359,7 +361,7 @@ cmake --build build --config Release
 src/core/     Qt-free core: database wrapper, vector search, eight domain services, HTTP API, utils
 src/gui/      Qt6 workbench: main window + eight panels + settings/welcome dialogs + custom widgets
 src/cli/      agent-cli (agent-side client), platformd (headless daemon), miderhive-mcp (MCP stdio server)
-tests/        Core unit tests (291 assertions)
+tests/        Core unit tests (501 assertions)
 docs/         api.md, mcp.md, hardening-report.md, brand.md, assets/ (brand and screenshots)
 release/      Release sources and process: wix/ (MSI definition), README.md, RELEASE_NOTES-*.md
 scripts/      package.ps1, gen-wix-files.ps1, deploy.ps1, fetch-deps.ps1,

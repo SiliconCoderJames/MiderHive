@@ -157,12 +157,13 @@ inline std::string generateConfig(const std::string& id, const std::string& comm
             return o.str();
         case Format::JsonMcpServers:
         default: {
-            nlohmann::json env{{"MIDERHIVE_AGENT_NAME", agentName},
-                               {"MIDERHIVE_AGENT_KEY", agentKey}};
-            nlohmann::json server{{"command", command}};
-            if (id == "cursor") server["args"] = nlohmann::json::array();
+            // ordered_json：输出键序 = 插入序（command → args → env），与官方示例一致
+            nlohmann::ordered_json env{{"MIDERHIVE_AGENT_NAME", agentName},
+                                       {"MIDERHIVE_AGENT_KEY", agentKey}};
+            nlohmann::ordered_json server{{"command", command}};
+            if (id == "cursor") server["args"] = nlohmann::ordered_json::array();
             server["env"] = env;
-            nlohmann::json doc{{"mcpServers", nlohmann::json{{"miderhive", server}}}};
+            nlohmann::ordered_json doc{{"mcpServers", nlohmann::ordered_json{{"miderhive", server}}}};
             return doc.dump(2) + "\n";
         }
     }
@@ -229,13 +230,16 @@ inline bool endsWithNewline(const std::string& s) { return !s.empty() && s.back(
 
 // 把 miderhive 条目并进 {"mcpServers": {...}} 文本。existing 为空/纯空白表示新建。
 // 返回 false 时 whyZh/whyEn 给出可直接展示的原因（绝不部分写入）。
+//
+// 用 ordered_json：用户配置里的键顺序必须原样保留——默认 json 是 std::map（按字母序），
+// 合并会把整份文件重排，升级 diff 满屏噪声。
 inline bool mergeMcpServersJson(const std::string& existing, const std::string& snippet,
                                 std::string& out, std::string& whyZh, std::string& whyEn) {
-    nlohmann::json root = nlohmann::json::object();
+    nlohmann::ordered_json root = nlohmann::ordered_json::object();
     if (!trimCopy(existing).empty()) {
-        nlohmann::json doc;
+        nlohmann::ordered_json doc;
         try {
-            doc = nlohmann::json::parse(existing);
+            doc = nlohmann::ordered_json::parse(existing);
         } catch (const nlohmann::json::exception& e) {
             whyZh = "现有配置不是合法 JSON（" + std::string(e.what()) +
                     "），为避免弄坏它，我没有写入。请手工把片段粘进去。";
@@ -255,9 +259,9 @@ inline bool mergeMcpServersJson(const std::string& existing, const std::string& 
         whyEn = "The existing config's mcpServers is not an object; nothing was written.";
         return false;
     }
-    nlohmann::json server = nlohmann::json::object();
+    nlohmann::ordered_json server = nlohmann::ordered_json::object();
     try {
-        const nlohmann::json parsed = nlohmann::json::parse(snippet);
+        const nlohmann::ordered_json parsed = nlohmann::ordered_json::parse(snippet);
         if (parsed.is_object() && parsed.contains("mcpServers") &&
             parsed["mcpServers"].contains("miderhive")) {
             server = parsed["mcpServers"]["miderhive"];

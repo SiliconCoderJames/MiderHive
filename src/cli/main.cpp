@@ -203,6 +203,16 @@ static std::string utf16ToUtf8(const wchar_t* w, int wlen) {
     return u;
 }
 
+// 自己（agent-cli）的真实所在目录：从 PATH 启动时 argv[0] 只是裸文件名不带目录，
+// 直接拼出来的 command 是相对路径，写进配置后客户端会找不到。必须取模块真实路径。
+static std::string selfDir() {
+    wchar_t buf[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    namespace fs = std::filesystem;
+    return fs::path(utf16ToUtf8(buf, static_cast<int>(n))).parent_path().string();
+}
+
 int wmain(int argc, wchar_t** argv) {
     std::vector<std::string> argStore;
     std::vector<const char*> argPtrs;
@@ -238,14 +248,21 @@ int main(int argc, char** argv) {
         }
         std::string command = a.opts.count("command") ? a.opts.at("command") : "";
         if (command.empty()) {
-            // 默认指向与 agent-cli 同目录的 miderhive-mcp（安装后四个可执行文件总在同一目录）
+            // 默认指向与 agent-cli 同目录的 miderhive-mcp（安装后四个可执行文件总在同一目录）。
+            // 优先取模块真实路径；从 PATH 启动时 argv[0] 无目录，必须兜底。
             namespace fs = std::filesystem;
 #ifdef _WIN32
             const char* mcpName = "miderhive-mcp.exe";
 #else
             const char* mcpName = "miderhive-mcp";
 #endif
-            command = (fs::path(argv0).parent_path() / mcpName).string();
+            fs::path base = fs::path(argv0).parent_path();
+            if (base.empty()) base = fs::path(selfDir());
+            if (base.empty()) {
+                std::cerr << "无法定位 miderhive-mcp，请用 --command 显式指定完整路径\n";
+                return 2;
+            }
+            command = (base / mcpName).string();
         }
         const std::string name = a.opts.count("name") ? a.opts.at("name") : tool;
         const std::string key = a.opts.count("key") ? a.opts.at("key") : "";
