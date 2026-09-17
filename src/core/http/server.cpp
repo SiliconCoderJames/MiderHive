@@ -55,18 +55,22 @@ json safeStoredJson(const std::string& s) {
     return j.is_discarded() ? json(s) : std::move(j);
 }
 
-// 从 body 提取 embedding（可选）；维度不匹配返回 false
-bool extractEmbedding(const json& body, const Platform& platform, bool& hasEmbedding,
-                      std::vector<float>& vec, std::string& err) {
+// 从 body 提取 embedding（可选）；维度只做范围校验（64..4096）——
+// 按维度分表后，Agent 自带的主流模型向量（1024/1536/3072…）都能进来
+bool extractEmbedding(const json& body, bool& hasEmbedding, std::vector<float>& vec,
+                      std::string& err) {
     hasEmbedding = false;
     if (!body.contains("embedding")) return true;
     const auto& emb = body["embedding"];
     if (!emb.is_array()) { err = "embedding must be an array of floats"; return false; }
-    if (static_cast<int>(emb.size()) != platform.embeddingDim()) {
-        err = "embedding dimension mismatch, expected " + std::to_string(platform.embeddingDim());
+    const int dim = static_cast<int>(emb.size());
+    if (!ah::isValidEmbeddingDim(dim)) {
+        err = "embedding dimension " + std::to_string(dim) +
+              " not supported (expected 64..4096)";
         return false;
     }
     vec.clear();
+    vec.reserve(emb.size());
     for (const auto& v : emb) {
         if (!v.is_number()) { err = "embedding must contain numbers"; return false; }
         vec.push_back(v.get<float>());
@@ -381,7 +385,7 @@ void HttpServer::setupRoutes() {
         bool hasEmb = false;
         std::vector<float> emb;
         std::string err;
-        if (!extractEmbedding(body, p, hasEmb, emb, err)) { send(res, fail(400, err)); return; }
+        if (!extractEmbedding(body, hasEmb, emb, err)) { send(res, fail(400, err)); return; }
         KnowledgeEntry out;
         if (!p.knowledgeCreate(actor, title, content, tags, category, hasEmb ? emb : std::vector<float>{},
                                embedder, out, err)) {
@@ -467,7 +471,7 @@ void HttpServer::setupRoutes() {
         bool hasEmb = false;
         std::vector<float> emb;
         std::string err;
-        if (!extractEmbedding(body, p, hasEmb, emb, err)) { send(res, fail(400, err)); return; }
+        if (!extractEmbedding(body, hasEmb, emb, err)) { send(res, fail(400, err)); return; }
         KnowledgeEntry out;
         if (!p.knowledgeAddVersion(actor, req.matches[1], title, content,
                                    hasEmb ? emb : std::vector<float>{}, embedder, out, err)) {

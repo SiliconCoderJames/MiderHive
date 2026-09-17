@@ -1,6 +1,8 @@
 #include "core/services/knowledge_service.h"
 
+#include <algorithm>
 #include <cstring>
+#include <map>
 
 #include <nlohmann/json.hpp>
 
@@ -25,13 +27,63 @@ void parseTags(KnowledgeEntry& e) {
 }
 }  // namespace
 
-bool KnowledgeService::ensureVecTable(std::string& err) {
-    // vec_dim_ 是内部配置整数，不来自外部输入
-    std::string ddl =
-        "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0("
-        "entry_id INTEGER PRIMARY KEY, embedding float[" +
-        std::to_string(vec_dim_) + "])";
+std::string KnowledgeService::vecTableFor(size_t dim) const {
+    return "knowledge_vec_d" + std::to_string(dim);
+}
+
+bool KnowledgeService::vecTableExists(size_t dim, bool& exists, std::string& err) {
+    exists = false;
+    return db_.query(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        [&](Stmt& st) { st.bind(1, vecTableFor(dim)); },
+        [&](Stmt&) { exists = true; }, err);
+}
+
+bool KnowledgeService::ensureVecTableFor(size_t dim, std::string& err) {
+    // 维度是内部整数（来自向量长度），不构成注入面
+    const std::string ddl = "CREATE VIRTUAL TABLE IF NOT EXISTS " + vecTableFor(dim) +
+                            " USING vec0(entry_id INTEGER PRIMARY KEY, embedding float[" +
+                            std::to_string(dim) + "])";
     return db_.execScript(ddl, err);
+}
+
+bool KnowledgeService::initVectorStore(std::string& err) {
+    // 旧库迁移：老版本只有一张固定维度的 knowledge_vec；现在按维度分表。
+    // vec0 虚拟表不支持 ALTER/RENAME，只能"新建-复制-删除"；旧表随即删除，
+    // 因此迁移天然幂等（第二次启动时 hasLegacy 已为 false）。
+    bool hasLegacy = false;
+    if (!db_.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_vec'",
+                   nullptr,
+                   [&](Stmt&) { hasLegacy = true; }, err))
+        return false;
+    if (hasLegacy) {
+        const size_t builtinDim = static_cast<size_t>(embedder_.dim());
+        if (!ensureVecTableFor(builtinDim, err)) return false;
+        if (!db_.execScript("INSERT INTO " + vecTableFor(builtinDim) +
+                                "(entry_id, embedding) SELECT entry_id, embedding FROM knowledge_vec",
+                            err))
+            return false;
+        if (!db_.execScript("DROP TABLE knowledge_vec", err)) return false;
+    }
+    return ensureVecTableFor(static_cast<size_t>(embedder_.dim()), err);
+}
+
+bool KnowledgeService::initSearchIndex(std::string& err) {
+    // 存量库升级：schema 已把 FTS 表建出来，但旧数据还没有索引 → 一次性 rebuild。
+    // rebuild 从外部内容表全量重建（先清后灌），因此天然幂等。
+    int64_t ftsRows = -1;
+    int64_t entryRows = -1;
+    if (!db_.query("SELECT COUNT(*) FROM knowledge_fts", nullptr,
+                   [&](Stmt& st) { ftsRows = st.i64(0); }, err))
+        return false;
+    if (!db_.query("SELECT COUNT(*) FROM knowledge_entries", nullptr,
+                   [&](Stmt& st) { entryRows = st.i64(0); }, err))
+        return false;
+    if (entryRows > 0 && ftsRows == 0) {
+        if (!db_.execScript("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')", err))
+            return false;
+    }
+    return true;
 }
 
 bool KnowledgeService::create(const std::string& author, const std::string& title,
@@ -40,6 +92,9 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
                               const std::string& embeddingProvider, KnowledgeEntry& out,
                               std::string& err) {
     std::string uuid = uuid4();
+    const size_t dim = embedding.empty() ? static_cast<size_t>(embedder_.dim()) : embedding.size();
+    // 建表放在事务外：幂等 DDL，不必混进写事务（也避免 vec0 在事务内建表的未知行为）
+    if (!ensureVecTableFor(dim, err)) return false;
     // 事务包裹正文与向量两步写入：向量一步失败时先回滚再返回失败，
     // 否则会留下 is_latest=1 但无向量的孤儿记录——列表与关键词检索都能看到它，
     // 语义检索却永远命中不了，且没有任何报错（范式与 addVersion 一致）
@@ -77,7 +132,7 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
 
 bool KnowledgeService::insertVec(int64_t entryId, const std::vector<float>& vec, std::string& err) {
     std::string bytes = vecToBytes(vec);
-    return db_.query("INSERT INTO knowledge_vec(entry_id, embedding) VALUES (?,?)",
+    return db_.query("INSERT INTO " + vecTableFor(vec.size()) + "(entry_id, embedding) VALUES (?,?)",
                      [&](Stmt& st) {
                          st.bind(1, entryId);
                          st.bindBlob(2, bytes.data(), bytes.size());
@@ -145,6 +200,9 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
                                   const std::vector<float>& embedding,
                                   const std::string& embeddingProvider, KnowledgeEntry& out,
                                   std::string& err) {
+    const size_t dim = embedding.empty() ? static_cast<size_t>(embedder_.dim()) : embedding.size();
+    if (!ensureVecTableFor(dim, err)) return false;  // 事务外建表（幂等），理由同 create()
+
     // BEGIN IMMEDIATE 包裹查-改-插：双进程并发追加同一 uuid 时不会产生两条 is_latest=1
     if (!db_.beginImmediate(err)) return false;
 
@@ -213,17 +271,56 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
     return latest(uuid, out, err);
 }
 
+bool KnowledgeService::deleteVecsForUuid(const std::string& uuid, std::string& err) {
+    // 条目本身不记录用了哪个维度，逐一清已存在的维度表最可靠（维度表数量是个位数）。
+    // sqlite_master 里 vec0 还会登记 *_info / *_chunks 等影子表，必须只认
+    // "CREATE VIRTUAL TABLE" 的条目；表名再按"前缀 + 纯数字"白名单二次校验后才拼 SQL。
+    std::vector<std::string> tables;
+    if (!db_.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'knowledge_vec_d%' "
+            "AND sql LIKE 'CREATE VIRTUAL TABLE%'",
+            nullptr,
+            [&](Stmt& st) { tables.push_back(st.text(0)); }, err))
+        return false;
+    static constexpr const char* kPrefix = "knowledge_vec_d";
+    for (const auto& t : tables) {
+        const bool numeric = t.size() > std::strlen(kPrefix) &&
+                             std::all_of(t.begin() + std::strlen(kPrefix), t.end(),
+                                         [](char c) { return std::isdigit(static_cast<unsigned char>(c)); });
+        if (!numeric) {
+            err = "unexpected vector table name: " + t;
+            return false;
+        }
+        if (!db_.query("DELETE FROM " + t + " WHERE entry_id IN "
+                       "(SELECT id FROM knowledge_entries WHERE uuid=?)",
+                       [&](Stmt& st) { st.bind(1, uuid); }, nullptr, err))
+            return false;
+    }
+    return true;
+}
+
 bool KnowledgeService::fetchByIds(const std::vector<int64_t>& ids, std::vector<KnowledgeEntry>& out,
                                   std::string& err) {
     out.clear();
-    for (int64_t id : ids) {
-        bool found = false;
-        KnowledgeEntry e;
+    // 分批 IN 查询：变量数按保守上限切块；结果顺序靠"按块顺序拼回"保持
+    // （kNN 的距离序 / 列表的时间序都不能乱）。替换掉此前的逐行查询（N+1）。
+    constexpr size_t kChunk = 500;
+    for (size_t begin = 0; begin < ids.size(); begin += kChunk) {
+        const size_t end = std::min(ids.size(), begin + kChunk);
+        std::string sql =
+            "SELECT id, uuid, title, content, tags_json, category, author, version, "
+            "embedding_provider, created_at FROM knowledge_entries WHERE is_latest=1 AND id IN (";
+        for (size_t i = begin; i < end; ++i) sql += (i == begin ? "?" : ",?");
+        sql += ") ORDER BY id DESC";
+        std::map<int64_t, KnowledgeEntry> got;
         if (!db_.query(
-                "SELECT id, uuid, title, content, tags_json, category, author, version, "
-                "embedding_provider, created_at FROM knowledge_entries WHERE id=? AND is_latest=1",
-                [&](Stmt& st) { st.bind(1, id); },
+                sql,
                 [&](Stmt& st) {
+                    for (size_t i = begin; i < end; ++i)
+                        st.bind(static_cast<int>(i - begin + 1), ids[i]);
+                },
+                [&](Stmt& st) {
+                    KnowledgeEntry e;
                     e.id = st.i64(0);
                     e.uuid = st.text(1);
                     e.title = st.text(2);
@@ -234,13 +331,14 @@ bool KnowledgeService::fetchByIds(const std::vector<int64_t>& ids, std::vector<K
                     e.version = static_cast<int>(st.i64(7));
                     e.embedding_provider = st.isNull(8) ? std::string() : st.text(8);
                     e.created_at = st.text(9);
-                    found = true;
+                    parseTags(e);
+                    got.emplace(e.id, std::move(e));
                 },
                 err))
             return false;
-        if (found) {
-            parseTags(e);
-            out.push_back(std::move(e));
+        for (size_t i = begin; i < end; ++i) {
+            auto it = got.find(ids[i]);
+            if (it != got.end()) out.push_back(std::move(it->second));
         }
     }
     return true;
@@ -265,8 +363,19 @@ bool KnowledgeService::list(int limit, const std::string& tagFilter,
     return fetchByIds(ids, out, err);
 }
 
-bool KnowledgeService::searchKeyword(const std::string& query, int limit, const std::string& tagFilter,
+bool KnowledgeService::searchKeyword(const std::string& query, int limit,
+                                     const std::string& tagFilter,
                                      std::vector<KnowledgeEntry>& out, std::string& err) {
+    // trigram 分词最少 3 个码点；更短的查询（中文两字词很常见）回退 LIKE，保证不漏
+    if (static_cast<int>(utf8Codepoints(query).size()) >= 3)
+        return searchKeywordFts(query, limit, tagFilter, out, err);
+    return searchKeywordLike(query, limit, tagFilter, out, err);
+}
+
+// 老路径：LIKE 子串扫描。仅用于 <3 码点的短查询（trigram 无法切词）。
+bool KnowledgeService::searchKeywordLike(const std::string& query, int limit,
+                                         const std::string& tagFilter,
+                                         std::vector<KnowledgeEntry>& out, std::string& err) {
     std::string like = "%" + query + "%";
     std::string sql =
         "SELECT id FROM knowledge_entries WHERE is_latest=1 AND (title LIKE ? OR content LIKE ?)";
@@ -280,7 +389,38 @@ bool KnowledgeService::searchKeyword(const std::string& query, int limit, const 
                 st.bind(2, like);
                 int idx = 3;
                 if (!tagFilter.empty()) st.bind(idx++, "%\"" + tagFilter + "\"%");
-                st.bind(idx, static_cast<int64_t>(limit > 0 ? limit : 100));
+                st.bind(idx, static_cast<int64_t>(limit > 0 ? limit : 20));
+            },
+            [&](Stmt& st) { ids.push_back(st.i64(0)); }, err))
+        return false;
+    return fetchByIds(ids, out, err);
+}
+
+// 主路径：FTS5 trigram 全文索引（外部内容表，正文不重复存储）。
+// 用户查询包成**短语**并转义内部引号：既避免 "-" "(" 等被当成 FTS5 查询语法，
+// 在 trigram 下又等价于子串语义；大小写不敏感与 LIKE 行为一致。
+bool KnowledgeService::searchKeywordFts(const std::string& query, int limit,
+                                        const std::string& tagFilter,
+                                        std::vector<KnowledgeEntry>& out, std::string& err) {
+    std::string escaped;
+    for (char c : query) {
+        escaped += c;
+        if (c == '"') escaped += '"';
+    }
+    const std::string ftsQuery = "\"" + escaped + "\"";
+    std::string sql =
+        "SELECT ke.id FROM knowledge_entries ke WHERE ke.is_latest=1 AND ke.id IN "
+        "(SELECT rowid FROM knowledge_fts WHERE knowledge_fts MATCH ?)";
+    if (!tagFilter.empty()) sql += " AND ke.tags_json LIKE ?";
+    sql += " ORDER BY ke.id DESC LIMIT ?";
+    std::vector<int64_t> ids;
+    if (!db_.query(
+            sql,
+            [&](Stmt& st) {
+                st.bind(1, ftsQuery);
+                int idx = 2;
+                if (!tagFilter.empty()) st.bind(idx++, "%\"" + tagFilter + "\"%");
+                st.bind(idx, static_cast<int64_t>(limit > 0 ? limit : 20));
             },
             [&](Stmt& st) { ids.push_back(st.i64(0)); }, err))
         return false;
@@ -290,49 +430,52 @@ bool KnowledgeService::searchKeyword(const std::string& query, int limit, const 
 bool KnowledgeService::searchSemantic(const std::vector<float>& queryVec, int limit,
                                       const std::string& tagFilter, std::vector<KnowledgeHit>& out,
                                       std::string& err) {
-    std::string bytes = vecToBytes(queryVec);
     out.clear();
+    if (queryVec.empty()) {
+        err = "empty query vector";
+        return false;
+    }
+    const size_t dim = queryVec.size();
+    bool exists = false;
+    if (!vecTableExists(dim, exists, err)) return false;
+    if (!exists) return true;  // 这个维度还没有任何条目：如实返回零命中（不是错误）
+
+    // vec0 约束：k 与 LIMIT 不能同时出现；k 已隐含按 distance 升序返回。
+    // 带 tag 过滤时多召回一些再过滤（vec0 不支持在 MATCH 里做标量过滤）——
+    // 否则"先取 limit 条再过滤"会系统性少给结果。
+    const int base = limit > 0 ? limit : 20;
+    const int want = tagFilter.empty() ? base : std::min(base * 4, 200);
+    std::string bytes = vecToBytes(queryVec);
     std::vector<std::pair<int64_t, double>> hits;
-    // vec0 约束：k 与 LIMIT 不能同时出现；k 已隐含按 distance 升序返回
     if (!db_.query(
-            "SELECT entry_id, distance FROM knowledge_vec WHERE embedding MATCH ? AND k = ?",
+            "SELECT entry_id, distance FROM " + vecTableFor(dim) +
+                " WHERE embedding MATCH ? AND k = ?",
             [&](Stmt& st) {
                 st.bindBlob(1, bytes.data(), bytes.size());
-                st.bind(2, static_cast<int64_t>(limit > 0 ? limit : 20));
+                st.bind(2, static_cast<int64_t>(want));
             },
             [&](Stmt& st) { hits.emplace_back(st.i64(0), st.dbl(1)); }, err))
         return false;
 
-    for (const auto& [id, dist] : hits) {
-        KnowledgeEntry e;
-        bool found = false;
-        if (!db_.query(
-                "SELECT id, uuid, title, content, tags_json, category, author, version, "
-                "embedding_provider, created_at FROM knowledge_entries WHERE id=? AND is_latest=1",
-                [&](Stmt& st) { st.bind(1, id); },
-                [&](Stmt& st) {
-                    e.id = st.i64(0);
-                    e.uuid = st.text(1);
-                    e.title = st.text(2);
-                    e.content = st.text(3);
-                    e.tags_json = st.text(4);
-                    e.category = st.isNull(5) ? std::string() : st.text(5);
-                    e.author = st.text(6);
-                    e.version = static_cast<int>(st.i64(7));
-                    e.embedding_provider = st.isNull(8) ? std::string() : st.text(8);
-                    e.created_at = st.text(9);
-                    found = true;
-                },
-                err))
-            return false;
-        if (found) {
-            parseTags(e);
-            if (!tagFilter.empty()) {
-                bool tagHit = e.tags_json.find("\"" + tagFilter + "\"") != std::string::npos;
-                if (!tagHit) continue;
-            }
-            out.push_back({std::move(e), dist});
-        }
+    // 一次批量取回（保持 kNN 距离序），再按 tag 过滤并截断到 limit
+    std::vector<int64_t> ids;
+    ids.reserve(hits.size());
+    std::map<int64_t, double> distById;
+    for (const auto& h : hits) {
+        ids.push_back(h.first);
+        distById[h.first] = h.second;
+    }
+    std::vector<KnowledgeEntry> entries;
+    if (!fetchByIds(ids, entries, err)) return false;
+    int kept = 0;
+    for (auto& e : entries) {
+        if (limit > 0 && kept >= limit) break;
+        if (!tagFilter.empty() &&
+            e.tags_json.find("\"" + tagFilter + "\"") == std::string::npos)
+            continue;
+        const double dist = distById[e.id];
+        out.push_back({std::move(e), dist});
+        ++kept;
     }
     return true;
 }

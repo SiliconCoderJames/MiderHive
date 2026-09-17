@@ -129,6 +129,9 @@ endif()
 
 add_library(sqlite3_static STATIC ${SQLITE_SRC_DIR}/sqlite3.c)
 target_include_directories(sqlite3_static PUBLIC ${SQLITE_SRC_DIR})
+# FTS5：关键词检索的 trigram 全文索引依赖它。amalgamation 默认不带，必须显式打开；
+# PUBLIC 让包含 sqlite3.h 的翻译单元与库的宏口径保持一致。
+target_compile_definitions(sqlite3_static PUBLIC SQLITE_ENABLE_FTS5)
 if(MSVC)
     target_compile_options(sqlite3_static PRIVATE /W0)
 else()

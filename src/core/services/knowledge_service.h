@@ -9,13 +9,22 @@
 
 namespace ah {
 
+// 允许 Agent 自带向量的维度范围。内置嵌入器固定 384；上限防滥用
+// （vec0 每行固定 dim*sizeof(float)，无上限会被写成内存放大面）。
+// 64 下限挡住"随手传个 3 维数组"。主流模型全在范围内：bge/m3e=1024、
+// text-embedding-3-small=1536、OpenAI large=3072。
+inline bool isValidEmbeddingDim(int dim) { return dim >= 64 && dim <= 4096; }
+
 class KnowledgeService {
 public:
-    KnowledgeService(Database& db, Embedder& embedder, int vecDim)
-        : db_(db), embedder_(embedder), vec_dim_(vecDim) {}
+    KnowledgeService(Database& db, Embedder& embedder) : db_(db), embedder_(embedder) {}
 
-    // 创建 vec0 虚拟表（维度来自配置；SQL 仅含内部整型，无外部输入）
-    bool ensureVecTable(std::string& err);
+    // 启动初始化（向量侧）：旧库的单张 knowledge_vec 迁移到按维度分表，
+    // 并保证内置维度的表存在。幂等，可重复调用。
+    bool initVectorStore(std::string& err);
+
+    // 启动初始化（检索侧）：存量库的 FTS 索引一次性 rebuild。幂等。
+    bool initSearchIndex(std::string& err);
 
     bool create(const std::string& author, const std::string& title, const std::string& content,
                 const std::string& tagsJson, const std::string& category,
@@ -32,13 +41,28 @@ public:
     bool searchSemantic(const std::vector<float>& queryVec, int limit, const std::string& tagFilter,
                         std::vector<KnowledgeHit>& out, std::string& err);
 
+    // 删除某条目（全部版本）在所有维度表里的向量行。必须在写事务内调用，
+    // 与删正文同生共死（否则留下"有向量无正文"的孤儿，挤占 kNN 召回名额）。
+    bool deleteVecsForUuid(const std::string& uuid, std::string& err);
+
 private:
+    // vec0 每张表维度固定，因此**按维度分表**：knowledge_vec_d<dim>。
+    // 这样 Agent 才能自带 1024/1536 维向量（否则 384 硬约束会把它们全部挡在门外），
+    // 检索时按查询向量长度选表，维度天然隔离、互不污染。
+    std::string vecTableFor(size_t dim) const;
+    bool ensureVecTableFor(size_t dim, std::string& err);
+    bool vecTableExists(size_t dim, bool& exists, std::string& err);
     bool insertVec(int64_t entryId, const std::vector<float>& vec, std::string& err);
+    // 一次 IN (...) 查询取回全部条目（分批防触 SQLITE_MAX_VARIABLE_NUMBER），
+    // 保持入参顺序。替换掉此前的逐行查询（N+1）。
     bool fetchByIds(const std::vector<int64_t>& ids, std::vector<KnowledgeEntry>& out, std::string& err);
+    bool searchKeywordLike(const std::string& query, int limit, const std::string& tagFilter,
+                           std::vector<KnowledgeEntry>& out, std::string& err);
+    bool searchKeywordFts(const std::string& query, int limit, const std::string& tagFilter,
+                          std::vector<KnowledgeEntry>& out, std::string& err);
 
     Database& db_;
     Embedder& embedder_;
-    int vec_dim_;
 };
 
 }  // namespace ah

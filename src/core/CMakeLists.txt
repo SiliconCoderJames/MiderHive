@@ -28,6 +28,10 @@ target_link_libraries(miderhive_core PUBLIC
 )
 
 # 把 schema.sql 嵌入二进制
+# CMAKE_CONFIGURE_DEPENDS：file(READ) 不会让 CMake 感知输入变化，改了 schema.sql
+# 却不重新 configure 的话，嵌入的仍是旧 schema（实测：加 FTS 表后启动报 no such table）。
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             ${CMAKE_CURRENT_SOURCE_DIR}/db/schema.sql)
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/db/schema.sql SCHEMA_SQL_CONTENT)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/db/schema_sql.h.in
                ${CMAKE_CURRENT_BINARY_DIR}/generated/schema_sql.h @ONLY)

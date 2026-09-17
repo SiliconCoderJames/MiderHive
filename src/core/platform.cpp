@@ -58,7 +58,7 @@ Platform::Platform(std::string homeDir)
     : home_dir_(std::move(homeDir)),
       embedder_(std::make_unique<NgramHashEmbedder>()),
       agents_(db_),
-      knowledge_(db_, *embedder_, embedder_->dim()),
+      knowledge_(db_, *embedder_),
       skills_(db_),
       memory_(db_),
       messages_(db_),
@@ -88,12 +88,14 @@ bool Platform::bootstrap(std::string& err) {
     db_.tryExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_idem "
                 "ON token_usage(idempotency_key) "
                 "WHERE idempotency_key IS NOT NULL AND idempotency_key != '';");
-    // 启用 sqlite-vec（静态链接进本进程）
+    // 启用 sqlite-vec（静态链接进本进程）：旧库的单张向量表迁移到按维度分表
     if (sqlite3_vec_init(db_.handle(), nullptr, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_.handle());
         return false;
     }
-    if (!knowledge_.ensureVecTable(err)) return false;
+    if (!knowledge_.initVectorStore(err)) return false;
+    // 关键词检索的 FTS 索引：存量库在这里一次性 rebuild
+    if (!knowledge_.initSearchIndex(err)) return false;
 
     // 预算默认值（可被 settings 覆盖）
     if (!db_.query("INSERT OR IGNORE INTO settings(key, value) VALUES('weekly_token_budget', ?)",
@@ -381,7 +383,10 @@ bool Platform::listAgents(std::vector<AgentInfo>& out, std::string& err) {
 std::vector<float> Platform::resolveEmbedding(const std::string& content,
                                               const std::vector<float>* provided,
                                               bool& isProvided) {
-    if (provided && !provided->empty() && static_cast<int>(provided->size()) == embedder_->dim()) {
+    // Agent 自带向量：维度落在合法范围内就原样采用（按维度分表，互不干扰）。
+    // 不再要求等于内置 384——那是"语义检索其实接不了真模型"的根源。
+    if (provided && !provided->empty() &&
+        isValidEmbeddingDim(static_cast<int>(provided->size()))) {
         isProvided = true;
         return *provided;
     }
@@ -394,7 +399,7 @@ std::vector<float> Platform::embedText(const std::string& text) {
     return embedder_->embed(text);
 }
 
-int Platform::embeddingDim() const { return embedder_->dim(); }
+int Platform::embeddingDim() const { return embedder_->dim(); }  // 内置嵌入器的维度（384）
 
 // ---------------- 知识库 ----------------
 
@@ -467,10 +472,8 @@ bool Platform::knowledgeRemove(const std::string& actor, const std::string& uuid
     // 事务包裹删向量与删正文两步：后半步失败先回滚再返回失败，
     // 避免留下无向量的正文（列表仍可见、语义检索失效的静默残留）
     if (!db_.beginImmediate(err)) return false;
-    // 删除全部版本与向量行（vec0 虚拟表按 entry_id 关联）
-    if (!db_.query("DELETE FROM knowledge_vec WHERE entry_id IN "
-                   "(SELECT id FROM knowledge_entries WHERE uuid=?)",
-                   [&](Stmt& st) { st.bind(1, uuid); }, nullptr, err)) {
+    // 删除全部版本与向量行（向量在按维度分表里，由 KnowledgeService 统一清理）
+    if (!knowledge_.deleteVecsForUuid(uuid, err)) {
         db_.rollback();
         return false;
     }
@@ -941,7 +944,9 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
         err = sqlite3_errmsg(db_.handle());
         return false;
     }
-    if (!knowledge_.ensureVecTable(err)) return false;
+    // 恢复出来的库可能是旧格式（单张 knowledge_vec / 无 FTS 索引）：走与启动同一套初始化
+    if (!knowledge_.initVectorStore(err)) return false;
+    if (!knowledge_.initSearchIndex(err)) return false;
     audit_.log("zcode", "system.restore", name, nlohmann::json{{"file", name}}.dump(), err);
     return true;
 }

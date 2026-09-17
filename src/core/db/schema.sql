@@ -2,7 +2,9 @@
 -- 协作规则落地：
 --   * 内容只追加、不覆盖：knowledge/memory 用版本号 + is_latest 标记，旧版本永不删除。
 --   * 所有写操作在 audit_log 留痕（身份 + 时间 + 内容摘要）。
--- 知识向量表 knowledge_vec 为 vec0 虚拟表，维度由运行时配置决定，在代码中创建。
+-- 知识向量表按**维度**分表：knowledge_vec_d<dim>（内置嵌入器 384，Agent 自带向量
+-- 可为 64..4096 内任意维度）。vec0 每张表维度固定，分表才能让不同模型的向量共存；
+-- 表在代码中按需创建，存量旧库的单张 knowledge_vec 由启动迁移自动搬移。
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -140,6 +142,27 @@ CREATE TABLE IF NOT EXISTS token_usage (
 CREATE INDEX IF NOT EXISTS idx_knowledge_uuid      ON knowledge_entries(uuid, version);
 CREATE INDEX IF NOT EXISTS idx_knowledge_latest    ON knowledge_entries(is_latest, created_at);
 CREATE INDEX IF NOT EXISTS idx_knowledge_category  ON knowledge_entries(category);
+
+-- 关键词检索的全文索引：外部内容表（正文只存 knowledge_entries，FTS 只存倒排）。
+-- trigram 分词让中英文**子串**都能命中（>=3 个码点；更短查询在代码层回退 LIKE）。
+-- 索引覆盖全部版本、检索时用 is_latest=1 过滤——换来触发器只需对称的插入/删除。
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    title, content,
+    content='knowledge_entries', content_rowid='id',
+    tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_ai AFTER INSERT ON knowledge_entries BEGIN
+    INSERT INTO knowledge_fts(rowid, title, content) VALUES (NEW.id, NEW.title, NEW.content);
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_au AFTER UPDATE OF title, content ON knowledge_entries BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content)
+    VALUES ('delete', OLD.id, OLD.title, OLD.content);
+    INSERT INTO knowledge_fts(rowid, title, content) VALUES (NEW.id, NEW.title, NEW.content);
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_ad AFTER DELETE ON knowledge_entries BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content)
+    VALUES ('delete', OLD.id, OLD.title, OLD.content);
+END;
 CREATE INDEX IF NOT EXISTS idx_memory_latest       ON memory_entries(section, key, is_latest);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient  ON messages(recipient, status);
 CREATE INDEX IF NOT EXISTS idx_messages_kind       ON messages(kind, created_at);

@@ -662,12 +662,13 @@ static void test_knowledge_vector_atomicity() {
 
         CHECK(p.knowledgeRemove("zcode", e.uuid, err));
 
-        // 不变式一：没有"有正文无向量"的孤儿（对应 create 的两步写入）
+        // 不变式一：没有"有正文无向量"的孤儿（对应 create 的两步写入）。
+        // 向量按维度分表，内置嵌入器 384 → knowledge_vec_d384
         CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE id NOT IN "
-                                   "(SELECT entry_id FROM knowledge_vec)"),
+                                   "(SELECT entry_id FROM knowledge_vec_d384)"),
                  0);
         // 不变式二：没有"有向量无正文"的残留（对应 remove 的两步删除）
-        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_vec WHERE entry_id NOT IN "
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_vec_d384 WHERE entry_id NOT IN "
                                    "(SELECT id FROM knowledge_entries)"),
                  0);
         // 双版本的正文行全部删除
