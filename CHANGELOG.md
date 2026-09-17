@@ -24,6 +24,52 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+### Added
+- **Nine more MCP tools (18 → 27)**, closing the loops an MCP-only agent previously could not
+  reach: `usage_report` (with idempotency), `knowledge_add_version` / `knowledge_get` /
+  `knowledge_versions` (refine shared know-how instead of duplicating it), `skill_register`
+  (publish to the skill market), `message_reply`, `usage_daily`, `usage_breakdown`, and
+  `hive_status` — one call that answers "am I connected, who else is here, what did we spend".
+- **One-stop connect wizard** (`ConnectDialog`, also reachable via Settings → Agents): pick a
+  tool, click once, and it provisions the identity, emits that tool's **own** config format
+  (JSON / Codex TOML / DSH profile patch / Hermes YAML / env vars / instructions block), and —
+  where the file can be merged safely — **writes it for you**, backing the original up as
+  `.miderhive.bak`. The panel polls the platform and flips to a live **"Connected"** when the
+  agent comes online.
+- **Eight-client integration registry** as the single source of truth (`integrations.h`),
+  covering Claude, ChatGPT / Codex, Factory Droid, DSH, Hermes and ZCode — plus Cursor and
+  GitHub Copilot — with per-client install detection and real config-path resolution.
+- **Qt's own translations are now installed** (`qtbase_zh_CN.qm`), so Qt-supplied strings
+  (dialog OK/Cancel, message-box buttons, input context menus) follow the UI language instead of
+  staying English in Chinese mode.
+
+### Changed
+- First-run onboarding now offers all eight clients (grid layout) and can auto-write the config
+  from the welcome dialog too.
+- `humanError` gained disk-full and permission-denied diagnoses, and its port branch no longer
+  swallows any message merely containing "address".
+
+### Fixed
+- **Codex TOML config was unusable for real Windows paths**: it emitted basic (double-quoted)
+  strings, where `\Q` is an invalid escape, so the whole `config.toml` failed to parse. It now
+  emits TOML literal (single-quoted) strings; a self-test asserts both the literal form and that
+  the double-quoted form is never produced.
+- **`skills_panel` filter sentinel**: the category/owner combos used the item text `"全部"` as the
+  "no filter" sentinel, so translating it would have silently broken filtering in English. The
+  item text and the comparison are now bound to one translated value.
+- `memory_panel`'s section list held Chinese display names in a static-init table, which would
+  have frozen the startup language; it is now a `{zh, en, key}` table read at use time.
+- Documented — and worked around — a real Claude Code trap: in PowerShell the npm `claude.ps1`
+  shim swallows everything after `--`, producing
+  `error: missing required argument 'commandOrUrl'`. The docs now lead with the project
+  `.mcp.json` route (verified: Claude Code lists the server and reports `√ Connected`) and the
+  CLI form is marked cmd.exe-only.
+
+### Documentation
+- `docs/mcp.md` rewritten: per-client setup for all eight tools, the 27-tool inventory grouped by
+  loop, and a DSH-specific warning that its subprocess environment is scrubbed, so the key must
+  live in the config's `env` block.
+
 ## [1.1.1] - 2026-09-13
 
 ### Added

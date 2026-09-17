@@ -55,8 +55,8 @@
 | Agent 交流 | note / question / task 三种消息，点对点或广播；任务仅执行者可接单；点对点消息只对收发双方可见 |
 | 错误日志 | 分级（info~critical）上报、解决闭环、解决说明追加不覆盖 |
 | 用量观测 | 每次调用上报消耗（可标注模型），幂等键防重复；周用量 / 逐日趋势 / 按模型累计；80% 警告 / 95% 预警 / 超额高亮 |
-| 首次接入引导 | 首启自动弹出：一键接入 Claude Code / Cursor / Codex CLI——自动检测本机安装、预配接入身份、生成对应的 MCP 配置（JSON/TOML，附复制按钮与配置文件位置）；Agent 上线后工作台弹「接入成功」并自动写入一条欢迎记忆（每个身份仅一次）；设置里随时可重新打开 |
-| MCP 接入 | 自带 `miderhive-mcp` stdio 服务器，把记忆 / 知识 / 消息 / 错误 / 技能 / 用量暴露为约 18 个 MCP 工具，Claude Code、Claude Desktop、Cursor 即插即用，身份体系与 HTTP API 完全相同（[配置](docs/mcp.md)） |
+| 首次接入引导 | 首启自动弹出：一键接入 **Claude、ChatGPT / Codex、Factory Droid、DSH、Hermes、ZCode**（另含 Cursor 与 GitHub Copilot）——自动检测本机安装、预配接入身份，并**按该工具自己的格式**生成配置（JSON / TOML / DSH profile 补丁 / Hermes YAML / 环境变量 / 指令块）。能安全合并的配置文件由向导**直接写入**（原文件备份为 `.miderhive.bak`）；Agent 一上线，面板当场显示「已连接」，并写入一条欢迎记忆（每个身份仅一次）。设置里随时可重新打开 |
+| MCP 接入 | 自带 `miderhive-mcp` stdio 服务器，把记忆 / 知识（检索、新增、版本迭代）/ 消息 / 错误 / 技能市场 / 用量（汇总、上报、逐日、多维切片）暴露为 **27 个 MCP 工具**；`hive_status` 一次调用回答"我到底连上没有"。Claude Code、Claude Desktop、Cursor、Codex/ChatGPT、Droid、DSH、Hermes 即插即用，身份体系与 HTTP API 完全相同（[配置](docs/mcp.md)） |
 | 防呆设计 | 启动自检（数据目录可写 / 配置可读 / 端口占用 / 数据库异常——可关闭、双语、附下一步）；总览页健康横幅只在异常时出现；离线 Agent 先给排查原因再给修复入口；明文密钥丢失一键轮换修复；技术报错统一翻译成中英"人话"+ 下一步动作，绝不静默失败 |
 | 操作审计 | 所有写操作记录身份、时间、动作、对象与内容摘要（轮转保留 30 天 / 10 万条） |
 | 桌面工作台 | 八面板深色界面：总览、用量、知识库、技能库、用户记忆、Agent 交流、错误报告、操作日志；各面板空状态自带模块说明与引导动作 |
@@ -137,19 +137,31 @@ Codex CLI，自动检测本机安装、预配接入身份，并生成对应的 M
 粘贴并完全重启该工具，Agent 上线后工作台会提示「接入成功」并自动写入一条欢迎记忆。
 错过或想重来：**设置 → Agent 管理 → 「重新打开接入引导」**。
 
-**更习惯 MCP？** 支持 MCP 的客户端（Claude Code、Claude Desktop、Cursor）也可以完全跳过裸 HTTP
-流程：自带 `miderhive-mcp` stdio 服务器把记忆、知识、消息、错误、技能、用量暴露为约 18 个
-MCP 工具，身份体系与 HTTP API 相同。建议先在 **工作台 → 设置 → Agent → 一键接入** 发好身份，
-然后给 Claude Code 一行命令接入：
+**更习惯 MCP？** 支持 MCP 的客户端（Claude Code、Claude Desktop、Cursor、Codex/ChatGPT、Droid、
+DSH、Hermes）可以完全跳过裸 HTTP 流程：自带 `miderhive-mcp` stdio 服务器提供 **27 个 MCP 工具**，
+身份体系与 HTTP API 相同。最省事的是 **设置 → Agent 管理 → 一键接入**：它签发身份、按该工具自己的
+格式生成配置、能安全合并时直接写进配置文件，Agent 一上线就显示「已连接」。
 
-```bash
-claude mcp add miderhive \
-  --env MIDERHIVE_AGENT_NAME=claude \
-  --env MIDERHIVE_AGENT_KEY=<粘贴 key> \
-  -- "C:\Program Files\MiderHive\miderhive-mcp.exe"
+手工给 Claude Code 接入——把下面这份放进项目根的 `.mcp.json`，然后运行一次 `claude` 批准即可
+（已实测：Claude Code 会列出该服务器并显示 `√ Connected`）：
+
+```json
+{
+  "mcpServers": {
+    "miderhive": {
+      "command": "C:\\Program Files\\MiderHive\\miderhive-mcp.exe",
+      "args": [],
+      "env": { "MIDERHIVE_AGENT_NAME": "claude", "MIDERHIVE_AGENT_KEY": "<粘贴 key>" }
+    }
+  }
+}
 ```
 
-Claude Desktop / Cursor 的 JSON 配置、完整工具清单与排障方法见 **[docs/mcp.md](docs/mcp.md)**。
+> 想用命令行形式？**请粘进 cmd.exe**，不要用 PowerShell：`claude` 是 npm 的 `claude.ps1` 包装脚本，
+> PowerShell 会把 `--` 之后的命令吞掉，报 `error: missing required argument 'commandOrUrl'`（已实测）。
+
+各客户端配置（Codex TOML、Droid JSON、DSH profile 补丁、Hermes YAML、ZCode 环境变量）、完整工具
+清单与排障方法见 **[docs/mcp.md](docs/mcp.md)**。
 
 ### 与平台协作的规则
 
@@ -261,9 +273,12 @@ Windows 图标缓存，运行 `ie4uinit.exe -show` 或重启资源管理器。
   平台端到端、鉴权与消息可见性加固回归、旧库升级迁移；
 - 集成验证 **39 项断言**（[scripts/feasibility_check.py](scripts/feasibility_check.py)）：
   模拟多 Agent 全生命周期，含中文检索、异步任务状态机、幂等上报、用量告警；
-- **离屏 GUI 全链路自测 35 项断言**（[scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py)，
+- **离屏 GUI 全链路自测 66 项断言**（[scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py)，
   构建目标 `gui_selftest`）：无头驱动真实工作台界面，覆盖首启引导 → Agent 上线 →
-  「接入成功」+ 欢迎记忆 → 密钥丢失健康横幅 → 轮换修复（旧钥 401/新钥 200）→ 设置重入；
+  「接入成功」+ 欢迎记忆 → 密钥丢失健康横幅 → 轮换修复（旧钥 401/新钥 200）→ 设置重入。
+  另覆盖：**八种客户端各自的配置格式**、**配置写入器**（新建 / 合并保留他人条目 /
+  遇到坏 JSON 拒绝且不改动 / 重复写入替换而非追加；全部在重定向的配置根里跑，不碰真实配置），
+  以及把界面真的切到英文后断言**所有控件文案（标签/按钮/下拉/表头/占位符/tooltip）无中文残留**；
 - 平台接入/密钥自测 **14 项断言**（[scripts/test_onboarding_and_safety.py](scripts/test_onboarding_and_safety.py)）：
   预配身份、心跳上线、欢迎记忆、密钥丢失诊断与轮换语义（HTTP 实测）；
 - 加固回归：保留身份不可注册、注册角色白名单、点对点消息读隔离、请求体 1 MiB 上限、

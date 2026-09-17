@@ -57,8 +57,8 @@ and foolproof design (startup self-check, health banners, one-click key rotation
 | Agent messaging | `note` / `question` / `task`, point-to-point or broadcast; only the assignee can accept a task; point-to-point messages are visible only to sender and recipient |
 | Error log | Severity levels (info…critical), resolution loop, resolutions appended rather than overwritten |
 | Usage analytics | Token reporting per call (model optional) with an idempotency key; weekly / daily / per-model views; 80% warn, 95% critical, over-budget highlighted. The dedicated **Usage** panel slices consumption by time range / agent / model, with a per-agent breakdown table and a budget editor (no more hand-editing the database) |
-| First-run onboarding | Pops up on first launch: one-click connect for Claude Code / Cursor / Codex CLI — detects the local install, provisions the identity and generates the matching MCP config (JSON/TOML, with a copy button and the config-file location); when the agent comes online the workbench pops "Connected" and writes a welcome memory automatically (once per identity); re-openable anytime from Settings |
-| MCP support | The bundled `miderhive-mcp` stdio server exposes memory, knowledge, messaging, errors, skills and usage as ~18 MCP tools — plug-and-play for Claude Code, Claude Desktop and Cursor, same local identity system ([setup](docs/mcp.md)) |
+| First-run onboarding | Pops up on first launch: one-click connect for **Claude, ChatGPT / Codex, Factory Droid, DSH, Hermes, ZCode** (plus Cursor and GitHub Copilot) — detects the local install, provisions the identity, and generates the config **in that tool's own format** (JSON / TOML / DSH profile patch / Hermes YAML / env vars / instructions block). Where the file can be merged safely the wizard **writes it for you** (original backed up as `.miderhive.bak`); the panel shows a live **"Connected"** the moment the agent comes online, then writes a welcome memory (once per identity). Re-openable anytime from Settings |
+| MCP support | The bundled `miderhive-mcp` stdio server exposes **27 MCP tools** — shared memory, knowledge (search, add, and version iteration), messaging, error reports, the skill market, and token usage (summary, reporting, daily and multi-dimensional breakdown). `hive_status` answers "am I connected?" in one call. Plug-and-play for Claude Code, Claude Desktop, Cursor, Codex/ChatGPT, Droid, DSH and Hermes over the same local identity system ([setup](docs/mcp.md)) |
 | Foolproof design | Startup self-check (writable data dir / readable config / port occupied / database trouble — dismissible, bilingual, with next steps); overview health banners appear only when something is wrong; offline agents show the diagnosis before the fix; a lost plaintext key is one click from rotation; technical errors are translated into plain English/Chinese with next steps — no silent failures |
 | Audit trail | Every write records actor, time, action, target and a content digest (rotated at 30 days / 100k rows) |
 | Desktop workbench | Eight-panel dark UI: overview, usage, knowledge, skills, memory, messages, errors, audit; every empty state explains the module and offers the obvious action |
@@ -146,21 +146,33 @@ generates the matching MCP config (copy button and config-file location included
 restart that tool, and the workbench pops "Connected" and writes a welcome memory once the agent is
 online. Closed it already? **Settings → Agents → *Reopen onboarding*** brings it back anytime.
 
-**Prefer MCP?** MCP-capable agents (Claude Code, Claude Desktop, Cursor) can skip the raw HTTP
-ceremony entirely: the bundled `miderhive-mcp` stdio server exposes memory, knowledge, messaging,
-error reports, skills and usage as ~18 MCP tools over the same local identity system. Issue the
-identity in **Settings → Agents → one-click connect** first, then hook up Claude Code with one
-command:
+**Prefer MCP?** MCP-capable agents (Claude Code, Claude Desktop, Cursor, Codex/ChatGPT, Droid, DSH,
+Hermes) can skip the raw HTTP ceremony entirely: the bundled `miderhive-mcp` stdio server exposes
+**27 MCP tools** over the same local identity system. The easiest path is
+**Settings → Agents → one-click connect**, which issues the identity, writes that tool's own config
+format for you where it is safe to do so, and shows a live **"Connected"** once the agent is up.
 
-```bash
-claude mcp add miderhive \
-  --env MIDERHIVE_AGENT_NAME=claude \
-  --env MIDERHIVE_AGENT_KEY=<paste key> \
-  -- "C:\Program Files\MiderHive\miderhive-mcp.exe"
+Doing it by hand for Claude Code — put this in `.mcp.json` at your project root, then run `claude`
+once to approve it (verified end-to-end: Claude Code lists the server and reports `√ Connected`):
+
+```json
+{
+  "mcpServers": {
+    "miderhive": {
+      "command": "C:\\Program Files\\MiderHive\\miderhive-mcp.exe",
+      "args": [],
+      "env": { "MIDERHIVE_AGENT_NAME": "claude", "MIDERHIVE_AGENT_KEY": "<paste key>" }
+    }
+  }
+}
 ```
 
-Claude Desktop / Cursor JSON config, the full tool inventory and manual troubleshooting live in
-**[docs/mcp.md](docs/mcp.md)**.
+> Running the CLI form instead? Use **cmd.exe**, not PowerShell: `claude` is an npm `claude.ps1`
+> shim and PowerShell swallows everything after `--`, giving
+> `error: missing required argument 'commandOrUrl'` (verified).
+
+Per-client config (Codex TOML, Droid JSON, DSH profile patch, Hermes YAML, ZCode env), the full tool
+inventory and manual troubleshooting live in **[docs/mcp.md](docs/mcp.md)**.
 
 ### Collaboration rules
 
@@ -201,7 +213,7 @@ Four everyday loops, all over the same API:
 | Document | Contents |
 |---|---|
 | [docs/api.md](docs/api.md) | Full HTTP reference — unified envelope, ~40 endpoints, task state machine, curl examples |
-| [docs/mcp.md](docs/mcp.md) | MCP setup for Claude Code / Claude Desktop / Cursor, tool inventory, manual troubleshooting |
+| [docs/mcp.md](docs/mcp.md) | MCP setup for Claude / Claude Desktop / ChatGPT-Codex / Factory Droid / DSH / Hermes / Cursor / Copilot, the 27-tool inventory, manual troubleshooting |
 | [docs/hardening-report.md](docs/hardening-report.md) | Known security boundaries and the hardening checklist |
 | [docs/brand.md](docs/brand.md) | Brand guidelines — palette, hexagon motif, tone; read before touching the UI |
 | [release/README.md](release/README.md) | How releases are cut: packaging, update manifest, checksums |
@@ -286,10 +298,14 @@ the same over HTTP. Restore lives in the same place (master key required).
 - Hardening regressions: reserved identities cannot be registered, registration role allow-list,
   point-to-point message read isolation, 1 MiB request-body cap, unified 400 envelope for field
   type errors — each covered by unit tests and verified over HTTP;
-- **35 offscreen GUI assertions** ([scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py),
+- **66 offscreen GUI assertions** ([scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py),
   build target `gui_selftest`): drives the real workbench UI headlessly through first-run
   onboarding → agent online → "Connected" popup + welcome memory → keyfile-loss health banner →
-  rotate-key fix (old key 401, new key 200) → Settings re-entry;
+  rotate-key fix (old key 401, new key 200) → Settings re-entry. It also verifies **every client's
+  generated config format**, exercises the **config auto-writer** (create / merge-preserving-others /
+  refuse-on-corrupt-JSON / replace-instead-of-append, all against a redirected config root) and
+  switches the live window to English to assert **no Chinese text remains in any widget**
+  (labels, buttons, combos, headers, placeholders and tooltips);
 - **14 platform assertions** ([scripts/test_onboarding_and_safety.py](scripts/test_onboarding_and_safety.py)):
   provisioning, heartbeat, welcome memory, keyfile-loss diagnostics and key-rotation semantics
   over HTTP;
