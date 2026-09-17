@@ -16,6 +16,7 @@
 
 #include "core/embed/embedder.h"
 #include "core/http/url_guard.h"
+#include "core/integrations.hpp"
 #include "core/platform.h"
 #include "core/util.h"
 #include "core/version_util.h"
@@ -774,6 +775,386 @@ static void test_legacy_migration() {
     fs::remove_all(tmp, ec);
 }
 
+// ---------------- P0/P1 验收：配置生成与写入（core，Qt-free） ----------------
+
+// 8 个工具 × 各自格式；含"反证"——旧实现的双引号 TOML 必须不再是合法写法
+static void test_integrations_generate() {
+    using namespace ah::integrations;
+    const std::string exe = "C:/x/miderhive-mcp.exe";
+    // JSON 家族：claude-code / droid 无 args，cursor 有 args 数组
+    for (const bool cursor : {false, true}) {
+        const std::string id = cursor ? "cursor" : "droid";
+        auto j = nlohmann::json::parse(generateConfig(id, exe, "a1", "k1"));
+        const auto srv = j["mcpServers"]["miderhive"];
+        CHECK_EQ(srv["command"].get<std::string>(), exe);
+        CHECK_EQ(srv["env"]["MIDERHIVE_AGENT_NAME"].get<std::string>(), "a1");
+        CHECK_EQ(srv["env"]["MIDERHIVE_AGENT_KEY"].get<std::string>(), "k1");
+        CHECK(cursor ? srv.contains("args") : !srv.contains("args"));
+    }
+    // TOML：字面量字符串（反斜杠不转义）；双引号基本字符串会让 config.toml 解析失败
+    const std::string winExe = "C:\\Qt\\6.8.3\\bin\\miderhive-mcp.exe";
+    const std::string toml = generateConfig("codex", winExe, "a1", "k1");
+    CHECK(toml.find("[mcp_servers.miderhive]") != std::string::npos);
+    CHECK(toml.find("command = '" + winExe + "'") != std::string::npos);
+    CHECK(toml.find("command = \"") == std::string::npos);
+    // DSH：密钥必须落在 env 块（DSH 会清洗子进程环境中的 *KEY*/*TOKEN*）
+    const std::string dsh = generateConfig("dsh", winExe, "d1", "k1");
+    CHECK(dsh.find("- insert:") != std::string::npos);
+    CHECK(dsh.find("dsh-mcp-client") != std::string::npos);
+    CHECK(dsh.find("MIDERHIVE_AGENT_KEY") != std::string::npos);
+    // Hermes：mcp_servers 映射
+    const std::string hermes = generateConfig("hermes", winExe, "h1", "k1");
+    CHECK(hermes.find("mcp_servers:") != std::string::npos);
+    CHECK(hermes.find("miderhive:") != std::string::npos);
+    // ZCode 环境变量 / Copilot 指令块
+    CHECK(generateConfig("zcode", winExe, "z1", "k1").find("MIDERHIVE_AGENT_NAME=z1") !=
+          std::string::npos);
+    CHECK(generateConfig("copilot", winExe, "p1", "k1").find("X-Agent-Name: p1") !=
+          std::string::npos);
+    // 注册表完整性：8 个 id、格式与默认名一致；hasWritableConfig 与格式匹配
+    CHECK_EQ(toolRegistry().size(), static_cast<size_t>(8));
+    for (const auto& t : toolRegistry()) {
+        CHECK(toolById(t.id) != nullptr);
+        CHECK(hasWritableConfig(t.id) ==
+              (t.format != Format::InstructionsMd && t.format != Format::EnvVars));
+    }
+    CHECK(relativeConfigPath("codex") == ".codex/config.toml");
+    CHECK(relativeConfigPath("zcode").empty());
+}
+
+// 写入器四条路径：新建 / 合并保留他人条目 / 坏 JSON 拒绝且不改 / 重复写入替换
+static void test_integrations_write() {
+    using namespace ah::integrations;
+    const fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_cfg_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const std::string exe = "C:/x/miderhive-mcp.exe";
+
+    // JSON（cursor → .cursor/mcp.json）：新建
+    WriteResult r = writeConfigUnderRoot(tmp.string(), "cursor", exe, "c1", "k1");
+    CHECK(r.ok);
+    const std::string cursorPath = (tmp / ".cursor/mcp.json").string();
+    std::string txt;
+    CHECK(readFileUtf8(cursorPath, txt));
+    nlohmann::json j = nlohmann::json::parse(txt, nullptr, false);
+    CHECK(!j.is_discarded() && j["mcpServers"]["miderhive"]["command"] == exe);
+
+    // 合并：已有其他 server 条目必须保留；覆盖前留 .miderhive.bak
+    const std::string withOther =
+        nlohmann::json{{"mcpServers",
+                        nlohmann::json{{"other", nlohmann::json{{"command", "x"}}}}}}
+            .dump();
+    writeFileUtf8(cursorPath, withOther);
+    r = writeConfigUnderRoot(tmp.string(), "cursor", exe, "c2", "k2");
+    CHECK(r.ok);
+    CHECK(readFileUtf8(cursorPath, txt));
+    j = nlohmann::json::parse(txt, nullptr, false);
+    CHECK(j["mcpServers"].contains("other"));
+    CHECK_EQ(j["mcpServers"]["miderhive"]["env"]["MIDERHIVE_AGENT_NAME"].get<std::string>(), "c2");
+    CHECK(std::filesystem::exists(cursorPath + ".miderhive.bak"));
+
+    // 坏 JSON：拒绝写入，原文件一字未改
+    const std::string garbage = "{ this is not json";
+    writeFileUtf8(cursorPath, garbage);
+    r = writeConfigUnderRoot(tmp.string(), "cursor", exe, "c3", "k3");
+    CHECK(!r.ok);
+    txt.clear();
+    CHECK(readFileUtf8(cursorPath, txt));
+    CHECK(txt == garbage);
+
+    // TOML：重复写入替换整张表，不追加第二份
+    CHECK(writeConfigUnderRoot(tmp.string(), "codex", "C:\\Qt\\mcp.exe", "x1", "k1").ok);
+    r = writeConfigUnderRoot(tmp.string(), "codex", "C:\\Qt\\mcp2.exe", "x2", "k2");
+    CHECK(r.ok);
+    txt.clear();
+    CHECK(readFileUtf8((tmp / ".codex/config.toml").string(), txt));
+    {
+        const size_t first = txt.find("[mcp_servers.miderhive]");
+        CHECK(first != std::string::npos);
+        CHECK(txt.find("[mcp_servers.miderhive]", first + 1) == std::string::npos);
+        CHECK(txt.find("mcp2.exe") != std::string::npos);
+    }
+
+    // DSH 补丁：顶层裸 "[]" 摘掉后追加；重复写入替换整块
+    const std::string dshPath = (tmp / ".dsh/profiles/web/cordis.patch.yml").string();
+    writeFileUtf8(dshPath, "# patch layer\n[]\n");
+    CHECK(writeConfigUnderRoot(tmp.string(), "dsh", exe, "d1", "k1").ok);
+    txt.clear();
+    CHECK(readFileUtf8(dshPath, txt));
+    CHECK(txt.find("mcp-miderhive") != std::string::npos);
+    CHECK(txt.find("dsh-mcp-client") != std::string::npos);
+    CHECK(txt.find("\n[]") == std::string::npos);
+    CHECK(writeConfigUnderRoot(tmp.string(), "dsh", exe, "d2", "k2").ok);
+    txt.clear();
+    CHECK(readFileUtf8(dshPath, txt));
+    {
+        const size_t first = txt.find("mcp-miderhive");
+        CHECK(first != std::string::npos);
+        CHECK(txt.find("mcp-miderhive", first + 1) == std::string::npos);
+        CHECK(txt.find("d2") != std::string::npos);
+        CHECK(txt.find("d1") == std::string::npos);
+    }
+
+    // Hermes：新建；已有 mcp_servers 段时合并且不破坏兄弟条目；重复写入替换
+    CHECK(writeConfigUnderRoot(tmp.string(), "hermes", exe, "h1", "k1").ok);
+    txt.clear();
+    CHECK(readFileUtf8((tmp / "hermes/config.yaml").string(), txt));
+    CHECK(txt.find("mcp_servers:") != std::string::npos);
+    const std::string hermesWithOther =
+        "model:\n  default: test\n\nmcp_servers:\n  github:\n    command: 'gh'\n    args: []\n"
+        "\ntts:\n  enabled: true\n";
+    writeFileUtf8((tmp / "hermes/config.yaml").string(), hermesWithOther);
+    r = writeConfigUnderRoot(tmp.string(), "hermes", exe, "h2", "k2");
+    CHECK(r.ok);
+    txt.clear();
+    CHECK(readFileUtf8((tmp / "hermes/config.yaml").string(), txt));
+    // github 条目保留、miderhive 插入到 mcp_servers 段内、tts 顶层节未被动到
+    CHECK(txt.find("github:") != std::string::npos);
+    CHECK(txt.find("miderhive:") != std::string::npos);
+    CHECK(txt.find("h2") != std::string::npos);
+    {
+        const size_t mcp = txt.find("mcp_servers:");
+        const size_t gh = txt.find("github:");
+        const size_t mid = txt.find("  miderhive:");
+        CHECK(gh != std::string::npos && mid != std::string::npos && mcp < gh && mid > mcp);
+        CHECK(txt.find("tts:") != std::string::npos);
+        CHECK(txt.find("tts:") > mid);
+    }
+    CHECK(writeConfigUnderRoot(tmp.string(), "hermes", exe, "h3", "k3").ok);
+    txt.clear();
+    CHECK(readFileUtf8((tmp / "hermes/config.yaml").string(), txt));
+    CHECK(txt.find("h3") != std::string::npos);
+    CHECK(txt.find("h2") == std::string::npos);
+    CHECK(txt.find("github:") != std::string::npos);
+
+    // Claude Code 项目级写入：<projectRoot>/.mcp.json
+    const std::string projDir = (tmp / "proj").string();
+    r = writeProjectConfig(projDir, exe, "cc1", "k1");
+    CHECK(r.ok);
+    txt.clear();
+    CHECK(readFileUtf8((fs::path(projDir) / ".mcp.json").string(), txt));
+    j = nlohmann::json::parse(txt, nullptr, false);
+    CHECK(j["mcpServers"]["miderhive"]["env"]["MIDERHIVE_AGENT_NAME"] == "cc1");
+
+    // 无固定配置文件的工具必须明确失败
+    CHECK(!writeConfigUnderRoot(tmp.string(), "zcode", exe, "z", "k").ok);
+    CHECK(!writeProjectConfig("", exe, "z", "k").ok);
+
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
+// ---------------- P1 验收：维度分表 / 迁移 / FTS / tag 下推 ----------------
+
+// Agent 自带 512 维向量与内置 384 维共存且互不污染
+static void test_embedding_dims() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_dim_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+
+        // 维度范围
+        CHECK(ah::isValidEmbeddingDim(384));
+        CHECK(ah::isValidEmbeddingDim(1536));
+        CHECK(!ah::isValidEmbeddingDim(0));
+        CHECK(!ah::isValidEmbeddingDim(63));
+        CHECK(!ah::isValidEmbeddingDim(4097));
+
+        // 内置 384 条目
+        ah::KnowledgeEntry builtin;
+        CHECK(p.knowledgeCreate("hermes", "builtin-dim",
+                                "builtin vector entry alpha384 marker", {}, "tech", {}, "",
+                                builtin, err));
+        // Agent 自带 512 维条目
+        std::vector<float> v512(512, 0.0f);
+        for (size_t i = 0; i < v512.size(); ++i) v512[i] = 0.01f;
+        ah::KnowledgeEntry custom;
+        CHECK(p.knowledgeCreate("hermes", "custom-dim",
+                                "agent supplied 512 dim entry beta512 marker", {"custom"},
+                                "tech", v512, "test-model", custom, err));
+        CHECK_EQ(custom.embedding_provider, std::string("test-model"));
+
+        // 同维向量检索命中自带条目；异维互不污染
+        std::vector<ah::KnowledgeHit> hits;
+        CHECK(p.knowledgeSearchSemantic(v512, 10, "", hits, err));
+        CHECK(!hits.empty());
+        bool sawCustom = false, sawBuiltin = false;
+        for (const auto& h : hits) {
+            if (h.entry.uuid == custom.uuid) sawCustom = true;
+            if (h.entry.uuid == builtin.uuid) sawBuiltin = true;
+        }
+        CHECK(sawCustom);
+        CHECK(!sawBuiltin);  // 512 维查询在 512 分表里，不会命中 384 条目
+
+        CHECK(p.knowledgeSearch("alpha384", ah::SearchMode::Semantic, 10, "", hits, err));
+        sawCustom = sawBuiltin = false;
+        for (const auto& h : hits) {
+            if (h.entry.uuid == custom.uuid) sawCustom = true;
+            if (h.entry.uuid == builtin.uuid) sawBuiltin = true;
+        }
+        CHECK(sawBuiltin);
+        CHECK(!sawCustom);
+
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
+// 存量旧库（单张 knowledge_vec）启动时自动迁移到按维度分表，且数据不丢
+static void test_legacy_vec_migration() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_vmig_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        ah::KnowledgeEntry migrated;
+        CHECK(p.knowledgeCreate("hermes", "迁移样本", "legacy vector migration entry m1", {},
+                                "tech", {}, "", migrated, err));
+        p.shutdown();
+    }
+    // 把新表伪装回旧表名（vec0 不支持 RENAME：新建-复制-删除）
+    {
+        sqlite3* db = nullptr;
+        CHECK(sqlite3_open(dbPath.string().c_str(), &db) == SQLITE_OK);
+        CHECK(sqlite3_vec_init(db, nullptr, nullptr) == SQLITE_OK);
+        char* msg = nullptr;
+        CHECK(sqlite3_exec(db,
+                           "CREATE VIRTUAL TABLE knowledge_vec USING vec0(entry_id INTEGER "
+                           "PRIMARY KEY, embedding float[384]);"
+                           "INSERT INTO knowledge_vec SELECT entry_id, embedding FROM "
+                           "knowledge_vec_d384;"
+                           "DROP TABLE knowledge_vec_d384;",
+                           nullptr, nullptr, &msg) == SQLITE_OK);
+        sqlite3_free(msg);
+        sqlite3_close(db);
+    }
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));  // 迁移在这里发生
+        std::vector<ah::KnowledgeEntry> out;
+        CHECK(p.knowledgeList(10, "", out, err));
+        CHECK_EQ(out.size(), static_cast<size_t>(1));
+        std::vector<ah::KnowledgeHit> hits;
+        CHECK(p.knowledgeSearch("migration", ah::SearchMode::Semantic, 10, "", hits, err));
+        CHECK(!hits.empty());
+        // 旧表已消失、新表回归；重复 bootstrap 幂等
+        p.shutdown();
+        CHECK(p.bootstrap(err));
+        out.clear();
+        CHECK(p.knowledgeList(10, "", out, err));
+        CHECK_EQ(out.size(), static_cast<size_t>(1));
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
+// FTS5 关键词检索：中文子串、大小写不敏感、旧版本不命中、删除即不可检索
+static void test_keyword_fts() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_fts_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        ah::KnowledgeEntry a, b;
+        CHECK(p.knowledgeCreate("hermes", "SQLite Trigram Guide",
+                                "fts probe keyword zzzqqq unique marker", {"fts"}, "tech", {}, "",
+                                a, err));
+        CHECK(p.knowledgeCreate("hermes", "中文全文检索",
+                                "中文内容检索探针条目，关键词是青枫浦不上不胜愁。", {"中文"}, "tech",
+                                {}, "", b, err));
+
+        // >=3 码点走 FTS：英文大小写不敏感（与 LIKE 行为一致）
+        std::vector<ah::KnowledgeHit> out;
+        CHECK(p.knowledgeSearch("zzzqqq", ah::SearchMode::Keyword, 10, "", out, err));
+        CHECK_EQ(out.size(), static_cast<size_t>(1));
+        CHECK_EQ(out[0].entry.uuid, a.uuid);
+        CHECK(p.knowledgeSearch("sqlite trigram", ah::SearchMode::Keyword, 10, "", out, err));
+        CHECK(!out.empty() && out[0].entry.uuid == a.uuid);
+        // 中文子串（>=3 字）
+        CHECK(p.knowledgeSearch("青枫浦不上", ah::SearchMode::Keyword, 10, "", out, err));
+        CHECK(!out.empty() && out[0].entry.uuid == b.uuid);
+        // 引号/横杠等 FTS5 语法字符不得引发错误或语义漂移
+        CHECK(p.knowledgeSearch("probe \"quoted\" entry-x", ah::SearchMode::Keyword, 10, "", out,
+                                err));
+        CHECK(out.empty());
+        // <3 码点回退 LIKE
+        CHECK(p.knowledgeSearch("中", ah::SearchMode::Keyword, 10, "", out, err));
+        CHECK(!out.empty());
+
+        // 追加新版本后，旧版本的独有内容不再可检索（is_latest 过滤）
+        CHECK(p.knowledgeAddVersion("hermes", a.uuid, "", "second version content yyywww", {}, "",
+                                    a, err));
+        CHECK(p.knowledgeSearch("zzzqqq", ah::SearchMode::Keyword, 10, "", out, err));
+        CHECK(out.empty());
+        CHECK(p.knowledgeSearch("yyywww", ah::SearchMode::Keyword, 10, "", out, err));
+        CHECK(!out.empty() && out[0].entry.uuid == a.uuid);
+
+        // 删除即不可检索
+        CHECK(p.knowledgeRemove("zcode", b.uuid, err));
+        CHECK(p.knowledgeSearch("青枫浦不上", ah::SearchMode::Keyword, 10, "", out, err));
+        CHECK(out.empty());
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
+// semantic + tag：先多召回再过滤，limit 能给满；不足时如实返回
+static void test_semantic_tag_pushdown() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_tag_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        // 50 条带 tag、5 条不带，共享同一召回关键词
+        for (int i = 0; i < 50; ++i) {
+            ah::KnowledgeEntry e;
+            CHECK(p.knowledgeCreate(
+                "hermes", "tagged " + std::to_string(i),
+                "shared recall token kNNfeed tagged entry number " + std::to_string(i), {"t1"},
+                "tech", {}, "", e, err));
+        }
+        for (int i = 0; i < 5; ++i) {
+            ah::KnowledgeEntry e;
+            CHECK(p.knowledgeCreate(
+                "hermes", "untagged " + std::to_string(i),
+                "shared recall token kNNfeed untagged entry number " + std::to_string(i), {},
+                "tech", {}, "", e, err));
+        }
+        std::vector<ah::KnowledgeHit> hits;
+        CHECK(p.knowledgeSearch("kNNfeed", ah::SearchMode::Semantic, 10, "t1", hits, err));
+        // 旧行为："先取 10 条再过滤"，过滤后常常只剩零星几条；现在必须给满 10 条
+        CHECK_EQ(hits.size(), static_cast<size_t>(10));
+        for (const auto& h : hits) {
+            bool has = false;
+            for (const auto& t : h.entry.tags)
+                if (t == "t1") has = true;
+            CHECK(has);
+        }
+        // 匹配数不足 limit 时如实返回实际条数（3 条带 t1 的短内容）
+        for (int i = 0; i < 3; ++i) {
+            ah::KnowledgeEntry e;
+            CHECK(p.knowledgeCreate("hermes", "solo " + std::to_string(i),
+                                    "another token soloFeed entry " + std::to_string(i), {"t2"},
+                                    "tech", {}, "", e, err));
+        }
+        CHECK(p.knowledgeSearch("soloFeed", ah::SearchMode::Semantic, 10, "t2", hits, err));
+        CHECK_EQ(hits.size(), static_cast<size_t>(3));
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -789,6 +1170,12 @@ int main() {
     run("platform_e2e", test_platform_end_to_end);
     run("knowledge_vector_atomicity", test_knowledge_vector_atomicity);
     run("legacy_migration", test_legacy_migration);
+    run("integrations_generate", test_integrations_generate);
+    run("integrations_write", test_integrations_write);
+    run("embedding_dims", test_embedding_dims);
+    run("legacy_vec_migration", test_legacy_vec_migration);
+    run("keyword_fts", test_keyword_fts);
+    run("semantic_tag_pushdown", test_semantic_tag_pushdown);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

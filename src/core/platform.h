@@ -77,6 +77,11 @@ public:
     bool knowledgeSearch(const std::string& query, SearchMode mode, int limit,
                          const std::string& tagFilter, std::vector<KnowledgeHit>& out,
                          std::string& err);
+    // 语义检索（Agent 自带模型向量）：queryVec 的维度决定在哪个分表里检索，
+    // 需与写入该条目时的维度一致。不走内置嵌入器。
+    bool knowledgeSearchSemantic(const std::vector<float>& queryVec, int limit,
+                                 const std::string& tagFilter, std::vector<KnowledgeHit>& out,
+                                 std::string& err);
     // 管理性硬删除（仅管理者/主密钥），连同全部版本与向量；记入审计
     bool knowledgeRemove(const std::string& actor, const std::string& uuid, std::string& err);
 

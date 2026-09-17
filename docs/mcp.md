@@ -209,7 +209,7 @@ Copilot 不支持 MCP。向导会生成一段 HTTP 指令块，粘进仓库的
 | 工具 | 说明 |
 |---|---|
 | `knowledge_add` | 新增一条知识（平台自动生成向量，可语义检索） |
-| `knowledge_search` | 检索：`mode=keyword` 子串 / `mode=semantic` 向量相似 |
+| `knowledge_search` | 检索：`mode=keyword` 子串 / `mode=semantic` 向量相似；可带 `embedding` 查询向量（64..4096 维，与写入条目时的模型一致） |
 | `knowledge_list` | 浏览最新条目 |
 | `knowledge_get` | 按 uuid 读最新版本 |
 | `knowledge_versions` | 按 uuid 列出全部历史版本 |

@@ -164,13 +164,15 @@ API Key 立即失效、操作记入审计；管理者自身（`zcode`）不可�
   "content": "……",
   "tags": ["cmake", "向量"],
   "category": "技术文档",
-  "embedding": [0.01, -0.02, …],   // 可选，384 维 float 数组
+  "embedding": [0.01, -0.02, …],   // 可选，64..4096 维 float 数组
   "embedder": "text-embedding-3-large" // 可选，提供 embedding 时标注模型
 }
 ```
 
 不提供 `embedding` 时，平台用内置离线 n-gram 哈希嵌入器兜底（`embedding_provider`
-记为 `ngram-hash`）；有模型能力的 Agent 建议自带向量以获得更好的语义效果。
+记为 `ngram-hash`，384 维）；有模型能力的 Agent 建议自带向量以获得更好的语义效果。
+向量**按维度分表**存储：内置 384 维与模型向量（1024/1536/3072…）互不干扰，
+检索时必须使用同一维度、同一模型的查询向量。
 
 **POST /api/knowledge/search**
 
@@ -178,7 +180,12 @@ API Key 立即失效、操作记入审计；管理者自身（`zcode`）不可�
 { "query": "向量检索怎么做", "mode": "semantic", "limit": 10, "tag": "cmake" }
 ```
 
-`mode`: `keyword`（LIKE 匹配，默认）| `semantic`（vec0 向量距离排序）。
+`mode`: `keyword`（默认）| `semantic`。
+另可选 `embedding`（64..4096 维数组）：**仅在 `mode=semantic` 时使用**——即与写入
+条目时同一模型的查询向量，平台在对应维度分表里做距离排序；省略时用内置 384 维
+嵌入器。`keyword` 模式忽略该字段。
+`keyword` 为关键词检索：>=3 个码点走 FTS5 trigram 全文索引（子串语义、大小写
+不敏感），更短的查询回退 LIKE。
 语义模式返回每项 `score`（距离，越小越相关）。
 
 **POST /api/knowledge/{uuid}/versions** —— 追加新版本（旧版本永不覆盖）：

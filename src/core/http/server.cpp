@@ -430,7 +430,20 @@ void HttpServer::setupRoutes() {
         SearchMode m = (norm == "semantic") ? SearchMode::Semantic : SearchMode::Keyword;
         std::vector<KnowledgeHit> hits;
         std::string err;
-        if (!p.knowledgeSearch(query, m, limit, tag, hits, err)) { send(res, fail(400, err)); return; }
+        // 可选 query embedding：只在 semantic 模式使用（Agent 自带模型向量检索，
+        // 维度需与写入时一致）。keyword 模式下忽略——keyword 是子串匹配，没有向量语义。
+        bool hasEmb = false;
+        std::vector<float> emb;
+        if (!extractEmbedding(body, hasEmb, emb, err)) { send(res, fail(400, err)); return; }
+        if (m == SearchMode::Semantic && hasEmb) {
+            if (!p.knowledgeSearchSemantic(emb, limit, tag, hits, err)) {
+                send(res, fail(400, err));
+                return;
+            }
+        } else if (!p.knowledgeSearch(query, m, limit, tag, hits, err)) {
+            send(res, fail(400, err));
+            return;
+        }
         json arr = json::array();
         for (const auto& h : hits) {
             json j = knowledgeToJson(h.entry, h.score);

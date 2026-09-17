@@ -52,11 +52,20 @@ Outputs: `build\src\gui\Release\miderhive.exe` (workbench),
 ## Test
 
 ```powershell
-ctest --preset release                             # unit tests (291 assertions)
+ctest --preset release                             # unit tests
 python scripts/feasibility_check.py 8787           # integration, needs a running workbench
 python scripts/verify_gui_selftest.py              # offscreen GUI end-to-end, no human needed
 python scripts/test_onboarding_and_safety.py       # onboarding + key rotation over HTTP
 python scripts/mcp_check.py 8787 <mcp-exe> zcode <key>   # MCP stdio JSON-RPC
+python scripts/verify_clients.py                   # per-client connect matrix (skips absent tools)
+```
+
+`agent-cli` can also generate and write the per-client connect configs on its own — the same
+code the GUI wizard runs, useful for scripts and for wiring up headless machines:
+
+```powershell
+agent-cli connect-snippet --tool codex --command "C:\Program Files\MiderHive\miderhive-mcp.exe" --name codex --key <key>
+agent-cli apply-config --tool claude-code --dir <project-root> --name claude --key <key>   # writes .mcp.json
 ```
 
 What CI runs on every push and PR: the build, a check that the GUI binary actually exists, `ctest`,

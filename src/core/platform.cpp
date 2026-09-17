@@ -463,6 +463,19 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
     return true;
 }
 
+bool Platform::knowledgeSearchSemantic(const std::vector<float>& queryVec, int limit,
+                                       const std::string& tagFilter,
+                                       std::vector<KnowledgeHit>& out, std::string& err) {
+    std::lock_guard lock(mutex_);
+    if (queryVec.empty()) { err = "embedding is required for semantic search"; return false; }
+    if (!isValidEmbeddingDim(static_cast<int>(queryVec.size()))) {
+        err = "embedding dimension " + std::to_string(queryVec.size()) +
+              " not supported (expected 64..4096)";
+        return false;
+    }
+    return knowledge_.searchSemantic(queryVec, limit, tagFilter, out, err);
+}
+
 bool Platform::knowledgeRemove(const std::string& actor, const std::string& uuid,
                                std::string& err) {
     std::lock_guard lock(mutex_);
