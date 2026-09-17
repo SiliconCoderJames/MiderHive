@@ -26,6 +26,8 @@ public:
 private:
     // 选中某个接入工具：本地检测 → 预配 Agent → 生成配置片段并展示
     void pickTool(const ui::integrations::Tool& tool);
+    // 把当前片段合并进该工具的真实配置文件（能写就写，失败给可执行建议）
+    void writeToConfig();
 
     std::vector<ui::ThemeSwatch*> swatches_;
     QVector<QPushButton*> toolBtns_;
@@ -35,7 +37,10 @@ private:
     QLabel* pathHint_ = nullptr;
     QLabel* stepsLabel_ = nullptr;
     QPushButton* copyBtn_ = nullptr;
+    QPushButton* writeBtn_ = nullptr;
     QWidget* resultBox_ = nullptr;
     ui::integrations::Tool current_;
+    QString issuedKey_;  // 本次签发的明文密钥（仅存于对话框生命周期内）
+    QString issuedName_;
     ah::Platform& platform_;
 };
