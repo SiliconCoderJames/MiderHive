@@ -360,11 +360,17 @@ inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
         return true;
     }
 
-    // 2) 父节结束行：父键之后第一个非空且缩进为 0 的行
+    // 2) 父节结束行：父键之后第一个"顶格且非注释"的行。
+    // 顶格注释按 YAML 语义属于本节（用户常把注释写在节尾），不能当边界——
+    // 否则插入点会跑到注释之前，注释的视觉归属被改变。
+    const auto isBoundary = [](const std::string& l) {
+        if (trimCopy(l).empty()) return false;
+        if (l[0] == '#') return false;
+        return indentOf(l) == 0;
+    };
     int end = static_cast<int>(lines.size());
     for (int i = parent + 1; i < static_cast<int>(lines.size()); ++i) {
-        if (trimCopy(lines[i]).empty()) continue;
-        if (indentOf(lines[i]) == 0) { end = i; break; }
+        if (isBoundary(lines[i])) { end = i; break; }
     }
 
     // 3) 形状安全检查（只在父节范围内）
@@ -416,10 +422,13 @@ inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
         out.insert(out.end(), blockLines.begin() + 1, blockLines.end());
         out.insert(out.end(), lines.begin() + ce, lines.end());
     } else {
-        // 父节内最后一个非空行之后
+        // 父节内最后一个"非空且非顶格注释"的行之后（让节尾注释留在原处）
         int insertAt = parent + 1;
         for (int i = parent + 1; i < end; ++i) {
-            if (!trimCopy(lines[i]).empty()) insertAt = i + 1;
+            const std::string& l = lines[i];
+            if (trimCopy(l).empty()) continue;
+            if (l[0] == '#' && indentOf(l) == 0) continue;
+            insertAt = i + 1;
         }
         out.insert(out.end(), lines.begin(), lines.begin() + insertAt);
         out.insert(out.end(), blockLines.begin() + 1, blockLines.end());
@@ -441,7 +450,26 @@ inline bool readFileUtf8(const std::string& path, std::string& out) {
     return true;
 }
 
-// 原子写：先写 .tmp 再改名，中途失败不留半截配置。
+// 把文本统一成 CRLF（先归一为 LF 再去加，避免出现 \r\r\n）
+inline std::string toCrlf(const std::string& text) {
+    std::string lf;
+    lf.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;
+        lf += text[i];
+    }
+    std::string out;
+    out.reserve(lf.size() + lf.size() / 16);
+    for (char c : lf) {
+        if (c == '\n') out += '\r';
+        out += c;
+    }
+    return out;
+}
+
+// 原子写：先写 .tmp 再改名。rename 在 MSVC 上按 POSIX 语义覆盖目标，
+// 因此不需要"先删目标"——那一步会在删与改名之间留出"文件不存在"的窗口
+// （进程此刻被杀就只剩 .miderhive.bak）。
 inline bool writeFileUtf8(const std::string& path, const std::string& text) {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -459,7 +487,6 @@ inline bool writeFileUtf8(const std::string& path, const std::string& text) {
             return false;
         }
     }
-    fs::remove(path, ec);  // Windows 的 rename 不覆盖既有文件
     fs::rename(tmp, path, ec);
     if (ec) {
         fs::remove(tmp, ec);
@@ -519,6 +546,9 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
                           "配置文件存在但读不出来（权限不足？）：" + path,
                           "The config file exists but cannot be read (permissions?): " + path);
     }
+    // 原文件的换行风格必须**在这里**捕获：下面的 YAML 合并是就地修改，
+    // splitLines/joinLines 会把 \r 剥掉，到写之前再判断就只剩 LF 了（实测踩过）
+    const bool wasCrlf = existing.find("\r\n") != std::string::npos;
 
     std::string out;
     bool ok = false;
@@ -568,6 +598,8 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
     }
 
     backupFile(path);
+    // 原文件是 CRLF 就写回 CRLF：整份被改成 LF 会产生满屏 diff（配置常进版本库）
+    if (wasCrlf) out = toCrlf(out);
     if (!writeFileUtf8(path, out)) {
         return makeResult(false,
                           "写入失败：" + path + "（可能有权限或文件被占用）。原文件已回退到 .miderhive.bak。",

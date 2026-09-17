@@ -935,6 +935,57 @@ static void test_integrations_write() {
     j = nlohmann::json::parse(txt, nullptr, false);
     CHECK(j["mcpServers"]["miderhive"]["env"]["MIDERHIVE_AGENT_NAME"] == "cc1");
 
+    // B2 换行风格：原文件是 CRLF 就写回 CRLF（整份改成 LF 会产生满屏 diff）
+    {
+        const fs::path hermesPath = tmp / "hermes/config.yaml";
+        std::string crlf = "model:\n  default: t\n\nmcp_servers:\n  github:\n    command: 'gh'\n";
+        std::string crlfText;
+        for (char c : crlf) {
+            if (c == '\n') crlfText += '\r';
+            crlfText += c;
+        }
+        writeFileUtf8(hermesPath.string(), crlfText);
+        CHECK(writeConfigUnderRoot(tmp.string(), "hermes", exe, "crlf1", "k1").ok);
+        std::string outText;
+        CHECK(readFileUtf8(hermesPath.string(), outText));
+        CHECK(outText.find("\r\n") != std::string::npos);
+        // 不允许出现"裸 LF"（即每个 \n 前面都必须是 \r）
+        bool bareLf = false;
+        for (size_t i = 0; i < outText.size(); ++i)
+            if (outText[i] == '\n' && (i == 0 || outText[i - 1] != '\r')) bareLf = true;
+        CHECK(!bareLf);
+        CHECK(outText.find("github:") != std::string::npos);
+        CHECK(outText.find("crlf1") != std::string::npos);
+
+        // LF 文件不得被反向污染成 CRLF
+        writeFileUtf8(hermesPath.string(), "mcp_servers:\n  github:\n    command: 'gh'\n");
+        CHECK(writeConfigUnderRoot(tmp.string(), "hermes", exe, "lf1", "k1").ok);
+        CHECK(readFileUtf8(hermesPath.string(), outText));
+        CHECK(outText.find("\r\n") == std::string::npos);
+        CHECK(outText.find("lf1") != std::string::npos);
+    }
+
+    // B3 节尾顶格注释：属于本节、不当作边界；插入应在注释之前，注释视觉归属不变
+    {
+        const fs::path hermesPath = tmp / "hermes/config.yaml";
+        writeFileUtf8(hermesPath.string(),
+                      "mcp_servers:\n  github:\n    command: 'gh'\n# 节尾注释（归属 tts）\n"
+                      "tts:\n  enabled: true\n");
+        CHECK(writeConfigUnderRoot(tmp.string(), "hermes", exe, "cmt1", "k1").ok);
+        std::string outText;
+        CHECK(readFileUtf8(hermesPath.string(), outText));
+        const size_t mcp = outText.find("mcp_servers:");
+        const size_t mid = outText.find("  miderhive:");
+        const size_t cmt = outText.find("# 节尾注释");
+        const size_t tts = outText.find("tts:");
+        CHECK(mcp != std::string::npos && mid != std::string::npos && cmt != std::string::npos &&
+              tts != std::string::npos);
+        CHECK(mcp < mid);       // 插在父节内
+        CHECK(mid < cmt);       // 且排在注释之前（注释仍紧邻 tts）
+        CHECK(cmt < tts);
+        CHECK(outText.find("github:") != std::string::npos);
+    }
+
     // 无固定配置文件的工具必须明确失败
     CHECK(!writeConfigUnderRoot(tmp.string(), "zcode", exe, "z", "k").ok);
     CHECK(!writeProjectConfig("", exe, "z", "k").ok);
@@ -1247,6 +1298,25 @@ static void test_fts_rebuild_legacy() {
     fs::remove_all(tmp, ec);
 }
 
+// B1 守卫：写入必须是"替换"语义——第二次写入内容为新值、不留 .miderhive.tmp、
+// 目录不存在时能建出来。这也是 writeFileUtf8 去掉"先删目标"那次 remove 的依据。
+static void test_write_replaces_atomically() {
+    const fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_wr_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const std::string p = (tmp / "cfg.json").string();
+    CHECK(ah::integrations::writeFileUtf8(p, "v1"));
+    CHECK(ah::integrations::writeFileUtf8(p, "v2"));
+    std::string t;
+    CHECK(ah::integrations::readFileUtf8(p, t));
+    CHECK_EQ(t, std::string("v2"));
+    CHECK(!std::filesystem::exists(p + ".miderhive.tmp"));
+    const std::string deep = (tmp / "a" / "b" / "c.json").string();
+    CHECK(ah::integrations::writeFileUtf8(deep, "x"));
+    CHECK(std::filesystem::exists(deep));
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1264,6 +1334,7 @@ int main() {
     run("legacy_migration", test_legacy_migration);
     run("integrations_generate", test_integrations_generate);
     run("integrations_write", test_integrations_write);
+    run("write_replaces_atomically", test_write_replaces_atomically);
     run("embedding_dims", test_embedding_dims);
     run("legacy_vec_migration", test_legacy_vec_migration);
     run("keyword_fts", test_keyword_fts);
