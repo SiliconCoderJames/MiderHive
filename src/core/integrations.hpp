@@ -323,12 +323,25 @@ inline bool upsertYamlListItem(std::string& text, const std::string& needle,
     return true;
 }
 
+// 块标量开 opener：形如 "key: |" / "key: >-" —— 其内容行会以更深的缩进伪装成
+// 键与节结构，让基于缩进的行级边界计算失真。
+inline bool isBlockScalarOpener(const std::string& trimmed) {
+    const size_t colon = trimmed.find(':');
+    if (colon == std::string::npos) return false;
+    const std::string v = trimCopy(trimmed.substr(colon + 1));
+    if (v == "|" || v == ">") return true;
+    if (v.size() == 2 && (v[0] == '|' || v[0] == '>') && (v[1] == '-' || v[1] == '+')) return true;
+    return false;
+}
+
 // 把 "<childKey>:" 条目插入/替换到顶层 "<parentKey>:" 节下（Hermes 的 mcp_servers）。
 // block 需包含完整的父键行（即 generateConfig("hermes") 的原样输出）。
 //
-// 约定与安全边界：子键缩进必须正好 2 空格；节内出现制表符、块标量（| >）、锚点/别名
-// （& *）或标签（!!）时返回 false——这些形状做文本手术没有把握，宁可让用户手工粘贴
-// 也不要弄坏配置。
+// 形状安全边界（**全文件**扫描，理由见下）：
+//   * 制表符缩进——本模块的边界计算只数空格，tab 行会被误当成顶格键；
+//   * 块标量 opener——其内容行会伪装成节结构。
+// 这两种形状下"节边界"本身就不可信，所以不做自作聪明的局部扫描，整体拒绝并让
+// 用户手工粘贴。（锚点/别名/行内 `key: &a` 不影响按缩进的插入，不拒绝。）
 inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
                                const std::string& childKey, const std::string& block,
                                std::string& whyZh, std::string& whyEn) {
@@ -373,29 +386,11 @@ inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
         if (isBoundary(lines[i])) { end = i; break; }
     }
 
-    // 3) 形状安全检查（只在父节范围内）
+    // 3) 节内残留检查：制表符/块标量已在 writeConfigFile 里做全文件扫描；
+    //    这里只挡"缩进为 1"——这种行在本模块的兄弟/内容判定里两边都不属于。
     for (int i = parent + 1; i < end; ++i) {
-        const std::string& l = lines[i];
-        if (trimCopy(l).empty()) continue;
-        if (!l.empty() && l[0] == '\t') {
-            whyZh = "该 YAML 用了制表符缩进，形状无法安全合并，请手工粘贴。";
-            whyEn = "This YAML is indented with tabs; I cannot merge it safely — please paste manually.";
-            return false;
-        }
-        const std::string t = trimCopy(l);
-        if (!t.empty() && (t[0] == '|' || t[0] == '>' || t[0] == '&' || t[0] == '*')) {
-            whyZh = "该 YAML 含块标量或锚点/别名，形状无法安全合并，请手工粘贴。";
-            whyEn = "This YAML contains a block scalar or anchor/alias; I cannot merge it safely — "
-                    "please paste manually.";
-            return false;
-        }
-        if (l.find("!!") != std::string::npos) {
-            whyZh = "该 YAML 含显式标签，形状无法安全合并，请手工粘贴。";
-            whyEn = "This YAML contains an explicit tag; I cannot merge it safely — please paste manually.";
-            return false;
-        }
-        const int ind = indentOf(l);
-        if (ind == 1) {
+        if (trimCopy(lines[i]).empty()) continue;
+        if (indentOf(lines[i]) == 1) {
             whyZh = "该 YAML 缩进不是 2 空格的倍数，形状无法安全合并，请手工粘贴。";
             whyEn = "This YAML is not indented in multiples of two spaces; I cannot merge it safely — "
                     "please paste manually.";
@@ -549,6 +544,26 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
     // 原文件的换行风格必须**在这里**捕获：下面的 YAML 合并是就地修改，
     // splitLines/joinLines 会把 \r 剥掉，到写之前再判断就只剩 LF 了（实测踩过）
     const bool wasCrlf = existing.find("\r\n") != std::string::npos;
+    // YAML 两条路径的形状安全（全文件扫描，理由见 upsertYamlMapEntry 注释）
+    if (fmt == Format::DshPatchYaml || fmt == Format::HermesYaml) {
+        {
+            std::vector<std::string> lines = splitLines(existing);
+            for (const auto& l : lines) {
+                if (!l.empty() && l[0] == '\t') {
+                    return makeResult(false,
+                                      "该 YAML 用了制表符缩进，形状无法安全合并，请手工粘贴。",
+                                      "This YAML is indented with tabs; I cannot merge it safely — "
+                                      "please paste manually.");
+                }
+                if (isBlockScalarOpener(trimCopy(l))) {
+                    return makeResult(false,
+                                      "该 YAML 含块标量（key: | 或 >），形状无法安全合并，请手工粘贴。",
+                                      "This YAML contains a block scalar (key: | or >); I cannot "
+                                      "merge it safely — please paste manually.");
+                }
+            }
+        }
+    }
 
     std::string out;
     bool ok = false;

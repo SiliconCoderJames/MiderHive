@@ -58,6 +58,7 @@ python scripts/verify_gui_selftest.py              # offscreen GUI end-to-end, n
 python scripts/test_onboarding_and_safety.py       # onboarding + key rotation over HTTP
 python scripts/mcp_check.py 8787 <mcp-exe> zcode <key>   # MCP stdio JSON-RPC
 python scripts/verify_clients.py                   # per-client connect matrix (skips absent tools)
+python scripts/fuzz_config_merge.py                # adversarial shapes against the config merger
 ```
 
 `agent-cli` can also generate and write the per-client connect configs on its own — the same
