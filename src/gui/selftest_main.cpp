@@ -11,23 +11,38 @@
 // 启动自检 preflight 的端口探测。
 // 运行环境由 scripts/verify_gui_selftest.py 提供：隔离的 MIDERHIVE_HOME/PORT、
 // QT_QPA_PLATFORM=offscreen、QSettings 重定向到临时目录（不碰真实注册表）。
+// 可选抓帧（默认关闭）：--shots <dir> [--shots-size 1440x920] 把关键步骤的窗口与面板
+// 画面用 QWidget::grab()（应用自身渲染，离屏可用）落成 PNG。README 的演示动图与面板
+// 巡览拼图由 scripts/make_demo_gif.py 从这些帧组装。不传参时行为与本开关无关。
 // 任何断言失败或步骤超时：打印每步结果与"自动处理过的弹窗日志"后以 1 退出。
+#include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
 #include <QEventLoop>
+#include <QFile>
+#include <QGroupBox>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageLogContext>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
+#include <QStackedWidget>
+#include <QStringList>
+#include <QTabBar>
+#include <QTableWidget>
 #include <QTcpServer>
 #include <QTimer>
+#include <QTreeWidget>
 
 #include <cstdio>
 #include <string>
@@ -35,6 +50,7 @@
 
 #include "core/platform.h"
 #include "core/util.h"
+#include "connect_dialog.h"
 #include "gui_util.h"
 #include "i18n.h"
 #include "integrations.h"
@@ -113,6 +129,28 @@ int httpPost(const QString& port, const QString& path, const QByteArray& agentNa
     return code;
 }
 
+// ---- 抓帧（--shots <dir>，默认关闭）----
+// 只出图，不参与断言：不传 --shots 时一次 grab() 都不会发生，流程与断言与从前完全一致。
+// 用 QWidget::grab()（应用自身渲染）而不是屏幕截图 API——offscreen 平台下同样能出图，
+// 因此 CI/无桌面环境也能生成 README 素材。面板另存一份"整页"帧（QScrollArea 页，
+// 即用户所见的一屏），供 2×2 巡览拼图直接使用，避免按坐标裁切窗口带来的偏移。
+struct ShotWriter {
+    QString dir;
+    int seq = 0;
+    bool on() const { return !dir.isEmpty(); }
+    void save(QWidget* w, const QString& name, QWidget* page = nullptr) {
+        if (!on() || !w) return;
+        QDir().mkpath(dir);
+        const QString base =
+            QString("%1/%2-%3").arg(dir).arg(seq++, 2, 10, QChar('0')).arg(name);
+        QApplication::processEvents();  // 先让布局/排队刷新落地，避免抓到半渲染帧
+        const QPixmap pm = w->grab();
+        pm.save(base + ".png");
+        if (page) page->grab().save(base + "-page.png");
+        printNow(QString("SHOT  %1.png  %2x%3").arg(base).arg(pm.width()).arg(pm.height()));
+    }
+};
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -122,6 +160,37 @@ int main(int argc, char** argv) {
 
     const QString home = QString::fromStdString(ah::defaultHomeDir());
     const QString port = envPort();
+
+    // ---- 抓帧开关（默认关闭）：--shots <dir> [--shots-size 1440x920] ----
+    ShotWriter shots;
+    int shotW = 1440, shotH = 920;
+    for (int i = 1; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        QString val;
+        auto takeNext = [&] {
+            if (i + 1 < argc) val = QString::fromLocal8Bit(argv[++i]);
+        };
+        auto parseSize = [&](const QString& s) {
+            const QStringList xy = s.split('x', Qt::SkipEmptyParts);
+            if (xy.size() == 2 && xy[0].toInt() > 0 && xy[1].toInt() > 0) {
+                shotW = xy[0].toInt();
+                shotH = xy[1].toInt();
+            }
+        };
+        if (a == "--shots") {
+            takeNext();
+            shots.dir = val;
+        } else if (a.startsWith("--shots=")) {
+            shots.dir = a.mid(8);
+        } else if (a == "--shots-size") {
+            takeNext();
+            parseSize(val);
+        } else if (a.startsWith("--shots-size=")) {
+            parseSize(a.mid(13));
+        }
+    }
+    if (shots.on())
+        printNow(QString("抓帧开启：%1  画幅 %2x%3").arg(shots.dir).arg(shotW).arg(shotH));
 
     // ---- 测试隔离：QSettings（含具名构造的 i18n 读取）全部落到临时 ini，不碰真实注册表 ----
     const QString settingsDir = home + "/ui-settings";
@@ -147,7 +216,8 @@ int main(int argc, char** argv) {
 
     // ================= A 组：纯逻辑断言（不起界面） =================
 
-    // A1 MCP 配置生成：三工具各按其格式（claude/cursor→JSON，codex→TOML）
+    // A1 MCP 配置生成：各工具按各自格式（claude/droid/cursor→JSON，codex→TOML，
+    //    dsh→patch YAML，hermes→YAML，zcode→环境变量，copilot→指令块）
     {
         const QString exe = "C:/x/miderhive-mcp.exe";
         const QString j = ui::integrations::generateConfig("claude-code", exe, "a1", "k1");
@@ -170,14 +240,184 @@ int main(int argc, char** argv) {
                                      .value("miderhive")
                                      .toObject();
         chk(srvc.value("args").isArray(), "integrations: cursor 配置含 args 数组");
-        const QString toml = ui::integrations::generateConfig("codex", exe, "a1", "k1");
+
+        // Codex TOML 必须用字面量字符串（单引号）：Windows 路径里的 '\Q' 在 TOML
+        // 基本字符串里是非法转义，会让整份 config.toml 解析失败。
+        const QString winExe = "C:\\Qt\\6.8.3\\msvc2022_64\\bin\\miderhive-mcp.exe";
+        const QString toml = ui::integrations::generateConfig("codex", winExe, "a1", "k1");
         chk(toml.contains("[mcp_servers.miderhive]") && toml.contains("MIDERHIVE_AGENT_NAME"),
             "integrations: codex 生成 TOML 配置");
-        chk(ui::integrations::tools().size() == 3 &&
-                ui::integrations::toolById("claude-code") && ui::integrations::toolById("cursor") &&
-                ui::integrations::toolById("codex"),
-            "integrations: 三工具注册表完整");
+        chk(toml.contains("command = '" + winExe + "'"),
+            "integrations: codex 路径用 TOML 字面量字符串（反斜杠不需转义）");
+        chk(!toml.contains("command = \""), "integrations: codex 不使用双引号基本字符串");
+
+        // DSH：插入式补丁 + 密钥必须落在 env 里（DSH 会清洗子进程环境中的 *KEY*/*TOKEN*）
+        const QString dsh = ui::integrations::generateConfig("dsh", winExe, "a1", "k1");
+        chk(dsh.contains("- insert:") && dsh.contains("dsh-mcp-client") &&
+                dsh.contains("serverName: miderhive"),
+            "integrations: dsh 生成 cordis 补丁插入行");
+        chk(dsh.contains("MIDERHIVE_AGENT_KEY"), "integrations: dsh 密钥写入 env 块");
+
+        // Hermes：mcp_servers 映射
+        const QString hermes = ui::integrations::generateConfig("hermes", winExe, "a1", "k1");
+        chk(hermes.contains("mcp_servers:") && hermes.contains("miderhive:") &&
+                hermes.contains("MIDERHIVE_AGENT_NAME"),
+            "integrations: hermes 生成 mcp_servers 条目");
+
+        // ZCode 走环境变量；Copilot 走指令块
+        const QString zcode = ui::integrations::generateConfig("zcode", winExe, "a1", "k1");
+        chk(zcode.contains("MIDERHIVE_AGENT_NAME=a1") && zcode.contains("MIDERHIVE_PORT"),
+            "integrations: zcode 生成环境变量块");
+        const QString copilot = ui::integrations::generateConfig("copilot", winExe, "a1", "k1");
+        chk(copilot.contains("X-Agent-Name: a1") && copilot.contains("/api/knowledge"),
+            "integrations: copilot 生成 HTTP 指令块");
+
+        // 八工具注册表：六个用户点名接入的 Agent 都必须在册
+        const QStringList ids = {"claude-code", "codex",     "droid", "dsh",
+                                 "hermes",      "zcode",     "cursor", "copilot"};
+        bool allPresent = ui::integrations::tools().size() == ids.size();
+        for (const QString& id : ids)
+            if (!ui::integrations::toolById(id)) allPresent = false;
+        chk(allPresent, "integrations: 八工具注册表完整（含 Claude/ChatGPT/Droid/DSH/Hermes/ZCode）");
+
+        // 落点解析：无配置文件的工具必须返回空串，其余必须给绝对路径
+        chk(ui::integrations::configPath("zcode").isEmpty() &&
+                ui::integrations::configPath("copilot").isEmpty(),
+            "integrations: zcode/copilot 无配置文件（返回空）");
+        chk(ui::integrations::configPath("hermes").contains("hermes") &&
+                ui::integrations::configPath("codex").endsWith("config.toml"),
+            "integrations: hermes/codex 落点解析为真实路径");
         (void)ui::integrations::installed("claude-code");  // 冒烟：不崩溃即可（结果随环境）
+    }
+
+    // A1b 配置写入（auto-write）：在重定向的配置根里验证新建/合并/替换/拒绝四条路径。
+    // 通过 MIDERHIVE_CONNECT_ROOT 把落点指到临时目录，绝不碰真实用户配置。
+    {
+        const QString root = home + "/connect-root";
+        qputenv("MIDERHIVE_CONNECT_ROOT", root.toUtf8());
+        const QString exe = "C:/x/miderhive-mcp.exe";
+
+        // ---- JSON（Cursor 同构）：新建 ----
+        auto ar = ui::integrations::applyConfig("cursor", exe, "c1", "k1");
+        chk(ar.ok, "applyConfig cursor 新建 JSON 成功");
+        QString jtxt;
+        {
+            QFile f(ui::integrations::configPath("cursor"));
+            if (f.open(QIODevice::ReadOnly)) jtxt = QString::fromUtf8(f.readAll());
+        }
+        const QJsonObject cursorSrv = QJsonDocument::fromJson(jtxt.toUtf8())
+                                         .object()
+                                         .value("mcpServers")
+                                         .toObject()
+                                         .value("miderhive")
+                                         .toObject();
+        chk(cursorSrv.value("command").toString() == exe && cursorSrv.value("args").isArray(),
+            "applyConfig cursor 写入的 JSON 内容正确");
+
+        // ---- JSON：合并进已有文件时必须保留他人的 server 条目 ----
+        {
+            QJsonObject other{{"mcpServers", QJsonObject{{"other", QJsonObject{{"command", "x"}}}}}};
+            QFile f(ui::integrations::configPath("cursor"));
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                f.write(QJsonDocument(other).toJson());
+        }
+        ar = ui::integrations::applyConfig("cursor", exe, "c2", "k2");
+        {
+            QFile f(ui::integrations::configPath("cursor"));
+            QString merged;
+            if (f.open(QIODevice::ReadOnly)) merged = QString::fromUtf8(f.readAll());
+            const QJsonObject o = QJsonDocument::fromJson(merged.toUtf8()).object();
+            chk(ar.ok && o.value("mcpServers").toObject().contains("other"),
+                "applyConfig 合并保留了他人的 server 条目");
+            chk(o.value("mcpServers").toObject().value("miderhive").toObject().value("env")
+                    .toObject().value("MIDERHIVE_AGENT_NAME").toString() == "c2",
+                "applyConfig 合并后 miderhive 为新值");
+            chk(QFile::exists(ui::integrations::configPath("cursor") + ".miderhive.bak"),
+                "applyConfig 覆盖前留下 .miderhive.bak 备份");
+        }
+
+        // ---- JSON：坏文件必须拒绝，且一字不改（绝不弄坏用户配置）----
+        {
+            const QString p = ui::integrations::configPath("cursor");
+            const QString garbage = "{ this is not json";
+            {
+                QFile f(p);
+                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(garbage.toUtf8());
+            }
+            const auto bad = ui::integrations::applyConfig("cursor", exe, "c3", "k3");
+            QString after;
+            {
+                QFile f(p);
+                if (f.open(QIODevice::ReadOnly)) after = QString::fromUtf8(f.readAll());
+            }
+            chk(!bad.ok, "applyConfig 遇到非法 JSON 时拒绝写入");
+            chk(after == garbage, "applyConfig 拒绝时原文件一字未改");
+        }
+
+        // ---- TOML（Codex）：写入字面量路径，且重复写入替换而非追加 ----
+        ar = ui::integrations::applyConfig("codex", "C:\\Qt\\mcp.exe", "x1", "k1");
+        {
+            QFile f(ui::integrations::configPath("codex"));
+            QString t;
+            if (f.open(QIODevice::ReadOnly)) t = QString::fromUtf8(f.readAll());
+            chk(ar.ok && t.contains("[mcp_servers.miderhive]") &&
+                    t.contains("command = 'C:\\Qt\\mcp.exe'"),
+                "applyConfig codex 写入 TOML 字面量路径");
+        }
+        ar = ui::integrations::applyConfig("codex", "C:\\Qt\\mcp2.exe", "x2", "k2");
+        {
+            QFile f(ui::integrations::configPath("codex"));
+            QString t;
+            if (f.open(QIODevice::ReadOnly)) t = QString::fromUtf8(f.readAll());
+            chk(ar.ok && t.count("[mcp_servers.miderhive]") == 1,
+                "applyConfig codex 重复写入只留一张表（不追加第二份）");
+            chk(t.contains("mcp2.exe"), "applyConfig codex 已更新为新值");
+        }
+
+        // ---- YAML（DSH 补丁）：已有 "# 注释 + []" 的文件要摘掉 [] 再追加 ----
+        {
+            const QString p = ui::integrations::configPath("dsh");
+            QDir().mkpath(QFileInfo(p).absolutePath());
+            QFile f(p);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                f.write("# patch layer\n[]\n");
+        }
+        ar = ui::integrations::applyConfig("dsh", exe, "dsh1", "k1");
+        {
+            QFile f(ui::integrations::configPath("dsh"));
+            QString y;
+            if (f.open(QIODevice::ReadOnly)) y = QString::fromUtf8(f.readAll());
+            // 顶层裸 "[]" 必须被摘掉；但条目里的 "args: []" 是合法内容，不能一并否掉
+            bool bareEmptyArray = false;
+            for (const QString& line : y.split('\n'))
+                if (line.trimmed() == "[]") bareEmptyArray = true;
+            chk(ar.ok && y.contains("mcp-miderhive") && y.contains("dsh-mcp-client") &&
+                    y.contains("- insert:") && !bareEmptyArray,
+                "applyConfig dsh 生成合法补丁（摘掉顶层空数组 []）");
+        }
+        ar = ui::integrations::applyConfig("dsh", exe, "dsh2", "k2");
+        {
+            QFile f(ui::integrations::configPath("dsh"));
+            QString y;
+            if (f.open(QIODevice::ReadOnly)) y = QString::fromUtf8(f.readAll());
+            chk(ar.ok && y.count("mcp-miderhive") == 1 && y.contains("dsh2"),
+                "applyConfig dsh 重复写入替换原条目（不追加第二份 insert）");
+        }
+
+        // ---- YAML（Hermes）：新建 mcp_servers 段 ----
+        ar = ui::integrations::applyConfig("hermes", exe, "h1", "k1");
+        {
+            QFile f(ui::integrations::configPath("hermes"));
+            QString y;
+            if (f.open(QIODevice::ReadOnly)) y = QString::fromUtf8(f.readAll());
+            chk(ar.ok && y.contains("mcp_servers:") && y.contains("miderhive:"),
+                "applyConfig hermes 写入 mcp_servers 条目");
+        }
+
+        // ---- 没有可写配置文件的工具必须明确失败，而不是假装成功 ----
+        chk(!ui::integrations::applyConfig("zcode", exe, "z", "k").ok,
+            "applyConfig zcode 明确报告没有可写配置文件");
+        qunsetenv("MIDERHIVE_CONNECT_ROOT");
     }
 
     // A2 报错翻译：技术错误 → 人话；未知错误保留原文
@@ -226,7 +466,103 @@ int main(int argc, char** argv) {
 
     MainWindow w(platform);
     w.setMinimumSize(1080, 680);
+    if (shots.on()) w.resize(shotW, shotH);  // 抓帧模式固定画幅：出图尺寸与构图稳定
     w.show();  // 首启引导由 MainWindow 自己的 400ms 单发定时器弹出（真实生产路径）
+
+    // ---- 接入向导（ConnectDialog）：真实构造 + 一键接入走通 ----
+    // 覆盖"选工具→签发身份→按该工具格式生成片段"这条主路径；不点"写入配置文件"，
+    // 因为那会碰真实落点（写入逻辑本身已由 A1b 在重定向配置根里验证）。
+    {
+        ConnectDialog dlg(platform);
+        chk(true, "接入向导可无头构造");
+        auto* view = dlg.findChild<QPlainTextEdit*>();
+        auto* list = dlg.findChild<QListWidget*>();
+        auto* edit = dlg.findChild<QLineEdit*>();
+        chk(view != nullptr && list != nullptr && edit != nullptr,
+            "接入向导含工具列表 / 身份名输入 / 片段视图");
+        chk(list && list->count() == ui::integrations::tools().size(),
+            "接入向导列出注册表里的全部工具");
+        // 第 1 行是 Codex（工具表顺序：claude-code, codex, droid, dsh, hermes, zcode, cursor, copilot）
+        if (list) list->setCurrentRow(1);
+        if (edit) edit->setText("codex-wizard-test");
+        QPushButton* btn = nullptr;
+        for (auto* b : dlg.findChildren<QPushButton*>())
+            if (b->text().contains("一键接入") || b->text().contains("Connect")) {
+                btn = b;
+                break;
+            }
+        chk(btn != nullptr, "接入向导含「一键接入」按钮");
+        if (btn) btn->click();
+        const QString snippet = view ? view->toPlainText() : QString();
+        chk(snippet.contains("[mcp_servers.miderhive]"),
+            "接入向导为 Codex 生成 TOML（按工具格式，而非一律 JSON）");
+        chk(snippet.contains("codex-wizard-test"), "接入向导片段写入接入身份名");
+        chk(!snippet.contains("\"mcpServers\""), "接入向导没有退回 CLI 缺省 JSON 格式");
+    }
+
+    // ---- 英文模式全量扫描：切到英文后，用户可见文案里不应再出现中文 ----
+    // 这是"语言问题是否真的解决"的权威判据：静态 grep 分不清注释 / 枚举值 / 数据 /
+    // zh-en 配对表（都会误报），而这里是真把界面切到英文、遍历所有控件的文案找 CJK。
+    // 必须在写任何中文数据之前做（欢迎记忆、错误报告都会把中文当数据渲染出来）。
+    {
+        // 全程同步：绝不在扫描里跑事件循环——MainWindow 构造时挂了 400ms 的单发定时器，
+        // 一旦它在这里触发就会 exec() 出模态引导对话框，而此刻 closer 还没装上 → 死等。
+        i18n::apply(i18n::Lang::En);
+        // rebuildPanels() 用 deleteLater() 拆旧面板：不显式冲掉 DeferredDelete，
+        // 重建前的旧中文面板仍挂在窗口下，扫描会把它们一并算进来（假阳性）。
+        // sendPostedEvents 是同步的，不会推进定时器。
+        QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        const auto hasCjk = [](const QString& s) {
+            for (const QChar c : s)
+                if (c.unicode() >= 0x4E00 && c.unicode() <= 0x9FFF) return true;
+            return false;
+        };
+        QStringList offenders;
+        const auto note = [&](const char* what, const QString& text) {
+            if (hasCjk(text)) offenders << QString("%1=%2").arg(what, text.left(48));
+        };
+
+        // 语言切换按钮本身写的就是"中文"（它显示"切过去"的目标语言），按设计放行。
+        // 它是 QToolButton（不是 QPushButton），所以必须按 QAbstractButton 查。
+        QAbstractButton* langBtn = nullptr;
+        for (auto* b : w.findChildren<QAbstractButton*>())
+            if (b->text() == "中文" || b->text() == "EN") langBtn = b;
+
+        for (auto* l : w.findChildren<QLabel*>()) note("QLabel", l->text());
+        for (auto* b : w.findChildren<QAbstractButton*>()) {
+            if (b == langBtn) continue;
+            note("Button", b->text());
+        }
+        for (auto* c : w.findChildren<QComboBox*>())
+            for (int i = 0; i < c->count(); ++i) note("Combo", c->itemText(i));
+        for (auto* e : w.findChildren<QLineEdit*>()) note("LineEditHint", e->placeholderText());
+        for (auto* e : w.findChildren<QPlainTextEdit*>())
+            note("TextHint", e->placeholderText());
+        for (auto* t : w.findChildren<QTableWidget*>())
+            for (int c = 0; c < t->columnCount(); ++c)
+                if (auto* h = t->horizontalHeaderItem(c)) note("TableHeader", h->text());
+        for (auto* t : w.findChildren<QTreeWidget*>())
+            for (int c = 0; c < t->columnCount(); ++c) note("TreeHeader", t->headerItem()->text(c));
+        for (auto* l : w.findChildren<QListWidget*>())
+            for (int i = 0; i < l->count(); ++i) note("ListItem", l->item(i)->text());
+        for (auto* g : w.findChildren<QGroupBox*>()) note("GroupBox", g->title());
+        for (auto* tb : w.findChildren<QTabBar*>())
+            for (int i = 0; i < tb->count(); ++i) note("Tab", tb->tabText(i));
+        for (auto* wd : w.findChildren<QWidget*>()) note("tooltip", wd->toolTip());
+        note("windowTitle", w.windowTitle());
+
+        if (offenders.isEmpty()) {
+            chk(true, "英文模式全控件扫描：界面文案无中文残留");
+        } else {
+            chk(false, QString("英文模式仍有 %1 处中文文案：%2")
+                           .arg(offenders.size())
+                           .arg(offenders.mid(0, 6).join(" | ")));
+            for (const auto& o : offenders) printNow("   [en-cjk] " + o);
+        }
+
+        i18n::apply(i18n::Lang::Zh);  // 还原：后续流程仍按中文跑
+    }
 
     // ---- 弹窗自动处理器：扮演用户的手，把流程中的模态框逐个"点掉"并留痕 ----
     struct Flow {
@@ -254,6 +590,7 @@ int main(int argc, char** argv) {
     };
 
     QTimer closer;
+    bool confirmShot = false;  // 抓帧：轮换确认框只留一帧
     QObject::connect(&closer, &QTimer::timeout, [&] {
         QWidget* modal = QApplication::activeModalWidget();
         if (!modal) return;
@@ -264,6 +601,14 @@ int main(int argc, char** argv) {
                 g_rep.dialogLog << "「接入成功」弹窗 #" + QString::number(flow.popupSeen);
             } else {
                 g_rep.dialogLog << title + " :: " + mb->text().left(140);
+            }
+            // 抓帧：把「轮换密钥」确认框本身留一帧（演示"交互"这一步）。
+            // 标题精确匹配，绝不含糊——紧随其后的「密钥已轮换」弹窗里带新密钥原文，
+            // 那种画面绝不能进公开素材。
+            if (shots.on() && !confirmShot &&
+                (title.contains("轮换密钥") || title.contains("Rotate key"))) {
+                confirmShot = true;
+                shots.save(modal, "rotate-confirm");
             }
             if (++flow.autoClicks > 60) {
                 g_rep.fails << "弹窗自动处理超过上限（60）——流程疑似循环";
@@ -311,6 +656,7 @@ int main(int argc, char** argv) {
                 auto* dlg = qobject_cast<WelcomeDialog*>(QApplication::activeModalWidget());
                 if (!dlg) break;
                 chk(true, "首启自动弹出接入引导（未写 ui/welcomeSeen 时）");
+                shots.save(dlg, "onboarding");
                 const QList<QLineEdit*> edits = dlg->findChildren<QLineEdit*>();
                 chk(edits.size() == 1, "引导含唯一「接入身份名」输入框");
                 if (!edits.isEmpty()) edits.first()->setText(flow.agent);
@@ -340,6 +686,7 @@ int main(int argc, char** argv) {
                     "预配身份登记进待观察注册表（ui/onboardingPending）");
                 flow.oldKey = readAgentsJson(home).value(flow.agent).toString();
                 chk(!flow.oldKey.isEmpty(), "预配密钥已写入本机明文缓存 agents.json");
+                shots.save(dlg, "onboarding-config");
                 flow.allowWelcomeClose = true;  // closer 负责点「开始使用 →」关闭
                 flow.step = 1;
                 flow.ticks = 0;
@@ -381,6 +728,7 @@ int main(int argc, char** argv) {
                 if (platform.memoryList("project", mem, merr))
                     for (const auto& m : mem) welcomeMem |= (m.key == "welcome/claude-code");
                 chk(welcomeMem, "欢迎记忆写入 用户记忆→项目档案（welcome/claude-code）");
+                shots.save(&w, "overview");
             } break;
 
             // ---- ④ 制造密钥丢失 → 横幅出现 → 轮换修复 → 新旧密钥验证 ----
@@ -397,6 +745,7 @@ int main(int argc, char** argv) {
                         (b->text().contains("轮换密钥修复") || b->text().contains("Fix: rotate key")))
                         fixBtn = b;
                 chk(fixBtn != nullptr, "密钥丢失后总览页出现健康横幅与「轮换密钥修复」按钮");
+                shots.save(&w, "overview-health");
                 if (fixBtn) {
                     fixBtn->click();  // 确认(Yes)→轮换→新钥弹窗(Close) 由 closer 依次处理
                     flow.newKey = readAgentsJson(home).value(flow.agent).toString();
@@ -417,12 +766,54 @@ int main(int argc, char** argv) {
                              b->text().contains("Fix: rotate key")))
                             stale = b;
                     chk(stale == nullptr, "修复完成后健康横幅的密钥告警消失");
+                    shots.save(&w, "overview-fixed");
                 }
             } break;
 
             // ---- ⑤ 设置 → 重新打开接入引导（真实点击按钮） ----
             case 4: {
                 flow.step = 5;
+
+                // 抓帧模式：面板巡览。走真实导航行切换（左侧高亮随之移动——这正是静态
+                // 截图给不了的信息），每页另存"整页"帧供 2×2 拼图使用。
+                if (shots.on()) {
+                    QListWidget* nav = nullptr;
+                    auto hasId = [](QListWidget* lw, const char* id) {
+                        for (int i = 0; i < lw->count(); ++i)
+                            if (lw->item(i)->data(Qt::UserRole).toString() == QLatin1String(id))
+                                return true;
+                        return false;
+                    };
+                    // 按内容认导航（面板内部也有 QListWidget，如事件流/列表），不靠下标
+                    for (auto* lw : w.findChildren<QListWidget*>())
+                        if (hasId(lw, "overview") && hasId(lw, "errors")) {
+                            nav = lw;
+                            break;
+                        }
+                    auto* stack = w.findChild<QStackedWidget*>();
+                    if (!nav || !stack) {
+                        printNow("WARN  抓帧巡览：未定位到导航或页面栈，跳过");
+                    } else {
+                        const QStringList tour{"usage",  "knowledge", "skills",
+                                               "memory", "messages",  "errors"};
+                        for (const QString& id : tour) {
+                            int row = -1;
+                            for (int i = 0; i < nav->count(); ++i)
+                                if (nav->item(i)->data(Qt::UserRole).toString() == id) {
+                                    row = i;
+                                    break;
+                                }
+                            if (row < 0 || row >= stack->count()) {
+                                printNow("WARN  抓帧巡览：导航缺面板 " + id);
+                                continue;
+                            }
+                            nav->setCurrentRow(row);  // 真实切换：高亮移动 + 面板刷新
+                            QMetaObject::invokeMethod(&w, "onRefresh");
+                            shots.save(&w, id, stack->widget(row));
+                        }
+                    }
+                }
+
                 auto* dlg = new SettingsDialog(platform, &w);
                 dlg->show();
                 QApplication::processEvents();

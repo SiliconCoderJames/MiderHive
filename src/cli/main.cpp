@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cwchar>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -16,8 +17,9 @@
 #include <string>
 #include <vector>
 
-#include "core/platform.h"  // defaultHomeDir
-#include "core/util.h"      // envOr
+#include "core/integrations.hpp"  // 接入配置的生成/写入（与 GUI 共用同一实现）
+#include "core/platform.h"        // defaultHomeDir
+#include "core/util.h"            // envOr
 
 using nlohmann::json;
 
@@ -157,6 +159,11 @@ int usage() {
         "      （旧 AGENTHIVE_* / ZCODE_* 环境变量名仍兼容识别）\n"
         "\n"
         "命令:\n"
+        "  connect-snippet --tool T [--command C] [--name N] [--key K]\n"
+        "                                 生成该工具的接入配置片段（stdout；不连平台）\n"
+        "  apply-config  --tool T (--path P | --dir D) [--command C] [--name N] [--key K]\n"
+        "                                 把配置写进指定文件 / 指定根目录下的约定位置\n"
+        "                                 （--dir 时 claude-code 写 <dir>/.mcp.json；不连平台）\n"
         "  register --name X [--role member]              注册新 Agent（需 --master-key 或环境变量）\n"
         "  heartbeat                    [--task \"...\"]                 心跳 + 当前任务\n"
         "  agents [remove --name N]                     协作者列表 / 移除（移除需主密钥）\n"
@@ -206,15 +213,68 @@ int wmain(int argc, wchar_t** argv) {
         argPtrs.push_back(argStore.back().c_str());
     }
     char** utf8Argv = const_cast<char**>(argPtrs.data());
+    const std::string argv0 = argc > 0 ? (utf8Argv[0] ? utf8Argv[0] : "") : "";
     Args a = parseArgs(argc, utf8Argv);
 #else
 int main(int argc, char** argv) {
+    const std::string argv0 = argc > 0 ? (argv[0] ? argv[0] : "") : "";
     Args a = parseArgs(argc, argv);
 #endif
     if (a.pos.empty()) return usage();
 
+    const std::string cmd = a.pos[0];
+
+    // ---- 离线命令：接入配置的生成与写入（不连平台）----
+    // 与 GUI 共用 core/integrations.hpp 的同一份实现：向导生成什么，命令行就给什么，
+    // 脚本（scripts/verify_clients.py）断言的也是它。
+    if (cmd == "connect-snippet" || cmd == "apply-config") {
+        std::string tool =
+            a.opts.count("tool") ? a.opts.at("tool") : (a.pos.size() > 1 ? a.pos[1] : "");
+        if (!ah::integrations::toolById(tool)) {
+            std::cerr << "unknown tool: " << tool << "\navailable:";
+            for (const auto& t : ah::integrations::toolRegistry()) std::cerr << " " << t.id;
+            std::cerr << "\n";
+            return 2;
+        }
+        std::string command = a.opts.count("command") ? a.opts.at("command") : "";
+        if (command.empty()) {
+            // 默认指向与 agent-cli 同目录的 miderhive-mcp（安装后四个可执行文件总在同一目录）
+            namespace fs = std::filesystem;
+#ifdef _WIN32
+            const char* mcpName = "miderhive-mcp.exe";
+#else
+            const char* mcpName = "miderhive-mcp";
+#endif
+            command = (fs::path(argv0).parent_path() / mcpName).string();
+        }
+        const std::string name = a.opts.count("name") ? a.opts.at("name") : tool;
+        const std::string key = a.opts.count("key") ? a.opts.at("key") : "";
+
+        if (cmd == "connect-snippet") {
+            std::cout << ah::integrations::generateConfig(tool, command, name, key);
+            return 0;
+        }
+
+        const bool hasPath = a.opts.count("path") != 0;
+        const bool hasDir = a.opts.count("dir") != 0;
+        if (hasPath == hasDir) {
+            std::cerr << "apply-config 需要 --path <文件> 或 --dir <根目录> 二选一\n";
+            return 2;
+        }
+        // --dir 的语义按工具分两种：claude-code 的落点是**项目根**的 .mcp.json
+        // （Claude Code 的项目作用域约定）；其余工具是配置根下的约定相对路径。
+        ah::integrations::WriteResult r =
+            hasPath ? ah::integrations::writeConfigFile(tool, a.opts.at("path"), command, name, key)
+                    : (tool == "claude-code"
+                           ? ah::integrations::writeProjectConfig(a.opts.at("dir"), command, name,
+                                                                  key)
+                           : ah::integrations::writeConfigUnderRoot(a.opts.at("dir"), tool, command,
+                                                                    name, key));
+        std::cout << (r.ok ? "OK: " : "FAIL: ") << r.detailZh << "\n";
+        return r.ok ? 0 : 1;
+    }
+
     Client c(a);
-    const std::string& cmd = a.pos[0];
     const std::string& sub = a.pos.size() > 1 ? a.pos[1] : "";
     // --master-key 也允许写在命令后（register / budget set 场景）
     if (a.opts.count("master-key")) c.masterKey = a.opts.at("master-key");

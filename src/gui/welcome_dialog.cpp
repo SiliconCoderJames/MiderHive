@@ -98,20 +98,29 @@ WelcomeDialog::WelcomeDialog(ah::Platform& platform, QWidget* parent)
     toolTitle->setStyleSheet(ui::th("font-size:12px; color:@muted@; font-weight:600;"));
     root->addWidget(toolTitle);
 
-    auto* toolRow = new QHBoxLayout();
+    auto* toolRow = new QGridLayout();
     toolRow->setSpacing(8);
+    int toolIdx = 0;
     for (const auto& t : ui::integrations::tools()) {
-        auto* b = new QPushButton(t.nameEn, this);
+        // 展示名随当前语言走；检测到的工具在名字前加 ✓，一眼看出"这台机器上装了哪个"
+        const QString label = QString("%1 %2")
+                                  .arg(ui::integrations::installed(t.id) ? QStringLiteral("✓")
+                                                                        : QString(),
+                                       i18n::trs(t.nameZh, t.nameEn))
+                                  .trimmed();
+        auto* b = new QPushButton(label, this);
         b->setCheckable(true);
         b->setCursor(Qt::PointingHandCursor);
         b->setFixedHeight(30);
         b->setProperty("toolId", t.id);
+        b->setToolTip(i18n::trs(t.noteZh, t.noteEn));
         const QString id = t.id;
         connect(b, &QPushButton::clicked, this, [this, id] {
             if (const auto* t = ui::integrations::toolById(id)) pickTool(*t);
         });
         toolBtns_.append(b);
-        toolRow->addWidget(b, 1);
+        toolRow->addWidget(b, toolIdx / 4, toolIdx % 4);
+        ++toolIdx;
     }
     root->addLayout(toolRow);
 
@@ -147,14 +156,22 @@ WelcomeDialog::WelcomeDialog(ah::Platform& platform, QWidget* parent)
     rl->addWidget(configView_);
 
     auto* cfgRow = new QHBoxLayout();
+    writeBtn_ = new QPushButton(i18n::trs("自动写入配置文件", "Write config automatically"),
+                                resultBox_);
+    writeBtn_->setObjectName("primary");
+    writeBtn_->setCursor(Qt::PointingHandCursor);
+    writeBtn_->setToolTip(i18n::trs("把上面的片段合并进该工具的配置文件（原文件自动备份为 "
+                                    ".miderhive.bak）",
+                                    "Merge the snippet into that tool's config file (the original "
+                                    "is backed up as .miderhive.bak)"));
+    connect(writeBtn_, &QPushButton::clicked, this, [this] { writeToConfig(); });
     copyBtn_ = new QPushButton(i18n::trs("复制配置", "Copy config"), resultBox_);
-    copyBtn_->setObjectName("primary");
     copyBtn_->setCursor(Qt::PointingHandCursor);
     connect(copyBtn_, &QPushButton::clicked, this, [this] {
         QApplication::clipboard()->setText(configView_->toPlainText());
-        ui::Toast::show(this, i18n::trs("已复制，去粘贴并重启该工具", "Copied — paste it and "
-                                                                     "restart the tool"));
+        ui::Toast::show(this, i18n::trs("已复制到剪贴板 ✓", "Copied to clipboard ✓"));
     });
+    cfgRow->addWidget(writeBtn_);
     cfgRow->addWidget(copyBtn_);
     cfgRow->addStretch(1);
     rl->addLayout(cfgRow);
@@ -240,7 +257,7 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
     // 1) 本地检测：PATH 或常见安装路径（检测不到不影响配置——先装后配同样可行）
     const bool found = ui::integrations::installed(tool.id);
     detectLabel_->setText(found ? i18n::trs("✓ 已检测到本机安装", "✓ detected on this machine")
-                                : tool.installZh + "\n" + tool.installEn);
+                                : i18n::trs(tool.installZh, tool.installEn));
     detectLabel_->setStyleSheet(ui::th(found ? "font-size:11px; color:@ok@;"
                                              : "font-size:11px; color:@warn@;"));
 
@@ -258,23 +275,64 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
                              ui::humanError(QString::fromStdString(err)));
         return;
     }
+    issuedKey_ = QString::fromStdString(apiKey);
+    issuedName_ = agentName;
 
-    // 3) 生成该工具的 MCP 配置片段并展示 + 复制
+    // 3) 生成该工具的接入片段并展示 + 复制（JSON / TOML / YAML / 环境变量 / 指令块）
     const QString exe = QCoreApplication::applicationDirPath() + "/miderhive-mcp.exe";
-    configView_->setPlainText(ui::integrations::generateConfig(
-        tool.id, exe, agentName, QString::fromStdString(apiKey)));
-    pathHint_->setText(i18n::trs("配置文件位置：%1",
-                                 "Config file location: %1")
-                           .arg(i18n::trs(tool.configPathZh, tool.configPathEn)));
-    stepsLabel_->setText(i18n::trs(
-        "下一步：① 粘贴到上面的配置文件（没有就新建）② 完全退出并重启该工具。"
-        "Agent 上线后工作台会提示「接入成功」，并自动写入一条欢迎记忆。",
-        "Next: 1) paste into the config file above (create it if missing) 2) fully quit and "
-        "restart the tool. When the agent comes online, the workbench shows \"Connected\" and "
-        "writes a welcome memory entry."));
+    configView_->setPlainText(
+        ui::integrations::generateConfig(tool.id, exe, agentName, issuedKey_));
+    QApplication::clipboard()->setText(configView_->toPlainText());
+
+    // 落点：能解析出真实路径就显示真实路径（用户可以直接去那儿找），否则显示约定位置。
+    // 能解析出落点 = 可以安全合并（zcode/copilot/Claude Code 没有固定落点，走向导或命令行）。
+    const QString realPath = ui::integrations::configPath(tool.id);
+    pathHint_->setText(
+        realPath.isEmpty()
+            ? i18n::trs("该工具没有固定配置文件：按上面的片段设置环境变量、粘进说明文件，"
+                        "或在「设置 → Agent 管理 → 一键接入」里选择项目文件夹写入。",
+                        "This tool has no fixed config file: apply the snippet as environment "
+                        "variables, paste it into your instructions file, or use Settings → "
+                        "Agents → one-click connect to pick a project folder.")
+            : i18n::trs("配置文件位置：%1", "Config file location: %1").arg(realPath));
+
+    // 能解析出落点 = 可以安全合并，才给"自动写入"按钮
+    const bool writable = !realPath.isEmpty();
+    writeBtn_->setEnabled(writable);
+    writeBtn_->setVisible(writable);
+
+    stepsLabel_->setText(
+        writable
+            ? i18n::trs("下一步：① 点「自动写入配置文件」（或自己粘贴到上面的路径）"
+                        "② 完全退出并重启该工具。上线后工作台会提示「接入成功」，"
+                        "并自动写入一条欢迎记忆。",
+                        "Next: 1) click “Write config automatically” (or paste it into the path "
+                        "above) 2) fully quit and restart the tool. When the agent comes online "
+                        "the workbench says \"Connected\" and writes a welcome memory entry.")
+            : i18n::trs("下一步：把上面的片段按该工具的方式应用（环境变量 / 说明文件），"
+                        "然后按上面的提示操作。上线后工作台会提示「接入成功」。",
+                        "Next: apply the snippet the way this tool expects (environment variables "
+                        "/ instructions file), then follow the note above. The workbench says "
+                        "\"Connected\" once the agent comes online."));
     resultBox_->setVisible(true);
 
     // 4) 登记待观察身份：MainWindow 轮询发现其上线 → 弹「接入成功」+ 写欢迎记忆（仅一次）
     QSettings s;
     s.setValue("ui/onboardingPending/" + agentName, tool.id);
+}
+
+void WelcomeDialog::writeToConfig() {
+    if (issuedKey_.isEmpty()) return;
+    const QString exe = QCoreApplication::applicationDirPath() + "/miderhive-mcp.exe";
+    const ui::integrations::ApplyResult r =
+        ui::integrations::applyConfig(current_.id, exe, issuedName_, issuedKey_);
+    stepsLabel_->setText(i18n::trs(r.detailZh, r.detailEn));
+    if (r.ok) {
+        ui::Toast::show(this, i18n::trs("已写入配置文件 ✓ 请完全重启该工具",
+                                        "Config written ✓ now fully restart that tool"));
+    } else {
+        ui::Toast::show(this, i18n::trs("未能自动写入，请手工粘贴", "Could not write automatically — "
+                                                                   "paste it manually"),
+                        false);
+    }
 }
