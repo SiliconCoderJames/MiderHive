@@ -18,6 +18,7 @@ class ErrorsPanel : public PanelBase {
 public:
     explicit ErrorsPanel(ah::Platform& platform, QWidget* parent = nullptr);
     void refresh() override;
+    void retranslate() override;
     void focusFilter() override;
 
 private slots:
@@ -27,6 +28,8 @@ private slots:
 private:
     QComboBox* statusCombo_ = nullptr;
     QComboBox* severityCombo_ = nullptr;
+    QLabel* statusLabel_ = nullptr;     // 「状态:」工具条标签（语言切换需重译）
+    QLabel* severityLabel_ = nullptr;   // 「严重度:」工具条标签
     QLineEdit* filterEdit_ = nullptr;
     QSplitter* splitter_ = nullptr;
     QTableWidget* table_ = nullptr;

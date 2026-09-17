@@ -41,17 +41,17 @@ KnowledgePanel::KnowledgePanel(ah::Platform& platform, QWidget* parent)
     tagEdit_ = new QLineEdit(this);
     tagEdit_->setPlaceholderText(i18n::trs("按标签过滤", "Filter by tag"));
     tagEdit_->setClearButtonEnabled(true);
-    auto* searchBtn = new QPushButton(i18n::trs("搜索", "Search"), this);
-    searchBtn->setObjectName("primary");
-    auto* newBtn = new QPushButton(i18n::trs("＋ 新建条目", "＋ New Entry"), this);
+    searchBtn_ = new QPushButton(i18n::trs("搜索", "Search"), this);
+    searchBtn_->setObjectName("primary");
+    newBtn_ = new QPushButton(i18n::trs("＋ 新建条目", "＋ New Entry"), this);
     toolbar->addWidget(searchEdit_, 1);
     toolbar->addWidget(semanticCheck_);
-    toolbar->addWidget(searchBtn);
-    toolbar->addWidget(newBtn);
+    toolbar->addWidget(searchBtn_);
+    toolbar->addWidget(newBtn_);
     layout->addLayout(toolbar);
-    connect(searchBtn, &QPushButton::clicked, this, &KnowledgePanel::onSearch);
+    connect(searchBtn_, &QPushButton::clicked, this, &KnowledgePanel::onSearch);
     connect(searchEdit_, &QLineEdit::returnPressed, this, &KnowledgePanel::onSearch);
-    connect(newBtn, &QPushButton::clicked, this, &KnowledgePanel::onNewEntry);
+    connect(newBtn_, &QPushButton::clicked, this, &KnowledgePanel::onNewEntry);
 
     // 第二行：统计摘要（左）+ 标签过滤 + 结果即筛（右）
     auto* subBar = new QHBoxLayout;
@@ -59,7 +59,8 @@ KnowledgePanel::KnowledgePanel(ah::Platform& platform, QWidget* parent)
     statsLabel_->setObjectName("muted");
     subBar->addWidget(statsLabel_);
     subBar->addStretch(1);
-    subBar->addWidget(new QLabel(i18n::trs("标签", "Tag"), this));
+    tagLabel_ = new QLabel(i18n::trs("标签", "Tag"), this);
+    subBar->addWidget(tagLabel_);
     tagEdit_->setMaximumWidth(160);
     subBar->addWidget(tagEdit_);
     layout->addLayout(subBar);
@@ -236,6 +237,37 @@ void KnowledgePanel::focusFilter() {
     viewFilter_->selectAll();
 }
 
+void KnowledgePanel::retranslate() {
+    PanelBase::retranslate();
+    searchEdit_->setPlaceholderText(
+        i18n::trs("搜索知识库（关键词或自然语言）…", "Search knowledge (keyword or natural language)..."));
+    semanticCheck_->setText(i18n::trs("语义搜索", "Semantic"));
+    semanticCheck_->setToolTip(i18n::trs("按向量距离排序（内置 n-gram 模糊匹配，偏召回）",
+                                         "Rank by vector distance (built-in n-gram, recall-oriented)"));
+    tagEdit_->setPlaceholderText(i18n::trs("按标签过滤", "Filter by tag"));
+    tagLabel_->setText(i18n::trs("标签", "Tag"));
+    searchBtn_->setText(i18n::trs("搜索", "Search"));
+    newBtn_->setText(i18n::trs("＋ 新建条目", "＋ New Entry"));
+    addVersionBtn_->setText(i18n::trs("追加新版本", "Append Version"));
+    viewFilter_->setPlaceholderText(i18n::trs("结果即筛…", "Filter results…"));
+    viewFilter_->setToolTip(i18n::trs("即时过滤（Ctrl+F 聚焦 · Esc 清空）",
+                                      "Live filter (Ctrl+F to focus · Esc to clear)"));
+    table_->setHorizontalHeaderLabels({i18n::trs("标题", "Title"), i18n::trs("作者", "Author"),
+                                       i18n::trs("标签", "Tags"), i18n::trs("版本", "Ver."),
+                                       i18n::trs("时间", "Time")});
+    emptyState_->titleLabel()->setText(i18n::trs("还没有任何知识条目", "No knowledge entries yet"));
+    emptyState_->hintLabel()->setText(
+        i18n::trs("知识库存放团队沉淀的经验与方案，供所有 Agent 检索引用；"
+                  "Agent 也可通过 POST /api/knowledge 直接写入。",
+                  "The knowledge base holds shared experience and solutions for every agent to "
+                  "retrieve; agents can also write via POST /api/knowledge."));
+    // 空状态的动作按钮由 InlineEmpty::setAction 创建：只回取按钮改文案，不重复 connect
+    if (auto* actionBtn = emptyState_->findChild<QPushButton*>())
+        actionBtn->setText(i18n::trs("＋ 新建条目", "＋ New Entry"));
+    // 统计摘要 / 详情元信息 / 版本下拉均由 onSearch() 生成：就地重跑一次即可换成新语言
+    onSearch();
+}
+
 void KnowledgePanel::onEntryViewer(int row) {
     if (row < 0 || row >= static_cast<int>(hits_.size())) return;
     const auto& e = hits_[static_cast<size_t>(row)].entry;
@@ -283,7 +315,7 @@ void KnowledgePanel::onNewEntry() {
     auto* title = new QLineEdit(&dlg);
     auto* content = new QPlainTextEdit(&dlg);
     auto* tags = new QLineEdit(&dlg);
-    tags->setPlaceholderText("逗号分隔，如 qt,cmake");
+    tags->setPlaceholderText(i18n::trs("逗号分隔，如 qt,cmake", "Comma-separated, e.g. qt,cmake"));
     auto* category = new QLineEdit(&dlg);
     form->addRow(i18n::trs("标题", "Title"), title);
     form->addRow(i18n::trs("内容", "Content"), content);
@@ -303,7 +335,9 @@ void KnowledgePanel::onNewEntry() {
     if (!platform_.knowledgeCreate("user", title->text().trimmed().toStdString(),
                                    content->toPlainText().toStdString(), tagList,
                                    category->text().trimmed().toStdString(), {}, "", out, err)) {
-        ui::Toast::show(this, QString("创建失败: %1").arg(QString::fromStdString(err)), false);
+        ui::Toast::show(this, i18n::trs("创建失败: %1", "Create failed: %1")
+                                  .arg(QString::fromStdString(err)),
+                        false);
         return;
     }
     ui::Toast::show(this, i18n::trs("知识条目已创建 ✓", "Entry created ✓"));
@@ -318,7 +352,7 @@ void KnowledgePanel::onAddVersion() {
     auto* title = new QLineEdit(&dlg);
     auto* content = new QPlainTextEdit(&dlg);
     form->addRow(i18n::trs("标题（留空沿用当前版本标题）", "Title (blank keeps current)"), title);
-    form->addRow("新内容", content);
+    form->addRow(i18n::trs("新内容", "New content"), content);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
@@ -329,9 +363,12 @@ void KnowledgePanel::onAddVersion() {
     ah::KnowledgeEntry out;
     if (!platform_.knowledgeAddVersion("user", currentUuid_, title->text().trimmed().toStdString(),
                                        content->toPlainText().toStdString(), {}, "", out, err)) {
-        ui::Toast::show(this, QString("追加失败: %1").arg(QString::fromStdString(err)), false);
+        ui::Toast::show(this, i18n::trs("追加失败: %1", "Append failed: %1")
+                                  .arg(QString::fromStdString(err)),
+                        false);
         return;
     }
-    ui::Toast::show(this, QString("已追加 v%1（旧版本保留）✓").arg(out.version));
+    ui::Toast::show(this, i18n::trs("已追加 v%1（旧版本保留）✓", "Appended v%1 (old versions kept) ✓")
+                              .arg(out.version));
     onSearch();
 }

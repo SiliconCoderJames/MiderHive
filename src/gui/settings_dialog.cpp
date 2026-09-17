@@ -30,6 +30,7 @@
 #include <QShowEvent>
 
 #include <iterator>
+#include <tuple>
 
 #include "gui_util.h"
 #include "i18n.h"
@@ -158,9 +159,11 @@ QWidget* SettingsDialog::buildAppearancePage() {
     fontTitle->setText(i18n::trs("界面字号", "Font size"));
     lay->addWidget(fontTitle);
     fontBox_ = new QComboBox(page);
-    const std::vector<std::pair<int, const char*>> kSizes{
-        {12, "紧凑 12px"}, {13, "标准 13px"}, {14, "大号 14px"}};
-    for (const auto& [px, label] : kSizes) fontBox_->addItem(QString::fromUtf8(label), px);
+    const std::vector<std::tuple<int, const char*, const char*>> kSizes{
+        {12, "紧凑 12px", "Compact 12px"},
+        {13, "标准 13px", "Standard 13px"},
+        {14, "大号 14px", "Large 14px"}};
+    for (const auto& [px, zh, en] : kSizes) fontBox_->addItem(i18n::trs(zh, en), px);
     fontBox_->setCurrentIndex(fontBox_->findData(ui::fontBaseRef()));
     connect(fontBox_, &QComboBox::currentIndexChanged, this, [this](int) {
         ui::setFontBase(fontBox_->currentData().toInt());

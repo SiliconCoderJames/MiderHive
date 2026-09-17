@@ -17,10 +17,17 @@
 #include "../widgets.h"
 
 namespace {
-// 五大区块（显示名, 存储名）
-const std::vector<std::pair<QString, QString>> kSections{
-    {"项目档案", "project"},   {"决策日志", "decision"}, {"偏好记录", "preference"},
-    {"设备环境", "environment"}, {"工作习惯", "work_style"},
+// 五大区块（中文显示名, 英文显示名, 存储名）。显示名不能在这里取词：
+// 静态初始化早于 i18n::load()，会把启动时的语言永久固化，故存双语、用到时再取。
+struct MemorySection {
+    const char* zh;
+    const char* en;
+    const char* key;
+};
+const std::vector<MemorySection> kSections{
+    {"项目档案", "Project", "project"},        {"决策日志", "Decisions", "decision"},
+    {"偏好记录", "Preferences", "preference"}, {"设备环境", "Environment", "environment"},
+    {"工作习惯", "Work habits", "work_style"},
 };
 }  // namespace
 
@@ -36,16 +43,16 @@ MemoryPanel::MemoryPanel(ah::Platform& platform, QWidget* parent)
     auto* toolbar = new QHBoxLayout;
     headerLabel_ = new QLabel(this);
     headerLabel_->setStyleSheet(ui::th("font-size:13px; color:@muted@;"));
-    auto* editBtn = new QPushButton(i18n::trs("编辑 / 新增（生成新版本）", "Edit / Add (new version)"), this);
-    editBtn->setObjectName("primary");
-    auto* historyBtn = new QPushButton(i18n::trs("查看历史版本", "History"), this);
+    editBtn_ = new QPushButton(i18n::trs("编辑 / 新增（生成新版本）", "Edit / Add (new version)"), this);
+    editBtn_->setObjectName("primary");
+    historyBtn_ = new QPushButton(i18n::trs("查看历史版本", "History"), this);
     toolbar->addWidget(headerLabel_);
     toolbar->addStretch(1);
-    toolbar->addWidget(historyBtn);
-    toolbar->addWidget(editBtn);
+    toolbar->addWidget(historyBtn_);
+    toolbar->addWidget(editBtn_);
     layout->addLayout(toolbar);
-    connect(editBtn, &QPushButton::clicked, this, &MemoryPanel::onEdit);
-    connect(historyBtn, &QPushButton::clicked, this, &MemoryPanel::onShowHistory);
+    connect(editBtn_, &QPushButton::clicked, this, &MemoryPanel::onEdit);
+    connect(historyBtn_, &QPushButton::clicked, this, &MemoryPanel::onShowHistory);
 
     // 折叠卡片滚动区
     auto* scroll = new QScrollArea(this);
@@ -94,11 +101,10 @@ void MemoryPanel::refresh() {
         guide->setAction(i18n::trs("＋ 写入记忆", "＋ Add memory"), [this] { onEdit(); });
         sectionsLay_->insertWidget(sectionsLay_->count() - 1, guide);
     }
-    for (const auto& [title, section] : kSections) {
+    for (const auto& sec : kSections) {
         std::vector<ah::MemoryEntry> group;
         for (const auto& m : entries_)
-            if (m.section == section.toStdString()) group.push_back(m);
-
+            if (m.section == sec.key) group.push_back(m);
         auto* content = new QWidget(this);
         auto* cl = new QVBoxLayout(content);
         cl->setContentsMargins(14, 10, 14, 12);
@@ -131,8 +137,17 @@ void MemoryPanel::refresh() {
         }
         cl->addStretch(1);
         sectionsLay_->insertWidget(sectionsLay_->count() - 1,
-                                   new ui::SectionCard(title, content, this));
+                                   new ui::SectionCard(i18n::trs(sec.zh, sec.en), content, this));
     }
+}
+
+void MemoryPanel::retranslate() {
+    PanelBase::retranslate();
+    editBtn_->setText(i18n::trs("编辑 / 新增（生成新版本）", "Edit / Add (new version)"));
+    historyBtn_->setText(i18n::trs("查看历史版本", "History"));
+    // 五个区块卡片与顶部摘要都由 refresh() 生成（区块标题在 SectionCard 构造期取词），
+    // 重跑一次 refresh() 即可整体换语言；数据量小，且与 3s 轮询同一条路径
+    refresh();
 }
 
 void MemoryPanel::onEdit() {
@@ -140,7 +155,7 @@ void MemoryPanel::onEdit() {
     dlg.setWindowTitle(i18n::trs("编辑用户记忆（保存后生成新版本，历史保留）", "Edit Memory (saved as a new version; history kept)"));
     auto* form = new QFormLayout(&dlg);
     auto* section = new QComboBox(&dlg);
-    for (const auto& [title, name] : kSections) section->addItem(title, name);
+    for (const auto& sec : kSections) section->addItem(i18n::trs(sec.zh, sec.en), sec.key);
     auto* key = new QLineEdit(&dlg);
     auto* value = new QPlainTextEdit(&dlg);
     form->addRow(i18n::trs("区块", "Section"), section);
@@ -167,10 +182,12 @@ void MemoryPanel::onEdit() {
     ah::MemoryEntry out;
     if (!platform_.memorySet("user", sectionName, keyName, value->toPlainText().toStdString(),
                              baseVersion, out, err)) {
-        ui::Toast::show(this, QString("保存失败: %1").arg(QString::fromStdString(err)), false);
+        ui::Toast::show(this, i18n::trs("保存失败: %1", "Save failed: %1")
+                                  .arg(QString::fromStdString(err)),
+                        false);
         return;
     }
-    ui::Toast::show(this, QString("记忆已保存（v%1）✓").arg(out.version));
+    ui::Toast::show(this, i18n::trs("记忆已保存（v%1）✓", "Memory saved (v%1) ✓").arg(out.version));
     refresh();
 }
 
@@ -179,7 +196,7 @@ void MemoryPanel::onShowHistory() {
     dlg.setWindowTitle(i18n::trs("按键查询历史版本", "Query History by Key"));
     auto* form = new QFormLayout(&dlg);
     auto* section = new QComboBox(&dlg);
-    for (const auto& [title, name] : kSections) section->addItem(title, name);
+    for (const auto& sec : kSections) section->addItem(i18n::trs(sec.zh, sec.en), sec.key);
     auto* key = new QLineEdit(&dlg);
     form->addRow(i18n::trs("区块", "Section"), section);
     form->addRow(i18n::trs("键", "Key"), key);
@@ -202,7 +219,8 @@ void MemoryPanel::onShowHistory() {
     view.setWindowTitle(i18n::trs("历史版本 (%1 条)", "History (%1 entries)").arg(history.size()));
     auto* l = new QVBoxLayout(&view);
     auto* table = new QTableWidget(static_cast<int>(history.size()), 4, &view);
-    table->setHorizontalHeaderLabels({"版本", "作者", "时间", "值"});
+    table->setHorizontalHeaderLabels({i18n::trs("版本", "Ver."), i18n::trs("作者", "Author"),
+                                      i18n::trs("时间", "Time"), i18n::trs("值", "Value")});
     table->horizontalHeader()->setStretchLastSection(true);
     polishTable(table);
     for (size_t i = 0; i < history.size(); ++i) {

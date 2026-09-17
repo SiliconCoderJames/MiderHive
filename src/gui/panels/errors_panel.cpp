@@ -26,13 +26,19 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
 
     auto* toolbar = new QHBoxLayout;
     statusCombo_ = new QComboBox(this);
-    statusCombo_->addItems({"全部", "open", "investigating", "resolved"});
+    // 首项是"不过滤"的展示项，只用于显示（下标 0 → 后端空筛选），故可安全翻译；
+    // 其余项是后端枚举值（open/investigating/resolved），按下标 > 0 原样回传，不译
+    statusCombo_->addItem(i18n::trs("全部", "All"));
+    statusCombo_->addItems({"open", "investigating", "resolved"});
     severityCombo_ = new QComboBox(this);
-    severityCombo_->addItems({"全部", "info", "warning", "error", "critical"});
+    severityCombo_->addItem(i18n::trs("全部", "All"));
+    severityCombo_->addItems({"info", "warning", "error", "critical"});
     resolveBtn_ = new QPushButton(i18n::trs("登记解决", "Mark Resolved"), this);
-    toolbar->addWidget(new QLabel("状态:", this));
+    statusLabel_ = new QLabel(i18n::trs("状态:", "Status:"), this);
+    severityLabel_ = new QLabel(i18n::trs("严重度:", "Severity:"), this);
+    toolbar->addWidget(statusLabel_);
     toolbar->addWidget(statusCombo_);
-    toolbar->addWidget(new QLabel("严重度:", this));
+    toolbar->addWidget(severityLabel_);
     toolbar->addWidget(severityCombo_);
     toolbar->addStretch(1);
     toolbar->addWidget(resolveBtn_);
@@ -92,16 +98,20 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
     connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) {
         if (row < 0 || row >= static_cast<int>(errors_.size())) return;
         const auto& e = errors_[static_cast<size_t>(row)];
-        infoLabel_->setText(QString("<b>%1</b> · 上报者: %2 · 来源: %3 · 状态: %4")
+        infoLabel_->setText(i18n::trs("<b>%1</b> · 上报者: %2 · 来源: %3 · 状态: %4",
+                                      "<b>%1</b> · reporter: %2 · source: %3 · status: %4")
                                 .arg(QString::fromStdString(e.title).toHtmlEscaped())
                                 .arg(QString::fromStdString(e.reporter))
                                 .arg(QString::fromStdString(e.source))
                                 .arg(QString::fromStdString(e.status)));
         QString text = QString::fromStdString(e.detail);
         if (!e.stack_trace.empty())
-            text += "\n\n---- 堆栈 ----\n" + QString::fromStdString(e.stack_trace);
+            text += i18n::trs("\n\n---- 堆栈 ----\n", "\n\n---- Stack trace ----\n") +
+                    QString::fromStdString(e.stack_trace);
         if (!e.resolution_notes.empty())
-            text += "\n\n---- 解决记录（追加） ----\n" + QString::fromStdString(e.resolution_notes);
+            text += i18n::trs("\n\n---- 解决记录（追加） ----\n",
+                              "\n\n---- Resolution notes (appended) ----\n") +
+                    QString::fromStdString(e.resolution_notes);
         detail_->setPlainText(text);
     });
 }
@@ -144,6 +154,32 @@ void ErrorsPanel::refresh() {
 void ErrorsPanel::focusFilter() {
     filterEdit_->setFocus();
     filterEdit_->selectAll();
+}
+
+void ErrorsPanel::retranslate() {
+    PanelBase::retranslate();
+    statusLabel_->setText(i18n::trs("状态:", "Status:"));
+    severityLabel_->setText(i18n::trs("严重度:", "Severity:"));
+    // 只改首项文案：其余项是后端枚举值，改了会把筛选值一并改坏
+    if (statusCombo_->count() > 0) statusCombo_->setItemText(0, i18n::trs("全部", "All"));
+    if (severityCombo_->count() > 0) severityCombo_->setItemText(0, i18n::trs("全部", "All"));
+    resolveBtn_->setText(i18n::trs("登记解决", "Mark Resolved"));
+    // 即时过滤框由 gui_util 的 makeTableFilter 建好（构造期已按当时语言取词），这里补齐重译
+    filterEdit_->setPlaceholderText(i18n::trs("输入即筛…", "Type to filter…"));
+    filterEdit_->setToolTip(i18n::trs("即时过滤（Ctrl+F 聚焦 · Esc 清空）",
+                                      "Live filter (Ctrl+F to focus · Esc to clear)"));
+    table_->setHorizontalHeaderLabels({i18n::trs("严重度", "Severity"), i18n::trs("标题", "Title"),
+                                       i18n::trs("上报者", "Reporter"), i18n::trs("状态", "Status"),
+                                       i18n::trs("时间", "Time")});
+    emptyState_->titleLabel()->setText(i18n::trs("暂无错误，一切正常 ✓", "No errors — all clear ✓"));
+    emptyState_->hintLabel()->setText(
+        i18n::trs("Agent 运行中上报的错误会自动汇总到这里，按严重度分级，处理完登记解决说明。",
+                  "Errors reported by agents are collected here, ranked by severity; record a "
+                  "resolution note once handled."));
+    // 空状态的动作按钮由 InlineEmpty::setAction 创建（重复调用会重复接信号），
+    // 这里只取回按钮改文案，保持原有 connect 不被破坏
+    if (auto* actionBtn = emptyState_->findChild<QPushButton*>())
+        actionBtn->setText(i18n::trs("＋ 手动上报错误", "＋ Report an issue"));
 }
 
 void ErrorsPanel::onResolve() {

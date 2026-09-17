@@ -369,4 +369,8 @@ void UsagePanel::retranslate() {
                                  i18n::trs("调用", "Calls"), i18n::trs("占比", "Share")};
     for (int c = 0; c < agentTable_->columnCount() && c < headers.size(); ++c)
         agentTable_->horizontalHeaderItem(c)->setText(headers[c]);
+    // 空状态标题/提示是构造期一次性写入的（不随 refresh 重建），需显式重译
+    tableEmpty_->titleLabel()->setText(i18n::trs("该筛选下暂无用量", "no usage under this filter"));
+    tableEmpty_->hintLabel()->setText(i18n::trs("放宽时间范围，或把 Agent / 模型切回「全部」",
+                                                "widen the range, or set agent / model back to all"));
 }

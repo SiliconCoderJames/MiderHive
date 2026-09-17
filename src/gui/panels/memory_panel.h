@@ -14,6 +14,7 @@ class MemoryPanel : public PanelBase {
 public:
     explicit MemoryPanel(ah::Platform& platform, QWidget* parent = nullptr);
     void refresh() override;
+    void retranslate() override;
 
 private slots:
     void onEdit();
@@ -22,5 +23,7 @@ private slots:
 private:
     QLabel* headerLabel_ = nullptr;
     QVBoxLayout* sectionsLay_ = nullptr;
+    QPushButton* editBtn_ = nullptr;      // 工具条「编辑 / 新增」（语言切换需重译）
+    QPushButton* historyBtn_ = nullptr;   // 工具条「查看历史版本」
     std::vector<ah::MemoryEntry> entries_;
 };

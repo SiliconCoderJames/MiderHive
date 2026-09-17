@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
     ah::Platform platform(ah::defaultHomeDir());
     std::string err;
     if (!platform.bootstrap(err)) {
-        QMessageBox::critical(nullptr, "MiderHive 工作台",
+        QMessageBox::critical(nullptr, i18n::trs("MiderHive 工作台", "MiderHive Workbench"),
                               i18n::trs("平台初始化失败，工作台无法继续运行。",
                                         "Platform initialization failed; the workbench cannot "
                                         "continue.") +
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
                                                  return i.code == "port_occupied";
                                              });
         if (!alreadyTold)
-            QMessageBox::warning(nullptr, "MiderHive 工作台",
+            QMessageBox::warning(nullptr, i18n::trs("MiderHive 工作台", "MiderHive Workbench"),
                                  i18n::trs("HTTP 服务启动失败，Agent 将无法接入。",
                                            "HTTP service failed to start; agents cannot connect.") +
                                      "\n" + ui::humanError(QString::fromStdString(serr)));

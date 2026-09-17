@@ -14,6 +14,7 @@ class LogsPanel : public PanelBase {
 public:
     explicit LogsPanel(ah::Platform& platform, QWidget* parent = nullptr);
     void refresh() override;
+    void retranslate() override;
     void focusFilter() override;
 
 private:
@@ -21,6 +22,9 @@ private:
     QDateEdit* sinceEdit_ = nullptr;
     QLineEdit* filterEdit_ = nullptr;
     QLabel* countLabel_ = nullptr;
+    QLabel* actorLabel_ = nullptr;   // 工具条「身份:」（语言切换需重译）
+    QLabel* sinceLabel_ = nullptr;   // 工具条「起始日期:」
+    QPushButton* refreshBtn_ = nullptr;  // 工具条「筛选」
     QTreeWidget* tree_ = nullptr;
     std::vector<ah::AuditRecord> records_;
 };

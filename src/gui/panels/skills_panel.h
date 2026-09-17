@@ -17,6 +17,7 @@ class SkillsPanel : public PanelBase {
 public:
     explicit SkillsPanel(ah::Platform& platform, QWidget* parent = nullptr);
     void refresh() override;
+    void retranslate() override;
     void focusFilter() override;
 
 private slots:
@@ -26,6 +27,10 @@ private slots:
 private:
     QComboBox* categoryCombo_ = nullptr;
     QComboBox* ownerCombo_ = nullptr;
+    QLabel* categoryLabel_ = nullptr;  // 工具条「分类:」（语言切换需重译）
+    QLabel* ownerLabel_ = nullptr;     // 工具条「提供者:」
+    QPushButton* refreshBtn_ = nullptr;    // 工具条「刷新」
+    QPushButton* registerBtn_ = nullptr;   // 工具条「＋ 注册技能」
     QLineEdit* filterEdit_ = nullptr;
     QTableWidget* table_ = nullptr;
     QTextBrowser* detail_ = nullptr;

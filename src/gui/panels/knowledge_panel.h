@@ -19,6 +19,7 @@ class KnowledgePanel : public PanelBase {
 public:
     explicit KnowledgePanel(ah::Platform& platform, QWidget* parent = nullptr);
     void refresh() override;
+    void retranslate() override;
     void focusFilter() override;
 
 private slots:
@@ -34,6 +35,9 @@ private:
     QCheckBox* semanticCheck_ = nullptr;
     QLineEdit* tagEdit_ = nullptr;
     QLineEdit* viewFilter_ = nullptr;
+    QPushButton* searchBtn_ = nullptr;   // 工具条「搜索」（语言切换需重译）
+    QPushButton* newBtn_ = nullptr;      // 工具条「＋ 新建条目」
+    QLabel* tagLabel_ = nullptr;         // 副工具条「标签」
     QLabel* statsLabel_ = nullptr;
     QTableWidget* table_ = nullptr;
     QTextBrowser* detail_ = nullptr;

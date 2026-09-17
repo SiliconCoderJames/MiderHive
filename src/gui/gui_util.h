@@ -51,8 +51,27 @@ inline QString humanError(const QString& raw) {
                    "The database file appears to be corrupted.\nNext: close the workbench, restore "
                    "platform.db from the latest backup, then start again.");
     }
-    if (s.contains("in use") || s.contains("bind") || s.contains("listen") ||
-        s.contains("address")) {
+    // 磁盘写满 / 无写权限：必须排在"端口占用"之前——SQLite 的
+    // "database or disk is full" 与 "unable to open database"（权限）都容易被
+    // 泛化匹配吃掉；且端口分支原先匹配裸 "address"，会把 "address not found"
+    // 之类误判成端口冲突（见下方收窄）。
+    if (s.contains("disk is full") || s.contains("disk full") || s.contains("no space left")) {
+        return say("磁盘空间不足，写入失败。\n"
+                   "下一步：清理磁盘，或把数据目录迁到空间充足的分区后重试。",
+                   "The disk is full, so the write failed.\nNext: free up space (or move the data "
+                   "directory to a roomier drive) and retry.");
+    }
+    if (s.contains("permission denied") || s.contains("access is denied") ||
+        s.contains("read-only") || s.contains("eperm") || s.contains("cannot write") ||
+        s.contains("cannot replace") || s.contains("unable to open database")) {
+        return say("没有写入权限（文件被占用、目录只读，或被安全软件拦截）。\n"
+                   "下一步：确认数据目录可写、没有其他进程独占该文件，然后重试。",
+                   "No write permission (file in use, read-only directory, or blocked by security "
+                   "software).\nNext: make sure the data directory is writable and no other process "
+                   "holds the file, then retry.");
+    }
+    if (s.contains("bind") || s.contains("listen") || s.contains("port") ||
+        s.contains("address already") || s.contains("address in use") || s.contains("in use")) {
         return say("网络端口被占用，本机服务起不来，Agent 将无法接入。\n"
                    "下一步：关闭占用该端口的程序，或设置环境变量 MIDERHIVE_PORT 换端口（两侧端口要一致）。",
                    "The port is occupied, so the local service cannot start and agents cannot "
@@ -76,7 +95,7 @@ inline QString humanError(const QString& raw) {
                    "The target does not exist (it may have been removed, or the name is "
                    "misspelled).\nNext: refresh the list and check the name.");
     }
-    if (s.contains("only zcode") || s.contains("manager") || s.contains("not allowed") ||
+    if (s.contains("only zcode") || s.contains("manager only") || s.contains("not allowed") ||
         s.contains("forbidden")) {
         return say("权限不足：该操作仅限管理者（zcode）。\n下一步：用管理者账号操作，或让管理者代为处理。",
                    "Not allowed: this action is manager-only (zcode).\nNext: do it as the manager, "

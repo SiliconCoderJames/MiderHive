@@ -251,6 +251,11 @@ void MainWindow::applyLanguage() {
     langBtn_->setToolTip(i18n::trs("切换语言", "Switch language"));
     settingsBtn_->setToolTip(i18n::trs("设置", "Settings"));
     settingsBtn_->setAccessibleName(i18n::trs("设置", "Settings"));
+    // 版本 tooltip 只在构造时设过，不在这里重译的话切到英文后会一直留着中文
+    ver_->setToolTip(i18n::trs("MiderHive 版本 %1", "MiderHive %1")
+                         .arg(QString::fromUtf8(ah::kPlatformVersion)));
+    // 刷新指示的 tooltip 平时由 onRefresh 现取，但切语言的瞬间还留着旧语言的值
+    spin_->setToolTip(i18n::trs("正在刷新…", "refreshing…"));
     int row = nav_->currentRow();
     buildNav();
     if (row >= 0) nav_->setCurrentRow(row);
@@ -508,7 +513,7 @@ void MainWindow::checkOnboarding() {
         for (const auto& a : agents) {
             if (QString::fromStdString(a.name) != name || a.status != "online") continue;
             const auto* tool = ui::integrations::toolById(toolId);
-            const QString toolName = tool ? tool->nameEn : toolId;
+            const QString toolName = tool ? i18n::trs(tool->nameZh, tool->nameEn) : toolId;
             // 欢迎记忆（作者=该 Agent，写入「项目档案」区）：先移除登记再弹窗，
             // 避免模态框期间 3s 轮询重入造成重复弹窗/重复写入
             std::string merr;

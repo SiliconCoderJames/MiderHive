@@ -26,19 +26,21 @@ LogsPanel::LogsPanel(ah::Platform& platform, QWidget* parent)
     sinceEdit_->setDisplayFormat("yyyy-MM-dd");
     sinceEdit_->setCalendarPopup(true);
     sinceEdit_->setDate(QDate::currentDate().addDays(-30));  // 默认看近 30 天，而非 2000 年
-    auto* refreshBtn = new QPushButton(i18n::trs("筛选", "Apply"), this);
-    refreshBtn->setObjectName("primary");
+    refreshBtn_ = new QPushButton(i18n::trs("筛选", "Apply"), this);
+    refreshBtn_->setObjectName("primary");
     countLabel_ = new QLabel(this);
     countLabel_->setStyleSheet(ui::th("color:@muted@; font-size:11px;"));
-    toolbar->addWidget(new QLabel(i18n::trs("身份:", "Actor:"), this));
+    actorLabel_ = new QLabel(i18n::trs("身份:", "Actor:"), this);
+    sinceLabel_ = new QLabel(i18n::trs("起始日期:", "Since:"), this);
+    toolbar->addWidget(actorLabel_);
     toolbar->addWidget(agentCombo_);
-    toolbar->addWidget(new QLabel(i18n::trs("起始日期:", "Since:"), this));
+    toolbar->addWidget(sinceLabel_);
     toolbar->addWidget(sinceEdit_);
-    toolbar->addWidget(refreshBtn);
+    toolbar->addWidget(refreshBtn_);
     toolbar->addStretch(1);
     toolbar->addWidget(countLabel_);
     layout->addLayout(toolbar);
-    connect(refreshBtn, &QPushButton::clicked, this, [this] { refresh(); });
+    connect(refreshBtn_, &QPushButton::clicked, this, [this] { refresh(); });
     connect(agentCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this](int) { refresh(); });
 
@@ -63,6 +65,27 @@ LogsPanel::LogsPanel(ah::Platform& platform, QWidget* parent)
 void LogsPanel::focusFilter() {
     filterEdit_->setFocus();
     filterEdit_->selectAll();
+}
+
+void LogsPanel::retranslate() {
+    PanelBase::retranslate();
+    actorLabel_->setText(i18n::trs("身份:", "Actor:"));
+    sinceLabel_->setText(i18n::trs("起始日期:", "Since:"));
+    refreshBtn_->setText(i18n::trs("筛选", "Apply"));
+    // 即时过滤框由 gui_util 的 makeTreeFilter 建好（构造期已按当时语言取词），
+    // 这里补上与之一致的重译，避免切语言后占位符停留在旧语言
+    filterEdit_->setPlaceholderText(i18n::trs("输入即筛…", "Type to filter…"));
+    filterEdit_->setToolTip(i18n::trs("即时过滤（Ctrl+F 聚焦 · Esc 清空）",
+                                      "Live filter (Ctrl+F to focus · Esc to clear)"));
+    // 只改首项文案：其余项是身份/Agent 名（数据），改了会把筛选值改坏
+    if (agentCombo_->count() > 0)
+        agentCombo_->setItemText(0, i18n::trs("全部身份", "All identities"));
+    tree_->setHeaderLabels({i18n::trs("时间", "Time"), i18n::trs("身份", "Actor"),
+                            i18n::trs("动作", "Action"), i18n::trs("对象", "Target"),
+                            i18n::trs("详情", "Detail")});
+    // 条数摘要是 refresh() 生成的：用最后一次加载的结果就地重译，不再查库
+    countLabel_->setText(i18n::trs("共 %1 条", "%1 records")
+                             .arg(formatNum(static_cast<qint64>(records_.size()))));
 }
 
 void LogsPanel::refresh() {

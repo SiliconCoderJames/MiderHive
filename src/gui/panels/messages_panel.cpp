@@ -59,23 +59,29 @@ MessagesPanel::MessagesPanel(ah::Platform& platform, QWidget* parent)
 
     auto* toolbar = new QHBoxLayout;
     kindCombo_ = new QComboBox(this);
-    kindCombo_->addItems({"全部", "note", "question", "task"});
+    // 首项是"不过滤"的展示项（下标 0 → 后端空筛选），可安全翻译；
+    // 其余项是后端枚举值，按下标 > 0 原样回传，不译
+    kindCombo_->addItem(i18n::trs("全部", "All"));
+    kindCombo_->addItems({"note", "question", "task"});
     statusCombo_ = new QComboBox(this);
-    statusCombo_->addItems({"全部", "unread", "read", "pending", "accepted", "done", "declined"});
-    auto* composeBtn = new QPushButton(i18n::trs("＋ 发消息 / 指派任务", "＋ Message / Assign Task"), this);
-    composeBtn->setObjectName("primary");
-    toolbar->addWidget(new QLabel(i18n::trs("类型:", "Kind:"), this));
+    statusCombo_->addItem(i18n::trs("全部", "All"));
+    statusCombo_->addItems({"unread", "read", "pending", "accepted", "done", "declined"});
+    composeBtn_ = new QPushButton(i18n::trs("＋ 发消息 / 指派任务", "＋ Message / Assign Task"), this);
+    composeBtn_->setObjectName("primary");
+    kindLabel_ = new QLabel(i18n::trs("类型:", "Kind:"), this);
+    statusLabel_ = new QLabel(i18n::trs("状态:", "Status:"), this);
+    toolbar->addWidget(kindLabel_);
     toolbar->addWidget(kindCombo_);
-    toolbar->addWidget(new QLabel(i18n::trs("状态:", "Status:"), this));
+    toolbar->addWidget(statusLabel_);
     toolbar->addWidget(statusCombo_);
     toolbar->addStretch(1);
-    toolbar->addWidget(composeBtn);
+    toolbar->addWidget(composeBtn_);
     layout->addLayout(toolbar);
     connect(kindCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this](int) { refresh(); });
     connect(statusCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this](int) { refresh(); });
-    connect(composeBtn, &QPushButton::clicked, this, &MessagesPanel::onCompose);
+    connect(composeBtn_, &QPushButton::clicked, this, &MessagesPanel::onCompose);
 
     // 对话流（点击气泡选中，锚点携带消息 uuid）
     chat_ = new QTextBrowser(this);
@@ -149,7 +155,7 @@ void MessagesPanel::renderChat() {
     for (const auto& m : messages_) {
         bool selected = m.uuid == selectedUuid_;
         QString recipient =
-            m.recipient.empty() ? "全员" : QString::fromStdString(m.recipient);
+            m.recipient.empty() ? i18n::trs("全员", "everyone") : QString::fromStdString(m.recipient);
         // 气泡：选中描边高亮；task/question/note 用色区分；头部带头像圈
         html += QString(
                     "<a name='%1'></a>"
@@ -197,6 +203,24 @@ void MessagesPanel::renderChat() {
     // 选中气泡被重建后滚回可视区
     if (!selectedUuid_.empty()) chat_->scrollToAnchor(QString::fromStdString(selectedUuid_));
     updateActions();
+}
+
+void MessagesPanel::retranslate() {
+    PanelBase::retranslate();
+    kindLabel_->setText(i18n::trs("类型:", "Kind:"));
+    statusLabel_->setText(i18n::trs("状态:", "Status:"));
+    // 只改首项文案：其余项是后端枚举值，改了会把筛选值一并改坏
+    if (kindCombo_->count() > 0) kindCombo_->setItemText(0, i18n::trs("全部", "All"));
+    if (statusCombo_->count() > 0) statusCombo_->setItemText(0, i18n::trs("全部", "All"));
+    composeBtn_->setText(i18n::trs("＋ 发消息 / 指派任务", "＋ Message / Assign Task"));
+    replyBtn_->setText(i18n::trs("回复", "Reply"));
+    readBtn_->setText(i18n::trs("标记已读", "Mark Read"));
+    acceptBtn_->setText(i18n::trs("接受任务", "Accept"));
+    doneBtn_->setText(i18n::trs("任务完成", "Done"));
+    declineBtn_->setText(i18n::trs("拒绝任务", "Decline"));
+    // 气泡 HTML（类型/状态胶囊、收件人、空状态）与选中摘要在 renderChat/updateActions 里取词：
+    // 就地重跑一次即可换语言，不再查库（用已有的 messages_；renderChat 末尾会带 updateActions）
+    renderChat();
 }
 
 void MessagesPanel::updateActions() {
@@ -251,7 +275,9 @@ void MessagesPanel::onCompose() {
                                recipient->currentData().toString().toStdString(),
                                subject->text().trimmed().toStdString(),
                                body->toPlainText().toStdString(), out, err)) {
-        ui::Toast::show(this, QString("发送失败: %1").arg(QString::fromStdString(err)), false);
+        ui::Toast::show(this, i18n::trs("发送失败: %1", "Send failed: %1")
+                                  .arg(QString::fromStdString(err)),
+                        false);
         return;
     }
     ui::Toast::show(this, i18n::trs("消息已发送 ✓", "Message sent ✓"));
@@ -264,7 +290,7 @@ void MessagesPanel::onReply() {
         if (m.uuid == selectedUuid_) cur = &m;
     if (!cur) return;
     QDialog dlg(this);
-    dlg.setWindowTitle(QString("回复: %1").arg(QString::fromStdString(cur->subject)));
+    dlg.setWindowTitle(i18n::trs("回复: %1", "Reply: %1").arg(QString::fromStdString(cur->subject)));
     auto* l = new QVBoxLayout(&dlg);
     auto* body = new QPlainTextEdit(&dlg);
     l->addWidget(body);
@@ -277,7 +303,9 @@ void MessagesPanel::onReply() {
     ah::Message out;
     std::string err;
     if (!platform_.messageReply("user", cur->uuid, body->toPlainText().toStdString(), out, err)) {
-        ui::Toast::show(this, QString("回复失败: %1").arg(QString::fromStdString(err)), false);
+        ui::Toast::show(this, i18n::trs("回复失败: %1", "Reply failed: %1")
+                                  .arg(QString::fromStdString(err)),
+                        false);
         return;
     }
     ui::Toast::show(this, i18n::trs("回复已发送 ✓", "Reply sent ✓"));
@@ -292,9 +320,11 @@ void MessagesPanel::onStatus(const QString& status) {
     ah::Message out;
     std::string err;
     if (!platform_.messageSetStatus("user", cur->uuid, status.toStdString(), out, err)) {
-        ui::Toast::show(this, QString("状态变更失败: %1").arg(QString::fromStdString(err)), false);
+        ui::Toast::show(this, i18n::trs("状态变更失败: %1", "Status change failed: %1")
+                                  .arg(QString::fromStdString(err)),
+                        false);
         return;
     }
-    ui::Toast::show(this, QString("状态已更新为 %1 ✓").arg(status));
+    ui::Toast::show(this, i18n::trs("状态已更新为 %1 ✓", "Status updated to %1 ✓").arg(status));
     refresh();
 }

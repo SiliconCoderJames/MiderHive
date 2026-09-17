@@ -436,8 +436,11 @@ void DashboardPanel::showAgentActions(const QString& name, bool online) {
     // 离线 Agent 的出路：把接入命令直接复制走，用户不用去翻文档凑参数
     menu.addAction(i18n::trs("复制接入命令", "Copy connect command"), this, [this, name] {
         const QString exe = QCoreApplication::applicationDirPath() + "/miderhive-mcp.exe";
-        const QString cmd = QString("claude mcp add miderhive --env MIDERHIVE_AGENT_NAME=%1 "
-                                    "--env MIDERHIVE_AGENT_KEY=<该 Agent 的密钥> -- \"%2\"")
+        // 命令本体是固定 CLI 语法，只有密钥占位符是给用户看的中文，按语言切换
+        const QString cmd = i18n::trs("claude mcp add miderhive --env MIDERHIVE_AGENT_NAME=%1 "
+                                      "--env MIDERHIVE_AGENT_KEY=<该 Agent 的密钥> -- \"%2\"",
+                                      "claude mcp add miderhive --env MIDERHIVE_AGENT_NAME=%1 "
+                                      "--env MIDERHIVE_AGENT_KEY=<this agent's key> -- \"%2\"")
                                 .arg(name, exe);
         QApplication::clipboard()->setText(cmd);
         ui::Toast::show(this, i18n::trs("已复制接入命令", "connect command copied"));
@@ -790,5 +793,21 @@ void DashboardPanel::retranslate() {
     eventFilter_->setItemText(4, i18n::trs("消息", "Messages"));
     eventFilter_->setItemText(5, i18n::trs("错误", "Errors"));
     eventFilter_->setItemText(6, i18n::trs("Agent", "Agents"));
+    // 构造期一次性写入、不在 refresh() 里重生成的铬层文案
+    budgetSpark_->setToolTip(i18n::trs("最近 14 天逐日消耗", "daily tokens, last 14 days"));
+    agentsEmpty_->titleLabel()->setText(i18n::trs("还没有 Agent 接入", "no agents yet"));
+    agentsEmpty_->hintLabel()->setText(
+        i18n::trs("用右侧设置里的「接入命令」把第一个 Agent 拉进蜂巢",
+                  "use the connect command in Settings to add your first agent"));
+    eventEmpty_->titleLabel()->setText(i18n::trs("该类型暂无事件", "no events of this type"));
+    eventEmpty_->hintLabel()->setText(i18n::trs("换个类型，或等 Agent 产生新的操作",
+                                                "pick another type, or wait for new activity"));
+    emptyAlerts_->titleLabel()->setText(i18n::trs("暂无错误，一切正常", "No errors — all clear"));
+    emptyAlerts_->hintLabel()->setText(
+        i18n::trs("预算越线或 Agent 报错时会在这里分级告警",
+                  "budget alerts and reported errors show up here"));
+    // 健康横幅由 refreshHealth() 按内容签名增量重建：签名不变会短路，这里显式置脏
+    // 强制下一轮按新语言重建（与 fixKeyfile 后的处理同一条路径）
+    healthDirty_ = true;
     lastTimeline_.clear();  // 强制事件流下次刷新重建（文案随语言变化）
 }
