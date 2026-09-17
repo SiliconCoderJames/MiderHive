@@ -52,6 +52,16 @@ private:
     std::string vecTableFor(size_t dim) const;
     bool ensureVecTableFor(size_t dim, std::string& err);
     bool vecTableExists(size_t dim, bool& exists, std::string& err);
+    // 现有维度表名（只认 CREATE VIRTUAL TABLE 的条目，避开 vec0 的 *_info/*_chunks 影子表）。
+    // 失败通过**返回值**表达：err 是调用方复用的字符串，成功时不会被清空，
+    // 不能用"err 非空"判断失败（仓库约定：err 仅在返回 false 时有意义）。
+    bool vecTableNames(std::vector<std::string>& out, std::string& err);
+    // "维度对不上"时的可自查提示：列出本库现有维度与该维度的 provider 标签，
+    // 让调用方立刻看出"用 1024 写、用 1536 查"这类错配（而不是拿到一个空数组猜原因）
+    std::string existingDimsHint();
+    // 单次 kNN 查询（vec0：k 与 LIMIT 不能同时出现；k 隐含按 distance 升序）
+    bool knnHits(size_t dim, const std::vector<float>& queryVec, int k,
+                 std::vector<std::pair<int64_t, double>>& hits, std::string& err);
     bool insertVec(int64_t entryId, const std::vector<float>& vec, std::string& err);
     // 一次 IN (...) 查询取回全部条目（分批防触 SQLITE_MAX_VARIABLE_NUMBER），
     // 保持入参顺序。替换掉此前的逐行查询（N+1）。

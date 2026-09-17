@@ -153,6 +153,63 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
     return latest(uuid, out, err);
 }
 
+bool KnowledgeService::vecTableNames(std::vector<std::string>& out, std::string& err) {
+    out.clear();
+    // sqlite_master 里 vec0 还会登记 *_info / *_chunks 等影子表，只认虚表本身
+    return db_.query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'knowledge_vec_d%' "
+        "AND sql LIKE 'CREATE VIRTUAL TABLE%'",
+        nullptr, [&](Stmt& st) { out.push_back(st.text(0)); }, err);
+}
+
+std::string KnowledgeService::existingDimsHint() {
+    // 表名形如 knowledge_vec_d<dim>：前缀 + 纯数字才认（与 deleteVecsForUuid 同一白名单）
+    static constexpr const char* kPrefix = "knowledge_vec_d";
+    const size_t kPrefixLen = std::strlen(kPrefix);
+    std::vector<std::string> names;
+    std::string ignored;  // 提示是尽力而为：查不到就返回空提示，不改变主流程
+    if (!vecTableNames(names, ignored)) return "";
+    if (names.empty()) return " (this hive has no embeddings yet)";
+
+    std::string hint = " (existing: ";
+    bool first = true;
+    for (const auto& n : names) {
+        if (n.size() <= kPrefixLen) continue;
+        const std::string dimStr = n.substr(kPrefixLen);
+        if (!std::all_of(dimStr.begin(), dimStr.end(),
+                         [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }))
+            continue;
+        // 该维度最新一条的 provider 标签；查不到就标 unknown（老数据可能为空串）
+        std::string provider = "unknown", perr;
+        db_.query("SELECT embedding_provider FROM knowledge_entries WHERE id IN "
+                  "(SELECT entry_id FROM " + n + ") ORDER BY id DESC LIMIT 1",
+                  nullptr,
+                  [&](Stmt& st) {
+                      if (!st.isNull(0) && !st.text(0).empty()) provider = st.text(0);
+                  },
+                  perr);
+        if (!first) hint += ", ";
+        hint += dimStr + " [" + provider + "]";
+        first = false;
+    }
+    hint += ")";
+    return first ? std::string(" (this hive has no embeddings yet)") : hint;
+}
+
+bool KnowledgeService::knnHits(size_t dim, const std::vector<float>& queryVec, int k,
+                               std::vector<std::pair<int64_t, double>>& hits, std::string& err) {
+    hits.clear();
+    const std::string bytes = vecToBytes(queryVec);
+    return db_.query(
+        "SELECT entry_id, distance FROM " + vecTableFor(dim) +
+            " WHERE embedding MATCH ? AND k = ?",
+        [&](Stmt& st) {
+            st.bindBlob(1, bytes.data(), bytes.size());
+            st.bind(2, static_cast<int64_t>(k));
+        },
+        [&](Stmt& st) { hits.emplace_back(st.i64(0), st.dbl(1)); }, err);
+}
+
 bool KnowledgeService::insertVec(int64_t entryId, const std::vector<float>& vec, std::string& err) {
     std::string bytes = vecToBytes(vec);
     return db_.query("INSERT INTO " + vecTableFor(vec.size()) + "(entry_id, embedding) VALUES (?,?)",
@@ -296,16 +353,10 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
 
 bool KnowledgeService::deleteVecsForUuid(const std::string& uuid, std::string& err) {
     // 条目本身不记录用了哪个维度，逐一清已存在的维度表最可靠（维度表数量是个位数）。
-    // sqlite_master 里 vec0 还会登记 *_info / *_chunks 等影子表，必须只认
-    // "CREATE VIRTUAL TABLE" 的条目；表名再按"前缀 + 纯数字"白名单二次校验后才拼 SQL。
+    // 表名来自 sqlite_master，仍按"前缀 + 纯数字"白名单二次校验后才拼进 SQL
+    // （与"禁止字符串拼装 SQL"的规则保持同一诚实标准）。
     std::vector<std::string> tables;
-    if (!db_.query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'knowledge_vec_d%' "
-            "AND sql LIKE 'CREATE VIRTUAL TABLE%'",
-            nullptr,
-            [&](Stmt& st) { tables.push_back(st.text(0)); }, err))
-        return false;
-    static constexpr const char* kPrefix = "knowledge_vec_d";
+    if (!vecTableNames(tables, err)) return false;    static constexpr const char* kPrefix = "knowledge_vec_d";
     for (const auto& t : tables) {
         const bool numeric = t.size() > std::strlen(kPrefix) &&
                              std::all_of(t.begin() + std::strlen(kPrefix), t.end(),
@@ -461,43 +512,50 @@ bool KnowledgeService::searchSemantic(const std::vector<float>& queryVec, int li
     const size_t dim = queryVec.size();
     bool exists = false;
     if (!vecTableExists(dim, exists, err)) return false;
-    if (!exists) return true;  // 这个维度还没有任何条目：如实返回零命中（不是错误）
-
-    // vec0 约束：k 与 LIMIT 不能同时出现；k 已隐含按 distance 升序返回。
-    // 带 tag 过滤时多召回一些再过滤（vec0 不支持在 MATCH 里做标量过滤）——
-    // 否则"先取 limit 条再过滤"会系统性少给结果。
-    const int base = limit > 0 ? limit : 20;
-    const int want = tagFilter.empty() ? base : std::min(base * 4, 200);
-    std::string bytes = vecToBytes(queryVec);
-    std::vector<std::pair<int64_t, double>> hits;
-    if (!db_.query(
-            "SELECT entry_id, distance FROM " + vecTableFor(dim) +
-                " WHERE embedding MATCH ? AND k = ?",
-            [&](Stmt& st) {
-                st.bindBlob(1, bytes.data(), bytes.size());
-                st.bind(2, static_cast<int64_t>(want));
-            },
-            [&](Stmt& st) { hits.emplace_back(st.i64(0), st.dbl(1)); }, err))
+    if (!exists) {
+        // 明确报错而不是静默返回空：维度错配（用 1024 写、用 1536 查）是最容易发生、
+        // 又最难看出的用法错误，一条"现有维度 + provider"提示就能自证。
+        err = "no entries with " + std::to_string(dim) + "-dim embeddings" + existingDimsHint();
         return false;
-
-    // 一次批量取回（保持 kNN 距离序），再按 tag 过滤并截断到 limit
-    std::vector<int64_t> ids;
-    ids.reserve(hits.size());
-    std::map<int64_t, double> distById;
-    for (const auto& h : hits) {
-        ids.push_back(h.first);
-        distById[h.first] = h.second;
     }
+
+    const int base = limit > 0 ? limit : 20;
+    constexpr int kMax = 10000;
+
+    // vec0 不支持在 MATCH 里做标量过滤，带 tag 时只能"多召回再过滤"。
+    // 单次固定倍数（原实现 limit×4）在"未打标签的条目向量更近"时会系统性少给，
+    // 因此按梯度扩 k 重查，直到：凑够 base 条 / 本次召回断档（行数 < k，该维度已取尽）/ 到上限。
+    int k = tagFilter.empty() ? base : std::min(base * 4, 200);
+    std::vector<std::pair<int64_t, double>> hits;
     std::vector<KnowledgeEntry> entries;
-    if (!fetchByIds(ids, entries, err)) return false;
+    for (;;) {
+        if (!knnHits(dim, queryVec, k, hits, err)) return false;
+        std::vector<int64_t> ids;
+        ids.reserve(hits.size());
+        for (const auto& h : hits) ids.push_back(h.first);
+        if (!fetchByIds(ids, entries, err)) return false;  // 顺序 = kNN 距离序
+
+        if (tagFilter.empty() || k >= kMax) break;
+        int tagged = 0;
+        for (const auto& e : entries)
+            if (e.tags_json.find("\"" + tagFilter + "\"") != std::string::npos) ++tagged;
+        if (tagged >= base) break;
+        if (static_cast<int>(hits.size()) < k) break;  // 已取尽，再扩 k 也没用
+        k = std::min(k * 4, kMax);
+    }
+
+    // 按距离序组装：hits 已按 distance 升序，用 id→entry 查表同时拿到正文与距离
+    std::map<int64_t, KnowledgeEntry> byId;
+    for (auto& e : entries) byId.emplace(e.id, std::move(e));
     int kept = 0;
-    for (auto& e : entries) {
+    for (const auto& h : hits) {
         if (limit > 0 && kept >= limit) break;
+        auto it = byId.find(h.first);
+        if (it == byId.end()) continue;  // 非最新版本（fetchByIds 只取 is_latest=1）
         if (!tagFilter.empty() &&
-            e.tags_json.find("\"" + tagFilter + "\"") == std::string::npos)
+            it->second.tags_json.find("\"" + tagFilter + "\"") == std::string::npos)
             continue;
-        const double dist = distById[e.id];
-        out.push_back({std::move(e), dist});
+        out.push_back({std::move(it->second), h.second});
         ++kept;
     }
     return true;

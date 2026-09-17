@@ -997,6 +997,21 @@ static void test_embedding_dims() {
         CHECK(sawBuiltin);
         CHECK(!sawCustom);
 
+        // A1 维度错配必须明确报错（而不是静默返回空数组）：错误里要点出请求维度
+        // 与本库现有维度 + provider 标签，调用方才能自查"用 512 写、用 1536 查"。
+        std::vector<float> v1536(1536, 0.02f);
+        std::string dimErr;
+        hits.clear();
+        CHECK(!p.knowledgeSearchSemantic(v1536, 10, "", hits, dimErr));
+        CHECK(dimErr.find("1536") != std::string::npos);
+        CHECK(dimErr.find("384") != std::string::npos);
+        CHECK(dimErr.find("512") != std::string::npos);
+        CHECK(dimErr.find("test-model") != std::string::npos);  // 512 维那条的 provider 标签
+        // 维度合法但越界（<64 / >4096）同样明确拒绝
+        std::string badErr;
+        CHECK(!p.knowledgeSearchSemantic(std::vector<float>(32, 0.f), 10, "", hits, badErr));
+        CHECK(!p.knowledgeSearchSemantic(std::vector<float>(5000, 0.f), 10, "", hits, badErr));
+
         p.shutdown();
     }
     std::error_code ec;
@@ -1149,6 +1164,30 @@ static void test_semantic_tag_pushdown() {
         }
         CHECK(p.knowledgeSearch("soloFeed", ah::SearchMode::Semantic, 10, "t2", hits, err));
         CHECK_EQ(hits.size(), static_cast<size_t>(3));
+
+        // A2 对抗分布：不带标签的条目与查询**更相似**（关键词出现 3 次），带标签的更远
+        // （出现 1 次）。单次固定倍数召回的旧实现在这里只会返回零星几条；
+        // 梯度扩 k 必须仍然给满 limit。
+        for (int i = 0; i < 12; ++i) {
+            ah::KnowledgeEntry e;
+            CHECK(p.knowledgeCreate("hermes", "far-tagged " + std::to_string(i),
+                                    "adversarialFeed once", {"t3"}, "tech", {}, "", e, err));
+        }
+        for (int i = 0; i < 30; ++i) {
+            ah::KnowledgeEntry e;
+            CHECK(p.knowledgeCreate("hermes", "near-untagged " + std::to_string(i),
+                                    "adversarialFeed adversarialFeed adversarialFeed near " +
+                                        std::to_string(i),
+                                    {}, "tech", {}, "", e, err));
+        }
+        CHECK(p.knowledgeSearch("adversarialFeed", ah::SearchMode::Semantic, 10, "t3", hits, err));
+        CHECK_EQ(hits.size(), static_cast<size_t>(10));
+        for (const auto& h : hits) {
+            bool has = false;
+            for (const auto& t : h.entry.tags)
+                if (t == "t3") has = true;
+            CHECK(has);
+        }
         p.shutdown();
     }
     std::error_code ec;
