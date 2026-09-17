@@ -386,17 +386,28 @@ std::vector<ToolDef> buildTools() {
 
     t.push_back({"knowledge_search",
                  "Search the knowledge base. mode=keyword does substring match; "
-                 "mode=semantic does vector similarity (best for natural-language questions).",
+                 "mode=semantic does vector similarity (best for natural-language questions). "
+                 "Pass the same embedding you wrote the entry with (64..4096 numbers) to search "
+                 "entries created with a model-supplied embedding; omit it to search the "
+                 "built-in embedding space.",
                  objSchema({{"query", prop("string", "search text")},
                             {"mode", prop("string", "keyword (default) or semantic")},
                             {"limit", prop("integer", "max hits, default 20")},
-                            {"tag", prop("string", "optional tag filter")}},
+                            {"tag", prop("string", "optional tag filter")},
+                            {"embedding", prop("array", "optional query vector; only used with "
+                                                        "mode=semantic")}},
                            {"query"}),
                  [](const json& a) {
                      json body = {{"query", sarg(a, "query")},
                                   {"mode", sopt(a, "mode", "keyword")},
                                   {"limit", iopt(a, "limit", 20)},
                                   {"tag", sopt(a, "tag")}};
+                     auto emb = a.find("embedding");
+                     if (emb != a.end() && !emb->is_null()) {
+                         if (!emb->is_array())
+                             throw std::runtime_error("embedding must be an array of numbers");
+                         body["embedding"] = *emb;
+                     }
                      return apiCall("POST /api/knowledge/search", &body);
                  }});
 
