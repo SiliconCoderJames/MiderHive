@@ -62,6 +62,8 @@ python scripts/fuzz_config_merge.py                # adversarial shapes against 
 python scripts/embed_cli_check.py                  # external embedding endpoint round-trip (mock server)
 python scripts/diag_latency.py 19291               # latency-floor diagnosis (measurement, not a test)
 python scripts/bench_search.py --rows 10000        # search benchmark (measurement, not a test)
+python scripts/bench_concurrent.py                 # concurrency scaling, mixed/read/write (measurement)
+python scripts/bench_sqlite_ceiling.py             # SQLite commit-path ceiling, no lock involved (measurement)
 ```
 
 `agent-cli` can also generate and write the per-client connect configs on its own — the same

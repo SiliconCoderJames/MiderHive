@@ -95,7 +95,7 @@ jobs:
 
       # MCP 服务器是 agent 接入的新通道,协议适配层(JSON-RPC 分帧/工具转发/鉴权)
       # 单测覆盖不到,必须像 feasibility check 一样跑真进程
-      - name: MCP server check (stdio JSON-RPC, 51 assertions)
+      - name: MCP server check (stdio JSON-RPC)
         shell: pwsh
         env:
           MIDERHIVE_MASTER_KEY: ci-test-master-key-not-a-secret
@@ -125,7 +125,7 @@ jobs:
       # 两条链路都覆盖不到。这两条脚本此前只在发版前本地跑：招牌功能真回归了 CI 也不会红，
       # 等于没有防线。gui_selftest 跑的是真实 MainWindow/WelcomeDialog（不是另写的复刻流程），
       # 以 offscreen 无头方式驱动，无需人工点击。
-      - name: GUI end-to-end self-test (offscreen, 66 assertions)
+      - name: GUI end-to-end self-test (offscreen)
         shell: pwsh
         run: |
           python scripts/verify_gui_selftest.py --build build
@@ -134,7 +134,7 @@ jobs:
           }
 
       # 同一条主线的后端口径：预配身份、心跳上线、欢迎记忆、密钥缓存丢失诊断、轮换后旧钥立即失效
-      - name: Onboarding and key-rotation self-test (14 assertions)
+      - name: Onboarding and key-rotation self-test
         shell: pwsh
         env:
           MH_PLATFORMD: build\src\cli\Release\platformd.exe
