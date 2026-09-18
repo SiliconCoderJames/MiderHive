@@ -1444,7 +1444,7 @@ static void test_schema_version_gate() {
         std::string err;
         CHECK(p.bootstrap(err));
         p.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
     }
     {
         // 旧库（version=0）：重新 bootstrap 应照常迁移并置回当前版本，重复调用幂等
@@ -1453,11 +1453,11 @@ static void test_schema_version_gate() {
         std::string err;
         CHECK(p.bootstrap(err));
         p.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
         ah::Platform p2(tmp.string());
         CHECK(p2.bootstrap(err));
         p2.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
     }
     {
         // 来自更新版本的库：必须拒绝启动，且错误说明「更新版本」
@@ -1470,7 +1470,7 @@ static void test_schema_version_gate() {
     }
     {
         // 恢复路径：先做一份正常备份，再把备份文件伪造成更高版本 → 恢复必须被拒
-        CHECK(writeVersion(dbPath, 1));
+        CHECK(writeVersion(dbPath, 2));
         std::string backupPath;
         {
             ah::Platform p(tmp.string());
@@ -1487,10 +1487,75 @@ static void test_schema_version_gate() {
             const std::string backupName = fs::path(backupPath).filename().string();
             CHECK(!p.backupRestore(backupName, err));
             CHECK(err.find("newer") != std::string::npos);
-            // 原库未被覆盖：版本仍是 1
+            // 原库未被覆盖：版本仍是当前值（2）
             p.shutdown();
-            CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+            CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
         }
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
+// 批次 6：embedding_dim 记录 + 精确删除 + 旧行回填。
+// 关键陷阱：同一 uuid 的不同版本可能落在**不同**维度表（v1 内置 384、v2 自带 1024），
+// 删除必须覆盖全部，否则留下"有向量无正文"的孤儿。
+static void test_embedding_dim_tracking() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_dim_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
+    std::string crossUuid;
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        // 单维度版本链：v1/v2 都用内置 384 → 走精确删除路径
+        ah::KnowledgeEntry a;
+        CHECK(p.knowledgeCreate("hermes", "same dim", "same dim content alpha", {}, "", {}, "",
+                                a, err));
+        ah::KnowledgeEntry a2;
+        CHECK(p.knowledgeAddVersion("hermes", a.uuid, "", "same dim content beta", {}, "", a2,
+                                    err));
+        // 跨维度版本链：v1 内置 384 → v2 自带 1024（必须走安全回退，两张表都要清）
+        ah::KnowledgeEntry b;
+        std::vector<float> v1024(1024, 0.5f);
+        CHECK(p.knowledgeCreate("hermes", "cross dim", "cross dim version one", {}, "", {}, "",
+                                b, err));
+        ah::KnowledgeEntry b2;
+        CHECK(p.knowledgeAddVersion("hermes", b.uuid, "", "cross dim version two", v1024,
+                                    "model-1024", b2, err));
+        crossUuid = b.uuid;
+        p.shutdown();
+    }
+    // 维度已落库：内置 384 共 3 行（同维度链的 v1/v2 + 跨维度链的 v1），跨维度那条 v2 记 1024
+    CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries "
+                               "WHERE embedding_dim = 384"),
+             3);
+    CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries "
+                               "WHERE embedding_dim = 1024"),
+             1);
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        CHECK(p.knowledgeRemove("zcode", crossUuid, err));  // 跨维度：两张表都要清
+        const std::string inUuid =
+            "(SELECT id FROM knowledge_entries WHERE uuid='" + crossUuid + "')";
+        CHECK_EQ(countRows(dbPath, ("SELECT COUNT(*) FROM knowledge_vec_d384 WHERE entry_id IN " +
+                                    inUuid)
+                                       .c_str()),
+                 0);
+        CHECK_EQ(countRows(dbPath, ("SELECT COUNT(*) FROM knowledge_vec_d1024 WHERE entry_id IN " +
+                                    inUuid)
+                                       .c_str()),
+                 0);
+        // 不变式：不存在"有向量无正文"的孤儿（含跨维度场景）
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_vec_d384 WHERE entry_id NOT IN "
+                                   "(SELECT id FROM knowledge_entries)"),
+                 0);
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_vec_d1024 WHERE entry_id NOT IN "
+                                   "(SELECT id FROM knowledge_entries)"),
+                 0);
+        p.shutdown();
     }
     std::error_code ec;
     fs::remove_all(tmp, ec);
@@ -1579,6 +1644,7 @@ int main() {
     run("heartbeat_audit", test_heartbeat_audit);
     run("schema_version_gate", test_schema_version_gate);
     run("embed_provider_binding", test_embed_provider_binding);
+    run("embedding_dim_tracking", test_embedding_dim_tracking);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

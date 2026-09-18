@@ -133,8 +133,8 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
     if (!db_.beginImmediate(err)) return false;
     if (!db_.query(
             "INSERT INTO knowledge_entries(uuid, title, content, tags_json, category, author, version, "
-            "parent_version_id, is_latest, embedding_provider, created_at) "
-            "VALUES (?,?,?,?,?,?,1,NULL,1,?,?)",
+            "parent_version_id, is_latest, embedding_provider, embedding_dim, created_at) "
+            "VALUES (?,?,?,?,?,?,1,NULL,1,?,?,?)",
             [&](Stmt& st) {
                 st.bind(1, uuid);
                 st.bind(2, title);
@@ -143,7 +143,8 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
                 st.bind(5, category);
                 st.bind(6, author);
                 st.bind(7, embeddingProvider);
-                st.bind(8, nowIso());
+                st.bind(8, static_cast<int64_t>(dim));
+                st.bind(9, nowIso());
             },
             nullptr, err)) {
         db_.rollback();
@@ -330,8 +331,8 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
     std::string title = newTitle.empty() ? oldTitle : newTitle;
     if (!db_.query(
             "INSERT INTO knowledge_entries(uuid, title, content, tags_json, category, author, version, "
-            "parent_version_id, is_latest, embedding_provider, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,1,?,?)",
+            "parent_version_id, is_latest, embedding_provider, embedding_dim, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,1,?,?,?)",
             [&](Stmt& st) {
                 st.bind(1, uuid);
                 st.bind(2, title);
@@ -342,7 +343,8 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
                 st.bind(7, static_cast<int64_t>(oldVersion + 1));
                 st.bind(8, oldId);
                 st.bind(9, embeddingProvider);
-                st.bind(10, nowIso());
+                st.bind(10, static_cast<int64_t>(dim));
+                st.bind(11, nowIso());
             },
             nullptr, err)) {
         db_.rollback();
@@ -360,10 +362,55 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
     return latest(uuid, out, err);
 }
 
+bool KnowledgeService::backfillEmbeddingDim(std::string& err) {
+    // 旧行没有维度记录：按"向量实际所在的表"回填（每张维度表一条 UPDATE）。
+    // embedding_dim IS NULL 守卫保证幂等——跑过一次后就是空操作。
+    std::vector<std::string> tables;
+    if (!vecTableNames(tables, err)) return false;
+    static constexpr const char* kPrefix = "knowledge_vec_d";
+    for (const auto& t : tables) {
+        const std::string dimStr = t.substr(std::strlen(kPrefix));
+        const bool numeric = !dimStr.empty() &&
+                             std::all_of(dimStr.begin(), dimStr.end(), [](char c) {
+                                 return std::isdigit(static_cast<unsigned char>(c));
+                             });
+        if (!numeric) {
+            err = "unexpected vector table name: " + t;
+            return false;
+        }
+        if (!db_.execScript("UPDATE knowledge_entries SET embedding_dim=" + dimStr +
+                                " WHERE embedding_dim IS NULL AND id IN "
+                                "(SELECT entry_id FROM " + t + ")",
+                            err))
+            return false;
+    }
+    return true;
+}
+
 bool KnowledgeService::deleteVecsForUuid(const std::string& uuid, std::string& err) {
-    // 条目本身不记录用了哪个维度，逐一清已存在的维度表最可靠（维度表数量是个位数）。
-    // 表名来自 sqlite_master，仍按"前缀 + 纯数字"白名单二次校验后才拼进 SQL
-    // （与"禁止字符串拼装 SQL"的规则保持同一诚实标准）。
+    // 精确删除：条目自 v2 起记录自己的维度（旧行由 backfillEmbeddingDim 回填）。
+    // 但**同一 uuid 的不同版本可能落在不同维度表**（v1 用内置 384、v2 用自带 1024），
+    // 所以只有"所有版本都记了维度且维度唯一"才能只清那一张表；否则退回遍历全部维度表
+    // ——漏清会留下"有向量无正文"的孤儿，挤占 kNN 召回名额（有专门的不变式测试把守）。
+    int64_t total = 0, recorded = 0, minDim = 0, maxDim = 0;
+    if (!db_.query("SELECT COUNT(*), COUNT(embedding_dim), COALESCE(MIN(embedding_dim),0), "
+                   "COALESCE(MAX(embedding_dim),0) FROM knowledge_entries WHERE uuid=?",
+                   [&](Stmt& st) { st.bind(1, uuid); },
+                   [&](Stmt& st) {
+                       total = st.i64(0);
+                       recorded = st.i64(1);
+                       minDim = st.i64(2);
+                       maxDim = st.i64(3);
+                   },
+                   err))
+        return false;
+    if (total > 0 && recorded == total && minDim > 0 && minDim == maxDim) {
+        return db_.query("DELETE FROM " + vecTableFor(static_cast<size_t>(minDim)) +
+                             " WHERE entry_id IN (SELECT id FROM knowledge_entries WHERE uuid=?)",
+                         [&](Stmt& st) { st.bind(1, uuid); }, nullptr, err);
+    }
+
+    // 退回遍历（含未回填的旧行 / 跨维度的版本链）
     std::vector<std::string> tables;
     if (!vecTableNames(tables, err)) return false;    static constexpr const char* kPrefix = "knowledge_vec_d";
     for (const auto& t : tables) {

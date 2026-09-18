@@ -18,7 +18,7 @@ namespace fs = std::filesystem;
 
 // 库结构版本：必须与 schema.sql 末尾的 `PRAGMA user_version` 保持一致。
 // 改 schema 时两处一起递增，并在 bootstrap 的迁移链里补上对应步骤。
-constexpr int64_t kSchemaVersion = 1;
+constexpr int64_t kSchemaVersion = 2;
 
 std::string defaultHomeDir() {
     if (auto env = envOr({"MIDERHIVE_HOME", "AGENTHIVE_HOME", "ZCODE_PLATFORM_HOME"}); !env.empty())
@@ -101,6 +101,8 @@ bool Platform::bootstrap(std::string& err) {
     db_.tryExec("ALTER TABLE token_usage ADD COLUMN idempotency_key TEXT;");
     db_.tryExec("ALTER TABLE token_usage ADD COLUMN model TEXT NOT NULL DEFAULT '';");
     db_.tryExec("ALTER TABLE skill_invocations ADD COLUMN reference_id TEXT;");
+    // v2：记录每个版本向量所在的维度（精确清理向量行 + 诊断信息）
+    db_.tryExec("ALTER TABLE knowledge_entries ADD COLUMN embedding_dim INTEGER;");
     db_.tryExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_idem "
                 "ON token_usage(idempotency_key) "
                 "WHERE idempotency_key IS NOT NULL AND idempotency_key != '';");
@@ -110,6 +112,8 @@ bool Platform::bootstrap(std::string& err) {
         return false;
     }
     if (!knowledge_.initVectorStore(err)) return false;
+    // v2 迁移：给没有维度记录的旧行按"向量实际所在的表"回填 embedding_dim
+    if (!knowledge_.backfillEmbeddingDim(err)) return false;
     // 关键词检索的 FTS 索引：存量库在这里一次性 rebuild
     if (!knowledge_.initSearchIndex(err)) return false;
 

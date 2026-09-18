@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS knowledge_entries (
     parent_version_id  INTEGER,
     is_latest          INTEGER NOT NULL DEFAULT 1,
     embedding_provider TEXT,
+    embedding_dim      INTEGER,                -- 该版本向量所在维度表的维度（旧行由启动回填）
     created_at         TEXT NOT NULL
 );
 
@@ -190,4 +191,4 @@ CREATE INDEX IF NOT EXISTS idx_invocations_ref     ON skill_invocations(referenc
 --   >  当前值 → 库来自更新的 MiderHive，bootstrap 明确拒绝启动（否则会带着错位的
 --              schema 继续跑，那类错误要到数据被写坏时才显形）。
 -- 改 schema 时必须递增本值，并在 platform.cpp 的迁移链里补上对应步骤。
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

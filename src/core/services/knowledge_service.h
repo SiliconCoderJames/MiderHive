@@ -23,8 +23,11 @@ public:
     // 并保证内置维度的表存在。幂等，可重复调用。
     bool initVectorStore(std::string& err);
 
-    // 启动初始化（检索侧）：存量库的 FTS 索引一次性 rebuild。幂等。
+    // 启动初始化（检索侧）：存量库的 FTS 索引一次性重建。幂等。
     bool initSearchIndex(std::string& err);
+
+    // v2 迁移：给没有 embedding_dim 的旧行按"向量实际所在的维度表"回填。幂等。
+    bool backfillEmbeddingDim(std::string& err);
 
     bool create(const std::string& author, const std::string& title, const std::string& content,
                 const std::string& tagsJson, const std::string& category,
