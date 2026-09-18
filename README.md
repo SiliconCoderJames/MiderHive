@@ -24,9 +24,11 @@ English | **[简体中文](README.zh-CN.md)**
 
 **[Download](#quick-start)** · **[HTTP API docs](docs/api.md)** · **[MCP setup](docs/mcp.md)** · **[FAQ](#faq)** · **[Release notes](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[Discussions](https://github.com/SiliconCoderJames/MiderHive/discussions)** · **[Contributing](#contributing)** · **[Security](SECURITY.md)**
 
-**New in 1.1.1** — first-run onboarding (connect Claude Code / Cursor / Codex CLI with one paste)
-and foolproof design (startup self-check, health banners, one-click key rotation).
-**[Release notes →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.1.1)**
+**New in 1.2.0** — one-click connect for eight AI coding tools (Claude, Codex/ChatGPT, Droid, DSH,
+Hermes, ZCode, Cursor, Copilot), **27 MCP tools**, a fully bilingual workbench, and **real semantic
+search**: point the CLI at your own embedding endpoint instead of settling for the built-in n-gram
+matcher.
+**[Release notes →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.2.0)**
 
 <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive workbench overview" width="100%"/>
 
@@ -369,7 +371,7 @@ cmake --build build --config Release
   prefetch them into `vendor/`. The SQLite amalgamation is downloaded straight from sqlite.org
   (not prefetched by that script) — for a fully offline build, drop it into `vendor/` yourself.
 - Build the installer set with
-  `powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.1.1`
+  `powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.2.0`
   (see [release/README.md](release/README.md)). Pushing a `v*` tag makes CI build and publish a release.
 - Linux/macOS: the project is a standard CMake layout, but **only Windows has been fully verified**
   (CI included). The GUI target carries a Windows-only declaration today, so cross-platform builds

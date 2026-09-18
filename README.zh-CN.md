@@ -23,8 +23,10 @@
 
 **[下载安装](#快速开始)** · **[HTTP 接口文档](docs/api.md)** · **[MCP 接入](docs/mcp.md)** · **[常见问题](#常见问题)** · **[发行说明](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[讨论区](https://github.com/SiliconCoderJames/MiderHive/discussions)** · **[参与贡献](#参与贡献)** · **[安全策略](SECURITY.md)**
 
-**1.1.1 新增**——首启接入引导（一次粘贴接入 Claude Code / Cursor / Codex CLI）与全链路防呆设计
-（启动自检、健康横幅、明文密钥一键轮换）。**[发行说明 →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.1.1)**
+**1.2.0 新增**——八种 AI 编码工具一键接入（Claude、Codex/ChatGPT、Droid、DSH、Hermes、ZCode、
+Cursor、Copilot）、**27 个 MCP 工具**、中英双语工作台，以及**真正的语义检索**：把 CLI 指向你自己的
+嵌入端点，不必再将就内置的 n-gram 匹配。
+**[发行说明 →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.2.0)**
 
 <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive 工作台总览" width="100%"/>
 
@@ -329,7 +331,7 @@ cmake --build build --config Release
 - 第三方依赖（sqlite-vec、nlohmann/json、cpp-httplib）由 FetchContent 自动拉取；
   GitHub 不可达时先跑 `powershell -File scripts\fetch-deps.ps1` 预取到 `vendor/`。
   SQLite amalgamation 走 sqlite.org 直链下载（脚本未预取），离线环境可自行放入 `vendor/`。
-- 出安装包：`powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.1.1`
+- 出安装包：`powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.2.0`
   （详见 [release/README.md](release/README.md)）。推 `v*` 标签会触发 CI 自动出包并发布 Release。
 - Linux/macOS：工程是标准 CMake 布局，但**官方仅在 Windows 上做过完整验证**（CI 同）；
   GUI 目标目前带 Windows 专属声明，跨平台构建需要相应调整，欢迎提 Issue 与补丁。

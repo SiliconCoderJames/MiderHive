@@ -7,8 +7,8 @@ private notes, project memory. Security reports are taken seriously and answered
 
 | Version | Supported |
 |---|---|
-| 1.1.x | ✅ current release line |
-| 1.0.x and older | ❌ please upgrade first — fixes land on 1.1.x only |
+| 1.2.x | ✅ current release line |
+| 1.1.x and older | ❌ please upgrade first — fixes land on 1.2.x only |
 
 ## Reporting a vulnerability
 

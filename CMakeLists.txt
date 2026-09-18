@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(MiderHive VERSION 1.1.1 LANGUAGES C CXX)
+project(MiderHive VERSION 1.2.0 LANGUAGES C CXX)
 
 # ---- 版本号：默认取 project(VERSION)，发布流水线用 -DMIDERHIVE_VERSION=v1.2.3 覆盖 ----
 # 缓存陷阱：set(... CACHE) 在重配置时不会覆盖既有缓存值——project(VERSION) 升级后，

@@ -24,6 +24,8 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-18
+
 ### Added
 - **Real-semantic knowledge without bundling a model**: `agent-cli embed` plus
   `knowledge add|search --embed-url` talk to your own OpenAI-compatible embedding endpoint
@@ -365,7 +367,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/SiliconCoderJames/MiderHive/compare/V1.0.4...v1.1.0
 [1.0.4]: https://github.com/SiliconCoderJames/MiderHive/compare/V1.0.3...V1.0.4
