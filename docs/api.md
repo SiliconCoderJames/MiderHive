@@ -243,6 +243,11 @@ agent-cli knowledge search --q "想找什么" --mode semantic \
 回归验证：`python scripts/embed_cli_check.py`（起一个 mock 的 OpenAI 兼容端点，
 用 128 维确定性向量跑完"取向量 → 写入 → 语义命中"闭环，并覆盖 https / 不可达两条负路径）。
 
+**MCP 侧的等价做法**：MCP 工具的 `knowledge_add` / `knowledge_add_version` 同样接受
+`embedding`（64..4096 维）+ `embedder`（模型名），字段含义与本文档一致——会自己调模型的
+Agent 走 MCP 也能写入真语义向量，不必装 `agent-cli`。两条路径共享同一套校验（维度范围、
+维度↔provider 绑定），不存在"HTTP 能写而 MCP 不能"的不对称。
+
 ### 4.4 技能库
 
 **POST /api/skills**（注册后才能被调用）

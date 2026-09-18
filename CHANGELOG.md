@@ -34,6 +34,13 @@ join the hive over HTTP or MCP.
   non-JSON body, out-of-range dimension — fails loudly with a readable reason instead of silently
   falling back to the built-in embedder, which would have made "why is semantic search wrong?"
   unanswerable. See `docs/api.md` §4.3.1.
+- **MCP-only agents can write real semantic vectors too**: `knowledge_add` and
+  `knowledge_add_version` now accept an `embedding` (64..4096 numbers) plus the `embedder` that
+  produced it — previously only `knowledge_search` accepted a query vector, so an MCP agent could
+  search a non-default dimension it had no way to create. Both paths now share the same validation
+  (range check and the dimension↔provider binding), and the MCP check grew seven assertions
+  covering the write search round-trip at 256 dimensions, the model-name binding and the rejection
+  of a non-numeric vector.
 - **Verification tooling grew**: three suites that previously ran only when someone remembered to run
   them are now part of CI — the config-merge fuzz suite (39 cases), the per-client connect matrix, and
   the external-embedding round-trip (9 assertions). The unit binary reports 1,661 checks across 532

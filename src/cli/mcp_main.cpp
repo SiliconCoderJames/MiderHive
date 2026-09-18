@@ -264,6 +264,24 @@ int64_t iopt(const json& args, const char* key, int64_t dflt) {
     return it->get<int64_t>();
 }
 
+// 可选的自带向量：MCP 侧此前只有 knowledge_search 收 embedding，写入路径不收——于是能搜
+// 一个自定义维度空间、却永远建不出该空间的条目。HTTP /api/knowledge 一直收 embedding +
+// embedder，这里补齐同样的能力（写入与检索对称，才谈得上"自带模型"）。
+void attachEmbedding(const json& args, json& body) {
+    auto emb = args.find("embedding");
+    if (emb != args.end() && !emb->is_null()) {
+        if (!emb->is_array() || emb->empty())
+            throw std::runtime_error("embedding must be a non-empty array of numbers");
+        for (const auto& v : *emb)
+            if (!v.is_number())
+                throw std::runtime_error("embedding must be an array of numbers only");
+        body["embedding"] = *emb;
+    }
+    // provider 名参与"维度↔provider 绑定"：同维度换模型会被平台按 400 拒绝，
+    // 所以给了 embedding 就必须能说清是哪个模型算的（缺省 agent，与 CLI 一致）。
+    if (body.contains("embedding")) body["embedder"] = sopt(args, "embedder", "agent");
+}
+
 // ---------------- 工具表 ----------------
 // handler 直接返回 ApiResult；参数解析抛出的异常由调度层兜住。
 
@@ -387,11 +405,20 @@ std::vector<ToolDef> buildTools() {
                  }});
 
     t.push_back({"knowledge_add",
-                 "Add an entry to the shared knowledge base (auto-embedded for semantic search).",
+                 "Add an entry to the shared knowledge base. Without an embedding the platform "
+                 "computes one with its built-in offline embedder (384-dim, recall-oriented, not "
+                 "true semantics). Pass your own `embedding` (64..4096 numbers) plus the `embedder` "
+                 "name of the model that produced it to store real semantics — use the same model "
+                 "for knowledge_search. One dimension is bound to one model, so a second model "
+                 "needs another dimension.",
                  objSchema({{"title", prop("string", "short title (<=200 chars)")},
                             {"content", prop("string", "full content (<=100000 chars)")},
                             {"tags", prop("array", "optional list of tag strings")},
-                            {"category", prop("string", "optional category")}},
+                            {"category", prop("string", "optional category")},
+                            {"embedding", prop("array", "optional vector you computed (64..4096 "
+                                                        "numbers); omit to use the built-in embedder")},
+                            {"embedder", prop("string", "name of the model that produced "
+                                                        "`embedding` (default \"agent\")")}},
                            {"title", "content"}),
                  [](const json& a) {
                      json body = {{"title", sarg(a, "title")}, {"content", sarg(a, "content")}};
@@ -402,6 +429,7 @@ std::vector<ToolDef> buildTools() {
                         body["tags"] = *tags;
                     }
                      body["category"] = sopt(a, "category");
+                     attachEmbedding(a, body);
                      return apiCall("POST /api/knowledge", &body);
                  }});
 
@@ -468,10 +496,15 @@ std::vector<ToolDef> buildTools() {
                  "Omit title to keep the current one.",
                  objSchema({{"uuid", prop("string", "knowledge entry uuid")},
                             {"content", prop("string", "new full content (<=100000 chars)")},
-                            {"title", prop("string", "optional new title; omit to keep current")}},
+                            {"title", prop("string", "optional new title; omit to keep current")},
+                            {"embedding", prop("array", "optional new vector (64..4096 numbers); "
+                                                        "omit to re-embed with the built-in embedder")},
+                            {"embedder", prop("string", "name of the model that produced "
+                                                        "`embedding` (default \"agent\")")}},
                            {"uuid", "content"}),
                  [](const json& a) {
                      json body = {{"content", sarg(a, "content")}, {"title", sopt(a, "title")}};
+                     attachEmbedding(a, body);
                      return apiCall("POST /api/knowledge/" + percentEncode(sarg(a, "uuid")) +
                                         "/versions",
                                     &body);

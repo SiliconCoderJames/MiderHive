@@ -240,6 +240,48 @@ def main():
         check("被迭代的旧版本不再是最新（is_latest 收敛）",
               not is_err and not any(h.get("uuid") == kn_uuid for h in hits or []))
 
+        # ---- knowledge：MCP 侧自带向量（对称性回归）----
+        # 此前只有 knowledge_search 收 embedding，写入路径不收：能搜自定义维度空间却建不出
+        # 该空间的条目。用 256 维（刻意不等于内置 384）证明写入确实用了自带向量，而非兜底。
+        dim = 256
+        emb_a = [0.01 * ((i % 7) + 1) for i in range(dim)]
+        emb_b = [0.01 * (((i + 3) % 7) + 1) for i in range(dim)]
+        _, _, is_err, ctext, data = cli.call_tool(
+            "knowledge_add", {"title": "MCP 自带向量条目", "content": "自带向量写入 mcpcustom333",
+                              "embedding": emb_a, "embedder": "mcp-check-model"})
+        custom_uuid = data.get("uuid") if isinstance(data, dict) else None
+        check("knowledge_add 接受自带 embedding", not is_err and bool(custom_uuid), ctext[:200])
+        if custom_uuid:
+            _, _, is_err, _, got = cli.call_tool("knowledge_get", {"uuid": custom_uuid})
+            check("自带向量的 provider 被记录为模型名",
+                  not is_err and got.get("embedding_provider") == "mcp-check-model",
+                  str(got.get("embedding_provider"))[:80])
+            # 用同一模型算的查询向量应命中；内置 384 维检索不该命中 256 维条目（证明分表生效）
+            _, _, is_err, _, hits = cli.call_tool(
+                "knowledge_search", {"query": "随便", "mode": "semantic", "embedding": emb_a})
+            check("自带向量语义检索命中该条目",
+                  not is_err and any(h.get("uuid") == custom_uuid for h in hits or []),
+                  str(hits)[:150])
+            _, _, is_err, _, hits = cli.call_tool(
+                "knowledge_search", {"query": "mcpcustom333", "mode": "semantic"})
+            check("内置 384 维检索不会串到 256 维条目（分表生效）",
+                  not is_err and not any(h.get("uuid") == custom_uuid for h in hits or []))
+            # 追加版本同样能带向量
+            _, _, is_err, vtext, data = cli.call_tool(
+                "knowledge_add_version", {"uuid": custom_uuid, "content": "第二版自带向量 mcpcustom444",
+                                          "embedding": emb_b, "embedder": "mcp-check-model"})
+            check("knowledge_add_version 接受自带 embedding",
+                  not is_err and data.get("version") == 2, vtext[:200])
+            # 缺 embedder 时缺省 agent；同维度已绑定 mcp-check-model → 必须被拒绝（绑定生效）
+            _, _, is_err, _, _ = cli.call_tool(
+                "knowledge_add", {"title": "换模型探测", "content": "同维度换模型 mcpcustom555",
+                                  "embedding": emb_a, "embedder": "another-model"})
+            check("同维度换模型被拒绝（维度↔provider 绑定对 MCP 同样生效）", is_err)
+            _, _, is_err, _, _ = cli.call_tool(
+                "knowledge_add", {"title": "坏向量", "content": "非数字向量",
+                                  "embedding": ["x", "y"], "embedder": "mcp-check-model"})
+            check("embedding 非数字被拒绝", is_err)
+
         # ---- messages：广播默认、列表、状态 ----
         _, _, is_err, _, data = cli.call_tool(
             "message_send", {"kind": "note", "subject": "MCP 冒烟广播",

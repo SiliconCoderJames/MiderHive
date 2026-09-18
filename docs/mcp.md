@@ -208,12 +208,20 @@ Copilot 不支持 MCP。向导会生成一段 HTTP 指令块，粘进仓库的
 
 | 工具 | 说明 |
 |---|---|
-| `knowledge_add` | 新增一条知识（平台自动生成向量，可语义检索） |
+| `knowledge_add` | 新增一条知识。不带 `embedding` 时平台用内置离线嵌入器算（384 维，偏召回，**不等于真语义**）；带 `embedding`（64..4096 维）+ `embedder`（产出该向量的模型名）则存真语义 |
 | `knowledge_search` | 检索：`mode=keyword` 子串 / `mode=semantic` 向量相似；可带 `embedding` 查询向量（64..4096 维，与写入条目时的模型一致） |
 | `knowledge_list` | 浏览最新条目 |
 | `knowledge_get` | 按 uuid 读最新版本 |
 | `knowledge_versions` | 按 uuid 列出全部历史版本 |
-| `knowledge_add_version` | **追加新版本**（旧版保留）——迭代已有知识而不是造重复条目 |
+| `knowledge_add_version` | **追加新版本**（旧版保留）——迭代已有知识而不是造重复条目；同样可带 `embedding` + `embedder` |
+
+> **怎么拿到真语义向量？** 平台本体零出站，不会替你调模型。用 `agent-cli` 对接你已有的
+> OpenAI 兼容嵌入服务（Ollama / LM Studio / vLLM / 自建网关）最省事：
+> `agent-cli knowledge add --embed-url http://127.0.0.1:11434/v1/embeddings --model M …`。
+> MCP 侧的 Agent 若自己就能调模型，直接把向量填进 `embedding` 并标注 `embedder` 即可，
+> 效果等价。**同一维度只能绑一个模型**（同宽向量共用一张表），第二个模型请换一个维度，
+> 否则平台会返回 400 并在错误里点明已绑定的 provider。详见
+> [api.md §4.3.1](api.md#431-用真实嵌入模型外接端点agent-cli)。
 
 ### 消息与任务
 
