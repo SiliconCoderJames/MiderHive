@@ -25,6 +25,23 @@ join the hive over HTTP or MCP.
 ## [Unreleased]
 
 ### Added
+- **Real-semantic knowledge without bundling a model**: `agent-cli embed` plus
+  `knowledge add|search --embed-url` talk to your own OpenAI-compatible embedding endpoint
+  (Ollama / LM Studio / vLLM / a gateway), so the knowledge base can use a real model while the
+  platform itself still makes **zero outbound calls** — the request leaves from the CLI you invoked,
+  never from the platform core. `MIDERHIVE_EMBED_KEY` carries the bearer token. Only `http://` is
+  accepted (this build has no TLS), and every failure mode — https, unreachable host, non-2xx,
+  non-JSON body, out-of-range dimension — fails loudly with a readable reason instead of silently
+  falling back to the built-in embedder, which would have made "why is semantic search wrong?"
+  unanswerable. See `docs/api.md` §4.3.1.
+- **Verification tooling grew**: three suites that previously ran only when someone remembered to run
+  them are now part of CI — the config-merge fuzz suite (39 cases), the per-client connect matrix, and
+  the external-embedding round-trip (9 assertions). The unit binary reports 1,661 checks across 532
+  assertion sites; note that ~1,000 of those checks are one assertion ("send succeeded") re-run to
+  seed 1,001 messages for the pagination test, so the site count — not the check count — is the
+  honest measure of coverage. Measurement scripts (`bench_search`, `bench_concurrent`,
+  `bench_sqlite_ceiling`, `diag_latency`) stay manual on purpose: they answer questions rather than
+  guard behaviour.
 - **Nine more MCP tools (18 → 27)**, closing the loops an MCP-only agent previously could not
   reach: `usage_report` (with idempotency), `knowledge_add_version` / `knowledge_get` /
   `knowledge_versions` (refine shared know-how instead of duplicating it), `skill_register`
@@ -44,12 +61,46 @@ join the hive over HTTP or MCP.
   staying English in Chinese mode.
 
 ### Changed
+- Knowledge vectors now record their dimension (`embedding_dim`, schema **v2**); existing rows are
+  backfilled from whichever per-dimension vector table holds them, so a knowledge base that was
+  written by several models finally knows what it contains.
+- The full-text index covers **latest versions only**: appending a version retires the previous text
+  from the index, so index size no longer grows with version history. The index version is bumped so
+  existing databases rebuild once on upgrade.
+- Semantic recall's k cap moved from 10,000 to 50,000 — with sparse tags on a large database the old
+  cap systematically under-returned results. The cap only exists to stop pathological memory
+  blow-ups, not as a product limit.
 - First-run onboarding now offers all eight clients (grid layout) and can auto-write the config
   from the welcome dialog too.
 - `humanError` gained disk-full and permission-denied diagnoses, and its port branch no longer
   swallows any message merely containing "address".
 
 ### Fixed
+- **A dimension mismatch in semantic search used to return an empty result, silently.** It now fails
+  with an error that lists which dimensions (and embedding providers) the database actually holds,
+  turning "no hits" into a diagnosable usage error.
+- **Vectors from different models could pollute each other**: same-dimension vectors share one vec0
+  table, so a second model silently overwrote the first model's neighbourhood and kNN results became
+  unexplainable. A dimension is now bound to the provider that first wrote it; a later write with a
+  different model is rejected with a message naming the bound provider, and the fix is to pick
+  another dimension. Pre-existing mixed data is left untouched (the check only governs new writes).
+- **`knowledge remove` left orphan vectors behind**: it deleted from one hard-coded vector table, so
+  entries whose versions had different dimensions kept rows in the other tables. Deletion now covers
+  every dimension of that uuid, in a single statement in the common case.
+- **`apply-config` refuses configs it cannot merge safely**: user files using tab indentation or YAML
+  block scalars (`key: |`) are declined with a paste-it-yourself hint instead of risking a corrupted
+  config. Found by the config-merge fuzz suite — which is now part of CI precisely because nobody
+  was running it.
+- **Connect configs are replaced atomically**: the rewrite goes straight to a rename, so an
+  interrupted write can no longer leave the user's config file missing.
+- **Opening a newer database — or restoring a newer backup — is refused** instead of being silently
+  half-understood. `schema.sql` declares `PRAGMA user_version`; bootstrap and the restore path both
+  check it and tell you to upgrade MiderHive or restore an older backup.
+- **MCP same-name registration race**: when two agents of the same name start together, the loser
+  re-reads `agents.json` (three attempts) instead of exiting, so a cold parallel start no longer
+  fails.
+- `knowledge/search` clamps `limit` to 1,000; an unbounded value previously let a single request
+  assemble an arbitrarily large result set.
 - **Codex TOML config was unusable for real Windows paths**: it emitted basic (double-quoted)
   strings, where `\Q` is an invalid escape, so the whole `config.toml` failed to parse. It now
   emits TOML literal (single-quoted) strings; a self-test asserts both the literal form and that
@@ -66,6 +117,13 @@ join the hive over HTTP or MCP.
   CLI form is marked cmd.exe-only.
 
 ### Documentation
+- `docs/api.md` gained §4.3.1, the external-embedding-endpoint walkthrough — including the two
+  deliberate boundaries (no SSRF allowlist, because the endpoint is user-named; `http://` only,
+  because this build has no TLS).
+- `docs/hardening-report.md` gained measured concurrency numbers (mixed load scales 3.10× at four
+  threads, pure reads 9.47×, pure writes 1.14× because every commit fsyncs), a verdict on the
+  long-suspected global lock (**not** a bottleneck, with a lock-free SQLite measurement to prove it),
+  and a "known trade-offs" table that closes questions which kept being re-raised as defects.
 - `docs/mcp.md` rewritten: per-client setup for all eight tools, the 27-tool inventory grouped by
   loop, and a DSH-specific warning that its subprocess environment is scrubbed, so the key must
   live in the config's `env` block.
