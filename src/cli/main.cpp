@@ -19,6 +19,7 @@
 
 #include "core/integrations.hpp"  // 接入配置的生成/写入（与 GUI 共用同一实现）
 #include "core/platform.h"        // defaultHomeDir
+#include "core/services/knowledge_service.h"  // isValidEmbeddingDim
 #include "core/util.h"            // envOr
 
 using nlohmann::json;
@@ -56,6 +57,88 @@ long long toInt(const std::string& s, long long def) {
 // 宽松 JSON 解析：失败返回 discarded，由调用方给出友好错误
 json parseJsonLenient(const std::string& s) {
     return json::parse(s, nullptr, false);
+}
+
+// 调 OpenAI 兼容的嵌入端点取向量（--embed-url / knowledge add --embed-url）。
+//
+// 边界说明：端点由**用户显式给出**（本机 Ollama / LM Studio 等 http 服务是主流用法），
+// 因此这里不做 SSRF 白名单——那是"平台本体不被诱导出站"的防护（core/http/url_guard.h），
+// 与用户显式配置自己的嵌入服务是两件事。平台本体依然零出站。
+// 仅支持 http://：本构建的 cpp-httplib 未启用 TLS，https 会明确报错而不是静默失败。
+bool fetchEmbedding(const std::string& url, const std::string& model, const std::string& text,
+                    std::string& outJson, std::string& err) {
+    if (url.rfind("https://", 0) == 0) {
+        err = "https is not supported by this build (cpp-httplib is compiled without TLS); "
+              "use an http endpoint such as http://127.0.0.1:11434/v1/embeddings";
+        return false;
+    }
+    if (url.rfind("http://", 0) != 0) {
+        err = "url must start with http://";
+        return false;
+    }
+    std::string rest = url.substr(7);
+    const size_t slash = rest.find('/');
+    const std::string authority = rest.substr(0, slash);
+    const std::string path = slash == std::string::npos ? "/v1/embeddings" : rest.substr(slash);
+    std::string host = authority;
+    int port = 80;
+    const size_t colon = authority.rfind(':');
+    if (colon != std::string::npos) {
+        host = authority.substr(0, colon);
+        const std::string portStr = authority.substr(colon + 1);
+        try {
+            size_t pos = 0;
+            port = std::stoi(portStr, &pos);
+            if (pos != portStr.size() || port <= 0 || port > 65535)
+                throw std::invalid_argument("port");
+        } catch (...) {
+            err = "invalid port in url";
+            return false;
+        }
+    }
+    if (host.empty()) { err = "missing host in url"; return false; }
+
+    httplib::Client cli("http://" + host + ":" + std::to_string(port));
+    cli.set_connection_timeout(5, 0);
+    // 本机模型首次加载可能几秒到几十秒，读取超时给足
+    cli.set_read_timeout(120, 0);
+    httplib::Headers headers;
+    if (const char* k = std::getenv("MIDERHIVE_EMBED_KEY"); k && *k)
+        headers.emplace("Authorization", std::string("Bearer ") + k);
+    json body = {{"input", text}};
+    if (!model.empty()) body["model"] = model;
+    auto res = cli.Post(path, headers, body.dump(), "application/json");
+    if (!res) {
+        err = "cannot reach embedding endpoint (" + host + ":" + std::to_string(port) +
+              "): " + httplib::to_string(res.error());
+        return false;
+    }
+    if (res->status < 200 || res->status >= 300) {
+        err = "embedding endpoint returned HTTP " + std::to_string(res->status) + ": " +
+              res->body.substr(0, 200);
+        return false;
+    }
+    json r = json::parse(res->body, nullptr, false);
+    if (r.is_discarded()) { err = "embedding endpoint returned non-JSON body"; return false; }
+    json vec;
+    if (r.is_object() && r.contains("data") && r["data"].is_array() && !r["data"].empty() &&
+        r["data"][0].is_object() && r["data"][0].contains("embedding"))
+        vec = r["data"][0]["embedding"];                       // OpenAI 兼容形状
+    else if (r.is_object() && r.contains("embedding"))
+        vec = r["embedding"];                                   // 简化形状
+    if (!vec.is_array() || vec.empty()) {
+        err = "no embedding array in response (expected OpenAI /v1/embeddings shape)";
+        return false;
+    }
+    const int dim = static_cast<int>(vec.size());
+    if (!ah::isValidEmbeddingDim(dim)) {
+        err = "embedding dimension " + std::to_string(dim) + " not supported (64..4096)";
+        return false;
+    }
+    for (const auto& v : vec)
+        if (!v.is_number()) { err = "embedding array must contain numbers only"; return false; }
+    outJson = vec.dump();
+    return true;
 }
 
 struct Args {
@@ -164,6 +247,9 @@ int usage() {
         "  apply-config  --tool T (--path P | --dir D) [--command C] [--name N] [--key K]\n"
         "                                 把配置写进指定文件 / 指定根目录下的约定位置\n"
         "                                 （--dir 时 claude-code 写 <dir>/.mcp.json；不连平台）\n"
+        "  embed         --url U --text T [--model M]\n"
+        "                                 调 OpenAI 兼容嵌入端点，输出向量 JSON（不连平台；\n"
+        "                                 密钥走环境变量 MIDERHIVE_EMBED_KEY；仅支持 http://）\n"
         "  register --name X [--role member]              注册新 Agent（需 --master-key 或环境变量）\n"
         "  heartbeat                    [--task \"...\"]                 心跳 + 当前任务\n"
         "  agents [remove --name N]                     协作者列表 / 移除（移除需主密钥）\n"
@@ -171,7 +257,9 @@ int usage() {
         "  memory set    --section S --key K --value V               写入用户记忆（生成新版本）\n"
         "  memory history --section S --key K                        查看某条记忆的历史版本\n"
         "  knowledge add   --title T --content C [--tag A]... [--category C] [--embedding-file J]\n"
+        "                  [--embed-url U [--embed-model M]] [--embedder NAME]\n"
         "  knowledge search --q Q [--mode keyword|semantic] [--tag A]\n"
+        "                  [--embed-url U [--embed-model M]]   语义检索用同一模型算查询向量\n"
         "  knowledge get   --uuid U                    knowledge versions --uuid U\n"
         "  knowledge version --uuid U --content C [--title T]\n"
         "  skills register --name N --description D [--category C] [--schema-file F]\n"
@@ -291,6 +379,24 @@ int main(int argc, char** argv) {
         return r.ok ? 0 : 1;
     }
 
+    if (cmd == "embed") {
+        const std::string url = a.opts.count("url") ? a.opts.at("url") : "";
+        const std::string model = a.opts.count("model") ? a.opts.at("model") : "";
+        const std::string text = a.opts.count("text") ? a.opts.at("text") : "";
+        if (url.empty() || text.empty()) {
+            std::cerr << "embed 需要 --url <http://host:port[/v1/embeddings]> --text <文本> "
+                         "[--model M]；密钥走环境变量 MIDERHIVE_EMBED_KEY\n";
+            return 2;
+        }
+        std::string vecJson, eerr;
+        if (!fetchEmbedding(url, model, text, vecJson, eerr)) {
+            std::cerr << "embed 失败: " << eerr << "\n";
+            return 1;
+        }
+        std::cout << vecJson << "\n";
+        return 0;
+    }
+
     Client c(a);
     const std::string& sub = a.pos.size() > 1 ? a.pos[1] : "";
     // --master-key 也允许写在命令后（register / budget set 场景）
@@ -334,7 +440,24 @@ int main(int argc, char** argv) {
             for (auto it = range.first; it != range.second; ++it) tags.push_back(it->second);
             body = {{"title", a.opts["title"]}, {"content", a.opts["content"]}, {"tags", tags},
                     {"category", a.opts.count("category") ? a.opts["category"] : ""}};
-            if (a.opts.count("embedding-file")) {
+            if (a.opts.count("embed-url")) {
+                // 外接嵌入端点：用户已有嵌入服务（本机 Ollama / LM Studio / 自建）时，
+                // 用它算真语义向量——平台本体保持零出站，出站只发生在用户显式调用的 CLI 侧。
+                const std::string emodel =
+                    a.opts.count("embed-model") ? a.opts["embed-model"] : "";
+                std::string vecJson, eerr;
+                if (!fetchEmbedding(a.opts["embed-url"], emodel, a.opts["content"], vecJson,
+                                    eerr)) {
+                    std::cerr << "取嵌入向量失败: " << eerr << "\n";
+                    return 2;
+                }
+                body["embedding"] = json::parse(vecJson);
+                // provider 标签决定"维度↔provider"绑定的身份：优先显式 --embedder，
+                // 否则用模型名，最后才是泛化标签
+                body["embedder"] = a.opts.count("embedder")
+                                       ? a.opts["embedder"]
+                                       : (emodel.empty() ? std::string("agent") : emodel);
+            } else if (a.opts.count("embedding-file")) {
                 std::ifstream in(a.opts["embedding-file"]);
                 json emb;
                 if (in) {
@@ -346,7 +469,9 @@ int main(int argc, char** argv) {
                     return 2;
                 }
                 body["embedding"] = emb;
-                body["embedder"] = "agent";
+                // 用 --embedder 给向量命名模型：同维度不同模型会被平台拒绝（防止混写污染）
+                body["embedder"] = a.opts.count("embedder") ? a.opts["embedder"]
+                                                            : std::string("agent");
             }
         } else if (sub == "search") {
             method = "POST"; path = "/api/knowledge/search";
@@ -354,6 +479,17 @@ int main(int argc, char** argv) {
                     {"mode", a.opts.count("mode") ? a.opts["mode"] : "keyword"},
                     {"tag", a.opts.count("tag") ? a.opts["tag"] : ""},
                     {"limit", 20}};
+            if (a.opts.count("embed-url")) {
+                // 用与写入时同一模型算查询向量——真语义检索的闭环
+                const std::string emodel =
+                    a.opts.count("embed-model") ? a.opts["embed-model"] : "";
+                std::string vecJson, eerr;
+                if (!fetchEmbedding(a.opts["embed-url"], emodel, a.opts["q"], vecJson, eerr)) {
+                    std::cerr << "取查询向量失败: " << eerr << "\n";
+                    return 2;
+                }
+                body["embedding"] = json::parse(vecJson);
+            }
         } else if (sub == "get") {
             path = "/api/knowledge/" + a.opts["uuid"];
         } else if (sub == "versions") {

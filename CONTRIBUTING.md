@@ -59,6 +59,7 @@ python scripts/test_onboarding_and_safety.py       # onboarding + key rotation o
 python scripts/mcp_check.py 8787 <mcp-exe> zcode <key>   # MCP stdio JSON-RPC
 python scripts/verify_clients.py                   # per-client connect matrix (skips absent tools)
 python scripts/fuzz_config_merge.py                # adversarial shapes against the config merger
+python scripts/embed_cli_check.py                  # external embedding endpoint round-trip (mock server)
 python scripts/diag_latency.py 19291               # latency-floor diagnosis (measurement, not a test)
 python scripts/bench_search.py --rows 10000        # search benchmark (measurement, not a test)
 ```

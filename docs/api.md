@@ -203,6 +203,46 @@ API Key 立即失效、操作记入审计；管理者自身（`zcode`）不可�
 { "title": "", "content": "第二版内容……" }
 ```
 
+#### 4.3.1 用真实嵌入模型：外接端点（`agent-cli`）
+
+平台本体**零出站**，也不内置任何模型权重。想拿到真语义（而不是内置 384 维 n-gram 哈希兜底），
+由 Agent 侧自己调模型、把向量交给平台——`agent-cli` 把这一步做成了一条命令：
+
+```bash
+# 0) 本机已有 OpenAI 兼容嵌入服务时（Ollama / LM Studio / vLLM / 自建网关）
+#    需要鉴权就设 MIDERHIVE_EMBED_KEY（以 Bearer 发送），不需要则不设
+export MIDERHIVE_EMBED_KEY=sk-...                       # 可选
+
+# 1) 先看看端点通不通、向量多少维
+agent-cli embed --url http://127.0.0.1:11434/v1/embeddings \
+                --model nomic-embed-text --text "hello"
+
+# 2) 写入：用同一个端点算正文向量（--embedder 给向量命名，默认取 --embed-model）
+agent-cli knowledge add --title "标题" --content "正文……" \
+                --embed-url http://127.0.0.1:11434/v1/embeddings \
+                --model nomic-embed-text
+
+# 3) 检索：用同一模型算查询向量，闭环命中
+agent-cli knowledge search --q "想找什么" --mode semantic \
+                --embed-url http://127.0.0.1:11434/v1/embeddings \
+                --model nomic-embed-text
+```
+
+端点请求体是 OpenAI 的 `{"input": "...", "model": "..."}`，响应接受
+`data[0].embedding` 与扁平的 `embedding` 两种形状；维度必须落在 64..4096。
+`--embedder` 决定写入时登记的 provider 名（默认用 `--embed-model`，两者都缺省时为 `agent`），
+它会参与上面的**维度↔provider 绑定**——想换模型请选一个别的维度，否则会被 400 拒绝。
+
+**边界（有意为之）**：出站只发生在用户显式调用的 CLI 侧，端点地址由用户给出，因此这里
+**不做 SSRF 白名单**（本机 `http://127.0.0.1:…` 是主流用法）；平台核心的 `url_guard` 仍然
+守着"本体不被诱导出站"。本构建的 `cpp-httplib` 未启用 TLS，所以只支持 `http://`——
+传 `https://` 会**明确报错**并提示改用 http 端点，而不是静默失败。
+端点不可达、返回非 2xx、返回非 JSON、向量维度越界，都会以非零退出码 + 可读原因失败，
+绝不静默降级成内置向量（那会让"语义检索为什么不准"变成无法排查的谜题）。
+
+回归验证：`python scripts/embed_cli_check.py`（起一个 mock 的 OpenAI 兼容端点，
+用 128 维确定性向量跑完"取向量 → 写入 → 语义命中"闭环，并覆盖 https / 不可达两条负路径）。
+
 ### 4.4 技能库
 
 **POST /api/skills**（注册后才能被调用）

@@ -40,6 +40,9 @@
 |---|---|---|
 | n-gram 能力定位 | **已确认** | 现有 `NgramHashEmbedder` 为增强型模糊关键词匹配（字符 2/3-gram 特征哈希），适合短文本/标签级召回，不等于真正的语义向量 |
 | 模型嵌入预留接口 | **已确认（既有）** | `Embedder` 抽象接口已预留：Agent 在写入/搜索时可自带 `embedding` 数组并标注 `embedder` 名称，平台按 provider 存储；接入真实模型只需新增 `Embedder` 实现（如 ONNX Runtime bge-m3），检索层零改动 |
+| 接入真实模型的**可用路径** | **已新增** | `agent-cli` 直接对接用户自己的 OpenAI 兼容嵌入端点：`embed` / `knowledge add --embed-url` / `knowledge search --embed-url`（`MIDERHIVE_EMBED_KEY` 走 Bearer）。出站只发生在用户显式调用的 CLI 侧，平台本体仍零出站；仅支持 http（本构建无 TLS）。端到端回归见 `scripts/embed_cli_check.py`（mock 端点 + 128 维向量闭环 + https/不可达负路径）。仍**不内置**模型权重——那会把安装包推向 GB 级 |
+| 维度↔provider 绑定 | **已修复** | 同一维度在 vec0 里共用一张表，不同模型混写会互相污染 kNN；现于该维度首次写入时登记 provider，之后同维度换模型返回 400，错误里点明已绑定者 |
+| 语义检索维度不匹配 | **已修复** | 此前"该维度无向量"会静默返回空结果；现明确报错并列出**已有哪些维度**（含 provider），把"查不到"变成可排查 |
 
 ## 6. 数据备份与恢复
 
