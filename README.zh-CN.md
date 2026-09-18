@@ -223,15 +223,28 @@ DSH、Hermes）可以完全跳过裸 HTTP 流程：自带 `miderhive-mcp` stdio 
 ```
 
 - **嵌入器可插拔**：内置离线 n-gram 嵌入器开箱即用（字符 2/3-gram 特征哈希，偏召回，
-  **不等于真正的语义向量**）；有模型能力的 Agent 可在写入时自带 embedding 并标注模型名；
-  接入本地真实嵌入模型只需实现 `Embedder` 接口。
+  **不等于真正的语义向量**）。要真语义，把 CLI 指向**你自己已经在跑**的 OpenAI 兼容嵌入服务
+  （Ollama / LM Studio / vLLM / 自建网关）即可，不需要把模型打进安装包：
+
+  ```bash
+  agent-cli knowledge add --title "…" --content "…" \
+      --embed-url http://127.0.0.1:11434/v1/embeddings --model nomic-embed-text
+  agent-cli knowledge search --q "…" --mode semantic \
+      --embed-url http://127.0.0.1:11434/v1/embeddings --model nomic-embed-text
+  ```
+
+  请求从**你敲的那条命令**发出，不是服务本体。Agent 也可以在 HTTP / MCP 里直接自带 embedding
+  数组并标注模型名。同一维度只能绑一个模型（同宽向量共用一张表），换模型请换维度。
+  "把模型内置进安装包"才需要实现 `Embedder` 接口——那件事仍在路线图上。
 - **技术栈**：C++20 / Qt6 Widgets / CMake / SQLite + sqlite-vec / cpp-httplib / nlohmann-json。
 
 ## 隐私与安全边界
 
 - 服务**只监听 `127.0.0.1`**，局域网与公网都不可达；无账号体系、无遥测。
-- **唯一的出站请求**是更新检查（默认每天一次，可在设置中关闭）：只 GET 更新清单与安装包，
-  不发送任何本机数据；关闭后程序完全离线。
+- 服务本体**只有一次出站请求**：更新检查（默认每天一次，可在设置中关闭）——只 GET 更新清单与
+  安装包，不发送任何本机数据；关闭后服务完全离线。唯一例外是**你自己敲的命令**：`agent-cli embed`
+  与 `knowledge add --embed-url` 会把你传入的文本发给你指定的嵌入端点。产品里没有任何后台
+  代码路径能出站。
 - 密钥：接口返回明文一次，同时明文缓存在 `%MIDERHIVE_HOME%\config\agents.json`（等同凭据，勿外传）；
   数据库只存加盐哈希。**若你把该目录同步到云盘或共享给他人，等于交出凭据。**
 - 已知边界与加固清单见 [docs/hardening-report.md](docs/hardening-report.md)；
@@ -269,11 +282,13 @@ Windows 图标缓存，运行 `ie4uinit.exe -show` 或重启资源管理器。
 
 ## 质量与验证
 
-- 单元测试 **291 项断言**：SHA-256 与常量时间密钥比较、版本比较、嵌入器、出站 URL 校验、
-  平台端到端、鉴权与消息可见性加固回归、旧库升级迁移；
-- 集成验证 **39 项断言**（[scripts/feasibility_check.py](scripts/feasibility_check.py)）：
+- 单元测试 **1,661 项检查**（[`tests/`](tests/)，由 `ctest` 跑；其中约 1,000 项是同一个读回断言
+  在播种循环里重复，按"约 500 条独立断言"理解更准确）：SHA-256 与常量时间密钥比较、版本比较、
+  嵌入器、出站 URL 校验、平台端到端、鉴权与消息可见性加固回归、旧库升级迁移、按维度分表与
+  旧向量表迁移、FTS5 关键词检索、语义标签过滤召回、库结构版本门与维度↔provider 绑定；
+- 集成验证 **44 项断言**（[scripts/feasibility_check.py](scripts/feasibility_check.py)）：
   模拟多 Agent 全生命周期，含中文检索、异步任务状态机、幂等上报、用量告警；
-- **离屏 GUI 全链路自测 66 项断言**（[scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py)，
+- **离屏 GUI 全链路自测 72 项断言**（[scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py)，
   构建目标 `gui_selftest`）：无头驱动真实工作台界面，覆盖首启引导 → Agent 上线 →
   「接入成功」+ 欢迎记忆 → 密钥丢失健康横幅 → 轮换修复（旧钥 401/新钥 200）→ 设置重入。
   另覆盖：**八种客户端各自的配置格式**、**配置写入器**（新建 / 合并保留他人条目 /
@@ -326,19 +341,23 @@ src/core/     平台核心（与 Qt 无关）：数据库封装、向量检索�
 src/gui/      Qt6 工作台：mainwindow + 八个面板（总览/用量/知识库/技能库/用户记忆/交流/错误/日志）
               + 设置/引导对话框 + 自绘控件与主题
 src/cli/      agent-cli（Agent 侧客户端）、platformd（无界面守护进程）、miderhive-mcp（MCP stdio 服务器）
-tests/        核心层单元测试（291 项断言）
+tests/        核心层单元测试（1,661 项检查，口径见"质量与验证"）
 docs/         api.md（HTTP 接口）、mcp.md（MCP 接入）、hardening-report.md（加固报告）、
               brand.md、assets/（品牌与截图）
 release/      发行源与流程：wix/（MSI 定义）、README.md（打包与发版说明）、RELEASE_NOTES-*.md
 scripts/      package.ps1（出包）、gen-wix-files.ps1（WiX 清单）、deploy.ps1（本地部署）、
               fetch-deps.ps1（依赖预取）、feasibility_check.py（集成）、soak_test.py（浸泡）、
               verify_gui_selftest.py（离屏 GUI 全链路）、test_onboarding_and_safety.py（平台接入）、
-              mcp_check.py（真实 MCP 客户端驱动 miderhive-mcp）
+              mcp_check.py（真实 MCP 客户端驱动 miderhive-mcp）、embed_cli_check.py（外接嵌入闭环）、
+              fuzz_config_merge.py（配置合并模糊测试）、bench_*.py 与 diag_latency.py（测量工具）
 ```
 
 ## Roadmap
 
-- [ ] 本地嵌入模型接入（ONNX Runtime，bge / m3e 系列）——让"向量检索"真正语义化
+- [x] 外接嵌入端点（`agent-cli embed`、`knowledge add|search --embed-url`）——对接 Ollama /
+      LM Studio / vLLM / 任意 OpenAI 兼容服务，拿到真正的语义检索
+- [ ] **内置**本地嵌入模型（ONNX Runtime，bge / m3e 系列）——这一步不再是为了"能不能语义化"
+      （现在就能），只是为了把权重一起发出去，省掉另起一个服务
 - [x] 工作台多语言界面（中文 / English，侧边栏一键切换）
 - [x] 应用内自动更新（GitHub Releases，SHA256 校验后一键升级）
 - [x] 可复现发行链路（MSI + 便携包 + 更新清单 + ICE 校验）

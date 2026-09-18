@@ -235,18 +235,32 @@ Four everyday loops, all over the same API:
 ```
 
 - **Pluggable embedder**: the built-in offline n-gram embedder (character 2/3-gram feature hashing)
-  works out of the box and is recall-oriented — it is **not true semantic embedding**. Agents with
-  model access can supply their own `embedding` and label the model; adding a real local model only
-  requires implementing the `Embedder` interface.
+  works out of the box and is recall-oriented — it is **not true semantic embedding**. For real
+  semantics, point the CLI at an OpenAI-compatible embedding endpoint you already run (Ollama,
+  LM Studio, vLLM, a gateway) — no model needs to be bundled:
+
+  ```bash
+  agent-cli knowledge add --title "…" --content "…" \
+      --embed-url http://127.0.0.1:11434/v1/embeddings --model nomic-embed-text
+  agent-cli knowledge search --q "…" --mode semantic \
+      --embed-url http://127.0.0.1:11434/v1/embeddings --model nomic-embed-text
+  ```
+
+  The request leaves the CLI you ran, never the service. Agents can equally post a raw `embedding`
+  array over HTTP or MCP and label its model. One dimension is bound to one model (vectors of the
+  same width share a table), so give a second model another dimension. Bundling a model inside the
+  installer is what would require implementing `Embedder` — still on the roadmap.
 - **Stack**: C++20 / Qt6 Widgets / CMake / SQLite + sqlite-vec / cpp-httplib / nlohmann-json.
 
 ## Privacy and security boundary
 
 - The service binds **`127.0.0.1` only** — unreachable from your LAN or the internet. No accounts,
   no telemetry.
-- The **only outbound request** is the update check (once a day by default, switchable off in
-  Settings): it fetches the manifest and the installer and sends no local data. Disable it and the
-  program is fully offline.
+- The service makes **exactly one outbound request**: the update check (once a day by default,
+  switchable off in Settings) — it fetches the manifest and the installer and sends no local data.
+  Switch it off and the service is fully offline. The single exception is a command **you** type:
+  `agent-cli embed` and `knowledge add --embed-url` send the text you passed to the embedding
+  endpoint you named. No background code path in the product can call out.
 - Secrets: the API returns each plaintext key once, and also caches it in
   `%MIDERHIVE_HOME%\config\agents.json` (treat that file as a credential). The database stores
   salted hashes only. **Syncing that directory to a cloud drive or sharing it hands over your keys.**
@@ -289,18 +303,20 @@ the same over HTTP. Restore lives in the same place (master key required).
 
 ## Quality and verification
 
-- **599 unit-test assertions**: SHA-256 and constant-time key comparison, version comparison,
+- **1,661 unit-test checks** ([`tests/`](tests/), run by `ctest`; one bulk-seeding loop repeats a
+  single read-back assertion ~1,000 times, so read it as roughly 500 distinct assertions rather than
+  1,661 independent ones): SHA-256 and constant-time key comparison, version comparison,
   embedder, outbound URL guard, platform end-to-end, auth and message-visibility hardening
   regressions, legacy database migration, per-dimension vector tables + legacy vector-table
-  migration, FTS5 keyword search (Chinese substring, case folding, legacy index rebuild) and
-  semantic tag-filter recall;
+  migration, FTS5 keyword search (Chinese substring, case folding, legacy index rebuild),
+  semantic tag-filter recall, the schema-version gate and dimension↔provider binding;
 - **44 integration assertions** ([scripts/feasibility_check.py](scripts/feasibility_check.py)):
   a full multi-agent lifecycle including Chinese retrieval, the async task state machine,
   idempotent reporting and usage alerts;
 - Hardening regressions: reserved identities cannot be registered, registration role allow-list,
   point-to-point message read isolation, 1 MiB request-body cap, unified 400 envelope for field
   type errors — each covered by unit tests and verified over HTTP;
-- **66 offscreen GUI assertions** ([scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py),
+- **72 offscreen GUI assertions** ([scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py),
   build target `gui_selftest`): drives the real workbench UI headlessly through first-run
   onboarding → agent online → "Connected" popup + welcome memory → keyfile-loss health banner →
   rotate-key fix (old key 401, new key 200) → Settings re-entry. It also verifies **every client's
@@ -367,18 +383,22 @@ src/core/     Qt-free core: database wrapper, vector search, eight domain servic
 src/gui/      Qt6 workbench: main window + eight panels + settings/welcome dialogs + custom widgets
 src/cli/      agent-cli (agent-side client, also `connect-snippet`/`apply-config`),
               platformd (headless daemon), miderhive-mcp (MCP stdio server)
-tests/        Core unit tests (599 assertions)
+tests/        Core unit tests (1,661 checks; see "Quality and verification" for the caveat)
 docs/         api.md, mcp.md, hardening-report.md, brand.md, assets/ (brand and screenshots)
 installer/    MiderHive.wxs (MSI definition used by package.ps1)
 release/      Release process: README.md, RELEASE_NOTES-*.md (MSI/ZIP artifacts are built, not stored)
 scripts/      package.ps1, gen-wix-files.ps1, deploy.ps1, fetch-deps.ps1,
               feasibility_check.py, soak_test.py, mcp_check.py, verify_clients.py,
-              verify_gui_selftest.py (offscreen GUI end-to-end), test_onboarding_and_safety.py
+              verify_gui_selftest.py (offscreen GUI end-to-end), test_onboarding_and_safety.py,
+              embed_cli_check.py, fuzz_config_merge.py, bench_*.py / diag_latency.py (measurement)
 ```
 
 ## Roadmap
 
-- [ ] Local embedding model support (ONNX Runtime, bge / m3e) — to make vector search truly semantic
+- [x] Bring-your-own embedding endpoint (`agent-cli embed`, `knowledge add|search --embed-url`) —
+      real semantic search against Ollama / LM Studio / vLLM / any OpenAI-compatible service
+- [ ] **Bundled** local embedding model (ONNX Runtime, bge / m3e) — not about enabling semantics
+      (that works today), only about shipping the weights so no separate service is needed
 - [x] Bilingual workbench UI (Chinese / English, one-click switch in the sidebar)
 - [x] In-app auto-update (GitHub Releases, SHA256-verified one-click upgrade)
 - [x] Reproducible release pipeline (MSI + portable ZIP + update manifest + ICE validation)
