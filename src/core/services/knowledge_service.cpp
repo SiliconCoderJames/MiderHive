@@ -576,7 +576,10 @@ bool KnowledgeService::searchSemantic(const std::vector<float>& queryVec, int li
     }
 
     const int base = limit > 0 ? limit : 20;
-    constexpr int kMax = 10000;
+    // 单次召回的硬上限：梯度扩 k 直到凑够 limit 或该维度取尽（hits.size() < k），
+    // 这个上限只防病态内存放大。5 万行 × 16B ≈ 800KB 峰值，而表行数本身天然封顶；
+    // 设得偏低会让"标签稀疏的大库"系统性少给结果，因此取一个远大于常见库规模的值。
+    constexpr int kMax = 50000;
 
     // vec0 不支持在 MATCH 里做标量过滤，带 tag 时只能"多召回再过滤"。
     // 单次固定倍数（原实现 limit×4）在"未打标签的条目向量更近"时会系统性少给，
