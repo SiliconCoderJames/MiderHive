@@ -173,3 +173,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_time          ON audit_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_week          ON token_usage(week_start, agent);
 CREATE INDEX IF NOT EXISTS idx_invocations_skill   ON skill_invocations(skill_name, created_at);
 CREATE INDEX IF NOT EXISTS idx_invocations_ref     ON skill_invocations(reference_id);
+
+-- 库结构版本：bootstrap 在执行本脚本**之前**比对此值。
+--   0  = 前版本化时代的旧库，或全新库 → 照常走 schema + 幂等迁移，跑完即被打上当前版本；
+--   == 当前值 → 正常；
+--   >  当前值 → 库来自更新的 MiderHive，bootstrap 明确拒绝启动（否则会带着错位的
+--              schema 继续跑，那类错误要到数据被写坏时才显形）。
+-- 改 schema 时必须递增本值，并在 platform.cpp 的迁移链里补上对应步骤。
+PRAGMA user_version = 1;

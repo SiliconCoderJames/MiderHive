@@ -1387,6 +1387,101 @@ static void test_heartbeat_audit() {
     fs::remove_all(tmp, ec);
 }
 
+// 库结构版本门：全新库/旧库照常迁移并打上当前版本；来自更新版本的库（或备份）
+// 必须明确拒绝，而不是带着错位的 schema 继续跑。
+static void test_schema_version_gate() {
+    // 直接对库文件读写 PRAGMA（第二个连接）
+    auto readVersion = [](const fs::path& dbPath) -> int64_t {
+        sqlite3* db = nullptr;
+        if (sqlite3_open_v2(dbPath.string().c_str(), &db, SQLITE_OPEN_READONLY, nullptr) !=
+            SQLITE_OK) {
+            if (db) sqlite3_close(db);
+            return -1;
+        }
+        int64_t v = -1;
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &st, nullptr) == SQLITE_OK &&
+            st && sqlite3_step(st) == SQLITE_ROW)
+            v = sqlite3_column_int64(st, 0);
+        sqlite3_finalize(st);
+        sqlite3_close(db);
+        return v;
+    };
+    auto writeVersion = [](const fs::path& dbPath, int64_t v) -> bool {
+        sqlite3* db = nullptr;
+        if (sqlite3_open(dbPath.string().c_str(), &db) != SQLITE_OK) {
+            if (db) sqlite3_close(db);
+            return false;
+        }
+        char* msg = nullptr;
+        const std::string sql = "PRAGMA user_version = " + std::to_string(v) + ";";
+        const bool ok = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &msg) == SQLITE_OK;
+        sqlite3_free(msg);
+        sqlite3_close(db);
+        return ok;
+    };
+
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_ver_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
+    {
+        // 全新库：bootstrap 后版本被写上
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        p.shutdown();
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+    }
+    {
+        // 旧库（version=0）：重新 bootstrap 应照常迁移并置回当前版本，重复调用幂等
+        CHECK(writeVersion(dbPath, 0));
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+        p.shutdown();
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+        ah::Platform p2(tmp.string());
+        CHECK(p2.bootstrap(err));
+        p2.shutdown();
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+    }
+    {
+        // 来自更新版本的库：必须拒绝启动，且错误说明「更新版本」
+        CHECK(writeVersion(dbPath, 99));
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(!p.bootstrap(err));
+        CHECK(err.find("newer") != std::string::npos);
+        p.shutdown();
+    }
+    {
+        // 恢复路径：先做一份正常备份，再把备份文件伪造成更高版本 → 恢复必须被拒
+        CHECK(writeVersion(dbPath, 1));
+        std::string backupPath;
+        {
+            ah::Platform p(tmp.string());
+            std::string err;
+            CHECK(p.bootstrap(err));
+            CHECK(p.backupCreate(backupPath, err));
+            p.shutdown();
+        }
+        CHECK(writeVersion(fs::path(backupPath), 99));
+        {
+            ah::Platform p(tmp.string());
+            std::string err;
+            CHECK(p.bootstrap(err));
+            const std::string backupName = fs::path(backupPath).filename().string();
+            CHECK(!p.backupRestore(backupName, err));
+            CHECK(err.find("newer") != std::string::npos);
+            // 原库未被覆盖：版本仍是 1
+            p.shutdown();
+            CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(1));
+        }
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1411,6 +1506,7 @@ int main() {
     run("fts_rebuild_legacy", test_fts_rebuild_legacy);
     run("semantic_tag_pushdown", test_semantic_tag_pushdown);
     run("heartbeat_audit", test_heartbeat_audit);
+    run("schema_version_gate", test_schema_version_gate);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

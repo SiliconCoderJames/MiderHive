@@ -16,6 +16,10 @@ namespace ah {
 
 namespace fs = std::filesystem;
 
+// 库结构版本：必须与 schema.sql 末尾的 `PRAGMA user_version` 保持一致。
+// 改 schema 时两处一起递增，并在 bootstrap 的迁移链里补上对应步骤。
+constexpr int64_t kSchemaVersion = 1;
+
 std::string defaultHomeDir() {
     if (auto env = envOr({"MIDERHIVE_HOME", "AGENTHIVE_HOME", "ZCODE_PLATFORM_HOME"}); !env.empty())
         return env;
@@ -79,6 +83,18 @@ bool Platform::bootstrap(std::string& err) {
 
     std::string dbPath = (fs::path(home_dir_) / "platform.db").string();
     if (!db_.open(dbPath, err)) return false;
+    // ---- 库结构版本门（schema.sql 末尾 PRAGMA user_version 写入）----
+    // 必须在执行 schema **之前**比对：更高版本的库不能被本程序按旧 schema 解读。
+    int64_t dbVersion = 0;
+    if (!db_.query("PRAGMA user_version", nullptr,
+                   [&](Stmt& st) { dbVersion = st.i64(0); }, err))
+        return false;
+    if (dbVersion > kSchemaVersion) {
+        err = "database schema version " + std::to_string(dbVersion) +
+              " is newer than this build supports (max " + std::to_string(kSchemaVersion) +
+              "); upgrade MiderHive or restore an older backup";
+        return false;
+    }
     if (!db_.execScript(kSchemaSql, err)) return false;
     // 存量库迁移：新增列（已存在则静默跳过）
     db_.tryExec("ALTER TABLE agents ADD COLUMN salt TEXT NOT NULL DEFAULT '';");
@@ -943,6 +959,30 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
         in.read(header, 15);
         if (std::string(header) != "SQLite format 3") {
             err = "not a valid sqlite backup file";
+            return false;
+        }
+    }
+    // 恢复前先看备份文件的库结构版本：与 bootstrap 同一道门——来自更新版本的备份
+    // 拒绝恢复（覆盖当前库之后本程序无法正确解读它，等于把好库换成读不了的库）。
+    {
+        sqlite3* probe = nullptr;
+        if (sqlite3_open_v2(src.string().c_str(), &probe, SQLITE_OPEN_READONLY, nullptr) !=
+            SQLITE_OK) {
+            err = "cannot open backup file: " + name;
+            if (probe) sqlite3_close(probe);
+            return false;
+        }
+        int64_t backupVersion = 0;
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(probe, "PRAGMA user_version", -1, &st, nullptr) == SQLITE_OK &&
+            st != nullptr && sqlite3_step(st) == SQLITE_ROW)
+            backupVersion = sqlite3_column_int64(st, 0);
+        sqlite3_finalize(st);
+        sqlite3_close(probe);
+        if (backupVersion > kSchemaVersion) {
+            err = "backup was created by a newer MiderHive (schema version " +
+                  std::to_string(backupVersion) + " > " + std::to_string(kSchemaVersion) +
+                  "); refusing to restore";
             return false;
         }
     }
