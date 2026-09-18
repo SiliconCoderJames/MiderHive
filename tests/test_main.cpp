@@ -1334,6 +1334,59 @@ static void test_write_replaces_atomically() {
     fs::remove_all(tmp, ec);
 }
 
+// 心跳审计降噪的回归锁定：同任务重复心跳**不**留痕，仅"首次/离线回归/任务变化"留痕。
+// 该行为自 v0.1.0 起即存在（wasOffline || prevTask != currentTask 才写审计）；
+// 此测试防止将来被"简化"成全量审计——30s 一次 × N 个 Agent 会把审计轮转的
+// 10 万条上限在一周内耗尽，把文档承诺的 30 天窗口冲垮。
+static void test_heartbeat_audit() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_hb_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    ah::Platform p(tmp.string());
+    std::string err;
+    CHECK(p.bootstrap(err));
+
+    auto countHb = [&p](int64_t& n) {
+        std::vector<ah::AuditRecord> recs;
+        std::string e;
+        if (!p.auditList("", "agent.heartbeat", "", 1000, recs, e)) return false;
+        n = static_cast<int64_t>(recs.size());
+        return true;
+    };
+
+    // zcode 由 bootstrap 预置，无需注册
+    int64_t n0 = -1;
+    CHECK(countHb(n0));
+    p.heartbeat("zcode", "task one");  // 首次心跳：prevSeen 为空 → wasOffline → +1
+    int64_t n1 = -1;
+    CHECK(countHb(n1));
+    CHECK_EQ(n1, n0 + 1);
+
+    p.heartbeat("zcode", "task one");  // 同任务重复：不增
+    p.heartbeat("zcode", "task one");
+    int64_t n2 = -1;
+    CHECK(countHb(n2));
+    CHECK_EQ(n2, n1);
+
+    p.heartbeat("zcode", "task two");  // 换任务：+1
+    int64_t n3 = -1;
+    CHECK(countHb(n3));
+    CHECK_EQ(n3, n2 + 1);
+
+    // 在线机制不受审计降噪影响：last_seen_at 已写、状态为 online
+    std::vector<ah::AgentInfo> agents;
+    CHECK(p.listAgents(agents, err));
+    bool found = false;
+    std::string seen, status;
+    for (const auto& a : agents)
+        if (a.name == "zcode") { found = true; seen = a.last_seen_at; status = a.status; }
+    CHECK(found);
+    CHECK(!seen.empty());
+    CHECK_EQ(status, std::string("online"));
+    p.shutdown();
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1357,6 +1410,7 @@ int main() {
     run("keyword_fts", test_keyword_fts);
     run("fts_rebuild_legacy", test_fts_rebuild_legacy);
     run("semantic_tag_pushdown", test_semantic_tag_pushdown);
+    run("heartbeat_audit", test_heartbeat_audit);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
