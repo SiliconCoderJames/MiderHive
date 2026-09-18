@@ -83,7 +83,9 @@ bool KnowledgeService::initSearchIndex(std::string& err) {
     // **不能**用 SELECT COUNT(*) FROM knowledge_fts 判断：外部内容表的无 MATCH 查询会被
     // FTS5 转发到正文表，空索引也照样返回正文行数（实测），据此判断必然漏掉重建。
     const char* kKey = "fts_index_version";
-    const char* kVersion = "1";
+    // '2'：索引改为只覆盖最新版本（旧版索引了全部历史版本）。
+    // 递增即强制存量库重建一次，把旧语义的索引冲掉。
+    const char* kVersion = "2";
     std::string cur;
     bool found = false;
     if (!db_.query("SELECT value FROM settings WHERE key=?",
@@ -96,7 +98,14 @@ bool KnowledgeService::initSearchIndex(std::string& err) {
         return false;
     if (found && cur == kVersion) return true;
 
-    if (!db_.execScript("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')", err))
+    // 重建：**不能**用 FTS5 的 'rebuild'——它直接读内容表，会把全部历史版本也灌进索引，
+    // 与"只索引最新版本"的新语义矛盾（且未入索引的行再被删除时会留下死条目）。
+    // 改为 delete-all 清空 + 只插 is_latest=1 的行。
+    if (!db_.execScript("INSERT INTO knowledge_fts(knowledge_fts) VALUES('delete-all')", err))
+        return false;
+    if (!db_.execScript("INSERT INTO knowledge_fts(rowid, title, content) "
+                        "SELECT id, title, content FROM knowledge_entries WHERE is_latest=1",
+                        err))
         return false;
     if (!db_.query("INSERT INTO settings(key, value) VALUES(?,?) "
                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",

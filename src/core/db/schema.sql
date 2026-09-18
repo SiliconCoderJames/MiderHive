@@ -145,21 +145,31 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_category  ON knowledge_entries(category
 
 -- 关键词检索的全文索引：外部内容表（正文只存 knowledge_entries，FTS 只存倒排）。
 -- trigram 分词让中英文**子串**都能命中（>=3 个码点；更短查询在代码层回退 LIKE）。
--- 索引覆盖全部版本、检索时用 is_latest=1 过滤——换来触发器只需对称的插入/删除。
+-- 只索引**最新版本**（is_latest=1）：索引体积不随历史版本数增长。
+-- 三个触发器都必须带条件——对"未入索引的行"发 FTS5 'delete' 命令会损坏索引。
+-- 先 DROP 再 CREATE：IF NOT EXISTS 不会替换升级库里已存在的旧定义（旧版索引了全部版本）。
+DROP TRIGGER IF EXISTS knowledge_fts_ai;
+DROP TRIGGER IF EXISTS knowledge_fts_au;
+DROP TRIGGER IF EXISTS knowledge_fts_ad;
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
     title, content,
     content='knowledge_entries', content_rowid='id',
     tokenize='trigram'
 );
-CREATE TRIGGER IF NOT EXISTS knowledge_fts_ai AFTER INSERT ON knowledge_entries BEGIN
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_ai AFTER INSERT ON knowledge_entries
+WHEN NEW.is_latest=1 BEGIN
     INSERT INTO knowledge_fts(rowid, title, content) VALUES (NEW.id, NEW.title, NEW.content);
 END;
-CREATE TRIGGER IF NOT EXISTS knowledge_fts_au AFTER UPDATE OF title, content ON knowledge_entries BEGIN
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_au AFTER UPDATE OF title, content, is_latest ON knowledge_entries BEGIN
+    -- 旧行曾被索引才发 delete（追加版本时旧行 is_latest 翻 0，历史版本在此退出索引）
     INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content)
-    VALUES ('delete', OLD.id, OLD.title, OLD.content);
-    INSERT INTO knowledge_fts(rowid, title, content) VALUES (NEW.id, NEW.title, NEW.content);
+        SELECT 'delete', OLD.id, OLD.title, OLD.content WHERE OLD.is_latest=1;
+    -- 只有新的最新版本才入库
+    INSERT INTO knowledge_fts(rowid, title, content)
+        SELECT NEW.id, NEW.title, NEW.content WHERE NEW.is_latest=1;
 END;
-CREATE TRIGGER IF NOT EXISTS knowledge_fts_ad AFTER DELETE ON knowledge_entries BEGIN
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_ad AFTER DELETE ON knowledge_entries
+WHEN OLD.is_latest=1 BEGIN
     INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content)
     VALUES ('delete', OLD.id, OLD.title, OLD.content);
 END;

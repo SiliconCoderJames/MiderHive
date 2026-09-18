@@ -1142,6 +1142,7 @@ static void test_legacy_vec_migration() {
 static void test_keyword_fts() {
     fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_fts_" + ah::randomHex(8));
     fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
     {
         ah::Platform p(tmp.string());
         std::string err;
@@ -1180,10 +1181,23 @@ static void test_keyword_fts() {
         CHECK(p.knowledgeSearch("yyywww", ah::SearchMode::Keyword, 10, "", out, err));
         CHECK(!out.empty() && out[0].entry.uuid == a.uuid);
 
+        // 批次 3：证明是**索引层**就移除了历史版本（不是靠查询时的 is_latest 过滤）——
+        // 直接对 knowledge_fts 做 MATCH，旧版本 token 必须一条都查不到。
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_fts "
+                                   "WHERE knowledge_fts MATCH 'zzzqqq'"),
+                 0);
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_fts "
+                                   "WHERE knowledge_fts MATCH 'yyywww'"),
+                 1);
+
         // 删除即不可检索
         CHECK(p.knowledgeRemove("zcode", b.uuid, err));
         CHECK(p.knowledgeSearch("青枫浦不上", ah::SearchMode::Keyword, 10, "", out, err));
         CHECK(out.empty());
+        // 批次 3：删除后索引里也不留死条目
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_fts "
+                                   "WHERE knowledge_fts MATCH '青枫浦不上'"),
+                 0);
         p.shutdown();
     }
     std::error_code ec;
