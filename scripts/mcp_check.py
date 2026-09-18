@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 # 与 feasibility_check.py 同理：Windows/CI 控制台默认 ANSI 代码页，中文会崩
 for _stream in (sys.stdout, sys.stderr):
@@ -27,6 +28,8 @@ EXE = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
     "build", "src", "cli", "Release", "miderhive-mcp.exe")
 AGENT = sys.argv[3] if len(sys.argv) > 3 else "zcode"
 KEY = sys.argv[4] if len(sys.argv) > 4 else ""
+# 主密钥从环境继承（CI 与本地跑 feasibility/mcp 检查时都会设）
+MASTER = os.environ.get("MIDERHIVE_MASTER_KEY", "")
 
 results = []
 
@@ -34,6 +37,13 @@ results = []
 def check(name, ok, detail=""):
     results.append((name, ok, detail))
     print("  [%s] %s%s" % ("PASS" if ok else "FAIL", name, (": " + detail) if detail and not ok else ""))
+
+
+def write_cache(path, mapping):
+    """写 config/agents.json（name -> plaintext key 的平面映射）"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(mapping, f, indent=2)
 
 
 class McpClient:
@@ -337,6 +347,64 @@ def main():
         check("remove 后历史为空", not is_err and data == [])
     finally:
         cli.close()
+
+    # ---- 同名自动注册竞态：注册被拒时应重读缓存（另一个进程刚注册并落盘）----
+    # 场景构造：库里有 racer，但明文缓存被删（模拟"赢者还没落盘/落盘被我删掉"），
+    # 然后启动 MCP（带 master key）并在重试窗口内把密钥写回缓存 → 必须复用而不是退出。
+    if KEY and MASTER:
+        racer_home = tempfile.mkdtemp(prefix="miderhive-mcp-race-")
+        try:
+            import urllib.request
+
+            def http(method, path, body=None, headers=None):
+                data = json.dumps(body).encode() if body is not None else None
+                req = urllib.request.Request("http://127.0.0.1:%s%s" % (PORT, path),
+                                             data=data, method=method)
+                for k, v in (headers or {}).items():
+                    req.add_header(k, v)
+                req.add_header("Content-Type", "application/json")
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+
+            # 通过 HTTP 注册 racer：库里从此有它（再注册会被拒），而 racer_home 的
+            # 明文缓存仍是空的 —— 正是竞态里"输家"看到的现场
+            reg = http("POST", "/api/agents/register", {"name": "racer", "role": "member"},
+                       {"X-Master-Key": MASTER})
+            if reg.get("code") == 0:
+                racer_key = reg["data"]["api_key"]
+                cache_path = os.path.join(racer_home, "config", "agents.json")
+                write_cache(cache_path, {})
+
+                env = dict(os.environ)
+                env["MIDERHIVE_PORT"] = str(PORT)
+                env["MIDERHIVE_HOME"] = racer_home
+                env["MIDERHIVE_AGENT_NAME"] = "racer"
+                env.pop("MIDERHIVE_AGENT_KEY", None)  # 没有 key → 触发自动注册
+                env["MIDERHIVE_MASTER_KEY"] = MASTER
+                proc = subprocess.Popen([EXE], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, env=env, text=True,
+                                        encoding="utf-8")
+                try:
+                    # 1.2s 后（落在 3 次重试窗口内）把密钥写回缓存，模拟赢者落盘
+                    time.sleep(1.2)
+                    write_cache(cache_path, {"racer": racer_key})
+                    proc.stdin.write(json.dumps(
+                        {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n")
+                    proc.stdin.flush()
+                    line = proc.stdout.readline()
+                    ok = bool(line) and "tools" in line
+                    check("同名竞态：注册被拒后重读缓存并复用密钥", ok,
+                          (line or "server closed stdout")[:120])
+                finally:
+                    try:
+                        proc.stdin.close()
+                        proc.wait(timeout=5)
+                    except Exception:
+                        proc.kill()
+        except Exception as e:
+            check("同名竞态：注册被拒后重读缓存并复用密钥", False, str(e)[:120])
+        finally:
+            shutil.rmtree(racer_home, ignore_errors=True)
 
     failed = [r for r in results if not r[1]]
     print("MCP 验证: %d 项, 失败 %d 项" % (len(results), len(failed)))

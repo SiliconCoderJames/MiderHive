@@ -14,6 +14,7 @@
 //
 // 日志一律走 stderr（stdout 是协议通道，混入任何非 JSON 输出都会杀死客户端会话）。
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +26,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <httplib.h>
@@ -136,8 +138,27 @@ Identity resolveIdentity() {
                     std::cerr << "[miderhive-mcp] registered agent '" << id.name
                               << "', key saved to config/agents.json" << std::endl;
                 } else {
-                    std::cerr << "[miderhive-mcp] auto-register failed: HTTP " << res->status
-                              << " " << r.value("message", "") << std::endl;
+                    const std::string msg = r.value("message", "");
+                    // 同名竞态：另一个 MCP/CLI 进程可能刚刚注册成功（注册接口写库即成功，
+                    // 明文密钥随后才落盘）。此时"already registered"不是错误，而是"去重读缓存"。
+                    // 重试 3 次（每次 1s）覆盖赢者落盘的窗口，读不到才如实放弃。
+                    if (msg.find("already registered") != std::string::npos) {
+                        for (int attempt = 0; attempt < 3 && id.key.empty(); ++attempt) {
+                            std::this_thread::sleep_for(std::chrono::seconds(1));
+                            if (auto again = readAgentsJson(home)) {
+                                if (again->contains(id.name) && (*again)[id.name].is_string() &&
+                                    !(*again)[id.name].get<std::string>().empty())
+                                    id.key = (*again)[id.name].get<std::string>();
+                            }
+                        }
+                    }
+                    if (!id.key.empty()) {
+                        std::cerr << "[miderhive-mcp] reused the key for '" << id.name
+                                  << "' written by a concurrent registration" << std::endl;
+                    } else {
+                        std::cerr << "[miderhive-mcp] auto-register failed: HTTP " << res->status
+                                  << " " << msg << std::endl;
+                    }
                 }
             } else {
                 // 平台没起来/端口不对：说清原因，别让用户以为是环境变量配错
