@@ -142,3 +142,27 @@ jobs:
         run: |
           python scripts/test_onboarding_and_safety.py
           if ($LASTEXITCODE -ne 0) { throw "onboarding/key-rotation self-test failed" }
+
+      # 下面三条此前同样只在本地手动跑，等于"有测试、没防线"。fuzz 那次真抓出两个会写坏
+      # 用户配置文件的 bug（tab 缩进与块标量 `key: |` 未被拒绝），却因为没人自动跑而差点漏掉。
+      # 三条都是离线的（不需要运行中的平台），能在一台干净的 runner 上直接跑。
+      - name: Config merge fuzz test (adversarial user configs)
+        shell: pwsh
+        run: |
+          python scripts/fuzz_config_merge.py --agent-cli build\src\cli\Release\agent-cli.exe
+          if ($LASTEXITCODE -ne 0) { throw "config merge fuzz test failed - apply-config may corrupt user configs" }
+
+      # 未安装的客户端记 SKIP 而不是失败（脚本内部如此判定），所以干净 runner 上依然有效：
+      # codex/hermes 的配置形状是离线校验的，只有 claude/dsh 需要本机真的装了才深验。
+      - name: Per-client connect matrix
+        shell: pwsh
+        run: |
+          python scripts/verify_clients.py --agent-cli build\src\cli\Release\agent-cli.exe
+          if ($LASTEXITCODE -ne 0) { throw "client connect matrix failed - a generated config no longer parses" }
+
+      # 外接嵌入端点闭环：脚本自带 mock 的 OpenAI 兼容端点与自己的 platformd，不碰外部网络
+      - name: External embedding endpoint round-trip
+        shell: pwsh
+        run: |
+          python scripts/embed_cli_check.py --agent-cli build\src\cli\Release\agent-cli.exe --platformd build\src\cli\Release\platformd.exe
+          if ($LASTEXITCODE -ne 0) { throw "external embedding round-trip failed - real-semantic path regressed" }

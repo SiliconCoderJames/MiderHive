@@ -76,9 +76,13 @@ agent-cli apply-config --tool claude-code --dir <project-root> --name claude --k
 
 What CI runs on every push and PR: the build, a check that the GUI binary actually exists, `ctest`,
 the feasibility and MCP integration checks against a real `platformd` on a scratch data directory,
-and **both self-tests above** — the offscreen GUI end-to-end (`gui_selftest`) and the
-onboarding/key-rotation script. A regression in first-run onboarding, the health banner or key
-rotation therefore turns the badge red instead of shipping.
+**both self-tests above** — the offscreen GUI end-to-end (`gui_selftest`) and the
+onboarding/key-rotation script — plus the config-merge fuzz suite, the per-client connect matrix and
+the external-embedding round-trip. A regression in first-run onboarding, the health banner, key
+rotation, config merging or the connect snippets therefore turns the badge red instead of shipping.
+
+`soak_test.py` and the measurement scripts stay manual on purpose: they take minutes and assert
+nothing, so they answer questions rather than guard behaviour.
 
 > The offscreen GUI self-test **isolates its `QSettings`**: `gui_selftest` points the INI backend at
 > a scratch directory (`QSettings::setDefaultFormat(IniFormat)` + `setPath`, see
