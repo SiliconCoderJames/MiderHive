@@ -564,6 +564,23 @@ static void test_platform_end_to_end() {
         CHECK(!p.knowledgeCreate("hermes", longTitle, "内容", {}, "", {}, "", longEntry, vErr));
         CHECK(vErr.find("too long") != std::string::npos);
 
+        // ---- 加固项：分页 limit 钳制（防 limit=1e9 把整库塞进一个响应）----
+        // 播种 1001 条广播消息，超大 limit 的响应必须被钳到 ≤1000
+        for (int i = 0; i < 1001; ++i) {
+            ah::Message m;
+            CHECK(p.messageSend("note", "zcode", "", "bulk " + std::to_string(i), "b",
+                                m, err));
+        }
+        auto httpBulk = cli.Get("/api/messages?limit=99999999",
+                                {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}});
+        CHECK(httpBulk && httpBulk->status == 200);
+        if (httpBulk) {
+            auto body = json::parse(httpBulk->body);
+            CHECK(body["data"].is_array());
+            if (body["data"].is_array())
+                CHECK(body["data"].size() <= 1000);
+        }
+
         // ---- 加固项：管理性删除（仅 zcode）----
         std::string rmErr;
         CHECK(!p.knowledgeRemove("hermes", e1.uuid, rmErr));  // 非管理者被拒

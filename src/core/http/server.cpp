@@ -33,7 +33,11 @@ void send(httplib::Response& res, const json& body) {
     res.set_content(body.dump(), "application/json; charset=utf-8");
 }
 
-// 查询参数 -> 正整数（默认值兜底）；非数字输入返回 400 而非抛异常
+// 分页上限：limit 是"最多给多少条"的请求，服务端按上限钳制（与主流 API 一致）。
+// 没有这层的话，limit=2000000000 会让服务端把整库序列化进单个响应（内存/带宽放大面）。
+constexpr int kMaxLimit = 1000;
+
+// 查询参数 -> 正整数（默认值兜底）；非数字输入返回 400 而非抛异常；超上限钳制
 bool parseLimit(const httplib::Request& req, httplib::Response& res, int def, int& out) {
     if (!req.has_param("limit")) { out = def; return true; }
     const std::string& v = req.get_param_value("limit");
@@ -41,7 +45,7 @@ bool parseLimit(const httplib::Request& req, httplib::Response& res, int def, in
         size_t pos = 0;
         int n = std::stoi(v, &pos);
         if (n <= 0 || pos != v.size()) throw std::invalid_argument("range");
-        out = n;
+        out = std::min(n, kMaxLimit);
         return true;
     } catch (...) {
         send(res, fail(400, "limit must be a positive integer"));
@@ -416,7 +420,7 @@ void HttpServer::setupRoutes() {
         if (body.is_discarded() || !body.is_object()) { send(res, fail(400, "invalid JSON body")); return; }
         std::string query = body.value("query", "");
         std::string mode = body.value("mode", "keyword");
-        int limit = body.value("limit", 20);
+        int limit = std::min(body.value("limit", 20), kMaxLimit);
         std::string tag = body.value("tag", "");
         // 词表严格校验：此前 mode 大小写不符或未知时会被静默降级为 keyword 搜索，
         // 而 match_mode 又原样回显调用方的输入——调用方以为做了语义搜索（静默失败）。

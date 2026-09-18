@@ -30,6 +30,14 @@ import subprocess
 import sys
 import tempfile
 
+WORK_DIRS = []  # 运行结束统一清理（每次运行会在 %TEMP% 里建多个临时目录）
+
+
+def new_work_dir(prefix):
+    d = tempfile.mkdtemp(prefix=prefix)
+    WORK_DIRS.append(d)
+    return d
+
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -109,7 +117,7 @@ def hermes_available():
 
 def verify_claude(cli, work):
     """真实 CLI 验证：写项目 .mcp.json → claude mcp list 应列出 miderhive。"""
-    proj = tempfile.mkdtemp(prefix="mh-claude-proj-")
+    proj = new_work_dir("mh-claude-proj-")
     rc, out = run([cli, "apply-config", "--tool", "claude-code", "--dir", proj,
                    "--name", "claude-probe", "--key", "probe-key-not-a-real-credential"])
     if rc != 0:
@@ -144,7 +152,7 @@ def verify_claude(cli, work):
 
 def verify_dsh(cli, work):
     """真实加载器验证：dsh --patch <补丁> --dump-config 应合成出 mcp-miderhive 行。"""
-    root = tempfile.mkdtemp(prefix="mh-dsh-root-")
+    root = new_work_dir("mh-dsh-root-")
     rc, out = run([cli, "apply-config", "--tool", "dsh", "--dir", root,
                    "--name", "dsh-probe", "--key", "probe-key"])
     if rc != 0:
@@ -166,7 +174,7 @@ def verify_dsh(cli, work):
 
 
 def verify_codex(cli, work):
-    root = tempfile.mkdtemp(prefix="mh-codex-")
+    root = new_work_dir("mh-codex-")
     rc, out = run([cli, "apply-config", "--tool", "codex", "--dir", root,
                    "--name", "codex-probe", "--key", "probe-key"])
     if rc != 0:
@@ -195,7 +203,7 @@ def verify_hermes(cli, work):
     if yaml is None:
         add("hermes", "SKIP", "未安装 PyYAML，无法解析验证（pip install pyyaml）")
         return
-    root = tempfile.mkdtemp(prefix="mh-hermes-")
+    root = new_work_dir("mh-hermes-")
     rc, out = run([cli, "apply-config", "--tool", "hermes", "--dir", root,
                    "--name", "hermes-probe", "--key", "probe-key"])
     if rc != 0:
@@ -214,7 +222,7 @@ def verify_hermes(cli, work):
 
 
 def verify_droid(cli, work):
-    root = tempfile.mkdtemp(prefix="mh-droid-")
+    root = new_work_dir("mh-droid-")
     rc, out = run([cli, "apply-config", "--tool", "droid", "--dir", root,
                    "--name", "droid-probe", "--key", "probe-key"])
     if rc != 0:
@@ -289,6 +297,8 @@ def main():
         print("结果: FAIL%s" % ("（--strict：存在未验证客户端）" if n_skip else ""))
     else:
         print("结果: PASS")
+    for d in WORK_DIRS:
+        shutil.rmtree(d, ignore_errors=True)
     return 1 if failed else 0
 
 

@@ -41,6 +41,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CLI = os.path.join(REPO, "build", "full", "src", "cli", "Release", "agent-cli.exe")
 
 RESULTS = []
+WORK_DIRS = []  # 运行结束统一清理
 
 
 def check(name, ok, detail=""):
@@ -208,10 +209,12 @@ def main():
         return 2
 
     root = tempfile.mkdtemp(prefix="mh-fuzz-")
+    WORK_DIRS.append(root)
     print("==== 配置合并模糊测试（agent-cli: %s）====" % cli)
 
     def case(tool, rel, label, seed, expect, verifier):
         work = tempfile.mkdtemp(prefix="mh-fz-")
+        WORK_DIRS.append(work)
         target_path = os.path.join(work, rel)
         if seed is not None:
             write(target_path, seed)
@@ -243,7 +246,8 @@ def main():
         case("cursor", ".cursor/mcp.json", label, seed, expect,
              lambda p, n, e: verify_cursor(p, n, e, seed))
 
-    shutil.rmtree(root, ignore_errors=True)
+    for d in WORK_DIRS:
+        shutil.rmtree(d, ignore_errors=True)
 
     fails = [r for r in RESULTS if not r[1]]
     print("\n模糊测试: %d 项, 失败 %d 项" % (len(RESULTS), len(fails)))
