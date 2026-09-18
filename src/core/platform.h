@@ -185,6 +185,9 @@ private:
     bool persistAgentKey(const std::string& name, const std::string& apiKey, std::string& err);
     std::vector<float> resolveEmbedding(const std::string& content,
                                         const std::vector<float>* provided, bool& isProvided);
+    // 维度↔provider 绑定校验（同维度共用 vec 表，不同模型会互相污染）；
+    // 调用方须持有 mutex_
+    bool bindEmbeddingProvider(size_t dim, const std::string& provider, std::string& err);
 
     std::string home_dir_;
     Database db_;

@@ -118,6 +118,17 @@ bool Platform::bootstrap(std::string& err) {
                    [](Stmt& st) { st.bind(1, kDefaultWeeklyBudget); }, nullptr, err))
         return false;
 
+    // 内置嵌入器的维度预先登记为它的 provider：384 维不准其它模型的向量混入
+    // （同一维度共用一张 vec 表，混入会污染 kNN 结果，见 bindEmbeddingProvider）
+    if (!db_.query("INSERT OR IGNORE INTO settings(key, value) VALUES(?,?)",
+                   [&](Stmt& st) {
+                       st.bind(1, std::string("embed_provider_") +
+                                      std::to_string(embedder_->dim()));
+                       st.bind(2, embedder_->name());
+                   },
+                   nullptr, err))
+        return false;
+
     // 主密钥：环境变量优先，其次运行期生成的文件；绝不写入源码
     std::string masterKey;
     if (auto env = envOr({"MIDERHIVE_MASTER_KEY", "AGENTHIVE_MASTER_KEY",
@@ -419,6 +430,40 @@ int Platform::embeddingDim() const { return embedder_->dim(); }  // 内置嵌入
 
 // ---------------- 知识库 ----------------
 
+// 维度↔provider 绑定：同一维度的向量在 vec0 里**共用一张表**，不同模型的向量因此会
+// 互相污染 kNN 结果（查询时无法区分来源维度相同但语义空间不同的向量）。
+// 首次写入某维度时登记其 provider；之后同维度不同模型的写入明确拒绝——把"检索结果
+// 莫名其妙"变成"一眼可读的用法错误"。调用方须持有 mutex_。
+bool Platform::bindEmbeddingProvider(size_t dim, const std::string& provider, std::string& err) {
+    const std::string key = "embed_provider_" + std::to_string(dim);
+    std::string bound;
+    bool found = false;
+    if (!db_.query("SELECT value FROM settings WHERE key=?",
+                   [&](Stmt& st) { st.bind(1, key); },
+                   [&](Stmt& st) {
+                       bound = st.text(0);
+                       found = true;
+                   },
+                   err))
+        return false;
+    if (!found) {
+        return db_.query("INSERT OR IGNORE INTO settings(key, value) VALUES(?,?)",
+                         [&](Stmt& st) {
+                             st.bind(1, key);
+                             st.bind(2, provider);
+                         },
+                         nullptr, err);
+    }
+    if (bound != provider) {
+        err = "dimension " + std::to_string(dim) + " is bound to embedding provider '" + bound +
+              "' (got '" + provider +
+              "'); vectors from different models share one table and would pollute each other — "
+              "use the same model for this dimension, or pick another dimension";
+        return false;
+    }
+    return true;
+}
+
 bool Platform::knowledgeCreate(const std::string& author, const std::string& title,
                                const std::string& content, const std::vector<std::string>& tags,
                                const std::string& category, const std::vector<float>& embedding,
@@ -436,6 +481,7 @@ bool Platform::knowledgeCreate(const std::string& author, const std::string& tit
     std::vector<float> vec = resolveEmbedding(content, &embedding, provided);
     std::string provider = provided ? embeddingProvider : embedder_->name();
     if (provider.empty()) provider = embedder_->name();
+    if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
     std::string tagsJson = nlohmann::json(tags).dump();
     if (!knowledge_.create(author, title, content, tagsJson, category, vec, provider, out, err))
         return false;
@@ -472,6 +518,7 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
     std::vector<float> vec = resolveEmbedding(newContent, &embedding, provided);
     std::string provider = provided ? embeddingProvider : embedder_->name();
     if (provider.empty()) provider = embedder_->name();
+    if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
     if (!knowledge_.addVersion(author, uuid, newTitle, newContent, vec, provider, out, err))
         return false;
     audit_.log(author, "knowledge.version.add", uuid,

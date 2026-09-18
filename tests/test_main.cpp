@@ -1496,6 +1496,63 @@ static void test_schema_version_gate() {
     fs::remove_all(tmp, ec);
 }
 
+// 批次 5：维度↔provider 绑定。同一维度的向量共用一张 vec 表，不同模型的向量会互相
+// 污染 kNN 结果（查询时无法按 provider 过滤）；因此首次写入登记 provider，之后同维度
+// 换模型必须被明确拒绝，而不是产出"检索结果莫名其妙"。
+static void test_embed_provider_binding() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_bind_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+
+        // 内置写入：384 维已由 bootstrap 登记为内置 provider
+        ah::KnowledgeEntry a;
+        CHECK(p.knowledgeCreate("hermes", "builtin", "builtin content one", {}, "", {}, "", a,
+                                err));
+
+        // 128 维 + model-A：首次写入登记成功
+        std::vector<float> v128a(128, 0.1f), v128b(128, 0.2f);
+        ah::KnowledgeEntry b;
+        CHECK(p.knowledgeCreate("hermes", "customA", "custom content two", {}, "", v128a,
+                                "model-A", b, err));
+
+        // 同维度换模型：拒绝，且错误点明维度与两个 provider
+        ah::KnowledgeEntry c;
+        std::string bindErr;
+        CHECK(!p.knowledgeCreate("hermes", "customB", "custom content three", {}, "", v128b,
+                                 "model-B", c, bindErr));
+        CHECK(bindErr.find("128") != std::string::npos);
+        CHECK(bindErr.find("model-A") != std::string::npos);
+        CHECK(bindErr.find("model-B") != std::string::npos);
+
+        // 同维度同模型：放行
+        CHECK(p.knowledgeCreate("hermes", "customA2", "custom content four", {}, "", v128a,
+                                "model-A", c, err));
+
+        // 另一维度另一模型：放行（维度之间互不干扰）
+        std::vector<float> v256(256, 0.3f);
+        ah::KnowledgeEntry d;
+        CHECK(p.knowledgeCreate("hermes", "other256", "custom content five", {}, "", v256,
+                                "model-B", d, err));
+
+        // agent 用 384 维自有模型 → 与内置的 384 表冲突，拒绝
+        std::vector<float> v384(384, 0.4f);
+        ah::KnowledgeEntry e;
+        CHECK(!p.knowledgeCreate("hermes", "conflict384", "custom content six", {}, "", v384,
+                                 "my-model", e, bindErr));
+
+        // 追加版本路径同样受校验（防止绕过 create 混入异模型向量）
+        CHECK(!p.knowledgeAddVersion("hermes", b.uuid, "", "v2 content", v128b, "model-B", e,
+                                     bindErr));
+        CHECK(bindErr.find("model-A") != std::string::npos);
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1521,6 +1578,7 @@ int main() {
     run("semantic_tag_pushdown", test_semantic_tag_pushdown);
     run("heartbeat_audit", test_heartbeat_audit);
     run("schema_version_gate", test_schema_version_gate);
+    run("embed_provider_binding", test_embed_provider_binding);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
