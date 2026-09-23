@@ -122,7 +122,7 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
                               const std::string& content, const std::string& tagsJson,
                               const std::string& category, const std::vector<float>& embedding,
                               const std::string& embeddingProvider, KnowledgeEntry& out,
-                              std::string& err) {
+                              std::string& err, const InTxStep& inTx) {
     std::string uuid = uuid4();
     const size_t dim = embedding.empty() ? static_cast<size_t>(embedder_.dim()) : embedding.size();
     // 建表放在事务外：幂等 DDL，不必混进写事务（也避免 vec0 在事务内建表的未知行为）
@@ -153,6 +153,14 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
     int64_t id = db_.lastInsertId();
     if (!insertVec(id, embedding, err)) {
         db_.rollback();
+        return false;
+    }
+    // 提交前的最后一步（调用方注入，例如审计留痕）：失败即整体回滚。
+    // 必须落在服务自己的事务里——SQLite 没有真正的嵌套事务（内层 COMMIT 会提交
+    // 最外层），所以在服务提交之后再补一步，rollback 就是空操作了。
+    if (inTx && !inTx()) {
+        db_.rollback();
+        if (err.empty()) err = "in-transaction step failed";
         return false;
     }
     if (!db_.commit(err)) {
@@ -191,6 +199,8 @@ std::string KnowledgeService::existingDimsHint() {
             continue;
         // 该维度最新一条的 provider 标签；查不到就标 unknown（老数据可能为空串）
         std::string provider = "unknown", perr;
+        // IGNORE: 错误提示的尽力而为查询——本函数只用于拼"现有维度+provider"的
+        // 诊断文案，查询失败就用默认值 unknown，绝不影响主流程的报错语义。
         db_.query("SELECT embedding_provider FROM knowledge_entries WHERE id IN "
                   "(SELECT entry_id FROM " + n + ") ORDER BY id DESC LIMIT 1",
                   nullptr,
@@ -289,7 +299,7 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
                                   const std::string& newTitle, const std::string& newContent,
                                   const std::vector<float>& embedding,
                                   const std::string& embeddingProvider, KnowledgeEntry& out,
-                                  std::string& err) {
+                                  std::string& err, const InTxStep& inTx) {
     const size_t dim = embedding.empty() ? static_cast<size_t>(embedder_.dim()) : embedding.size();
     if (!ensureVecTableFor(dim, err)) return false;  // 事务外建表（幂等），理由同 create()
 
@@ -353,6 +363,12 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
     int64_t id = db_.lastInsertId();
     if (!insertVec(id, embedding, err)) {
         db_.rollback();
+        return false;
+    }
+    // 提交前的最后一步（调用方注入，例如审计留痕）：失败即整体回滚
+    if (inTx && !inTx()) {
+        db_.rollback();
+        if (err.empty()) err = "in-transaction step failed";
         return false;
     }
     if (!db_.commit(err)) {

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/db/database.h"
+#include "core/services/in_tx_step.h"
 #include "core/types.h"
 
 namespace ah {
@@ -12,9 +13,11 @@ class ErrorService {
 public:
     explicit ErrorService(Database& db) : db_(db) {}
 
+    // report 是单条 INSERT；inTx（可空）使它带事务：INSERT 与该步同生同灭。
+    // 注意报告必须是原子的——"错误记录了但没有留痕"违背协作规则。
     bool report(const std::string& reporter, const std::string& severity, const std::string& source,
                 const std::string& title, const std::string& detail, const std::string& stackTrace,
-                ErrorReport& out, std::string& err);
+                ErrorReport& out, std::string& err, const InTxStep& inTx = {});
     bool list(const std::string& statusFilter, const std::string& severityFilter, int limit,
               std::vector<ErrorReport>& out, std::string& err);
     bool get(const std::string& uuid, ErrorReport& out, std::string& err);

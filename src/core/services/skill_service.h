@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/db/database.h"
+#include "core/services/in_tx_step.h"
 #include "core/types.h"
 
 namespace ah {
@@ -12,10 +13,11 @@ class SkillService {
 public:
     explicit SkillService(Database& db) : db_(db) {}
 
+    // inTx（可空）使注册带事务：INSERT 与该步（审计）同生同灭
     bool registerSkill(const std::string& name, const std::string& displayName,
                        const std::string& description, const std::string& category,
                        const std::string& ownerAgent, const std::string& paramSchema,
-                       SkillInfo& out, std::string& err);
+                       SkillInfo& out, std::string& err, const InTxStep& inTx = {});
     bool get(const std::string& name, SkillInfo& out, std::string& err);
     bool list(const std::string& categoryFilter, const std::string& ownerFilter,
               std::vector<SkillInfo>& out, std::string& err);

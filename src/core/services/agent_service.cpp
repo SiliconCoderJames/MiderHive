@@ -47,6 +47,8 @@ bool AgentService::credentialOf(const std::string& name, std::string& salt, std:
 
 void AgentService::heartbeat(const std::string& name, const std::string& currentTask) {
     std::string err;
+    // IGNORE: 高频心跳的状态写入；返回值无法上报（本函数为 void，调用方 Platform::heartbeat
+    // 也不把心跳失败当错误）。留痕由 Platform 层的审计负责。
     db_.query(
         "UPDATE agents SET status='online', current_task=?, last_seen_at=?, updated_at=? WHERE name=?",
         [&](Stmt& st) {
@@ -110,6 +112,8 @@ bool AgentService::rotateKey(const std::string& name, const std::string& salt,
 bool AgentService::nameExists(const std::string& name) {
     std::string err;
     bool found = false;
+    // IGNORE: 存在性探测——查不到（或查询失败）一律按"不存在"处理；
+    // 真实写入会由唯一约束兜底，这里不需要区分失败与不存在。
     db_.query("SELECT 1 FROM agents WHERE name = ?",
               [&](Stmt& st) { st.bind(1, name); },
               [&](Stmt&) { found = true; }, err);

@@ -1,6 +1,7 @@
 #include "core/platform.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -19,6 +20,34 @@ namespace fs = std::filesystem;
 // 库结构版本：必须与 schema.sql 末尾的 `PRAGMA user_version` 保持一致。
 // 改 schema 时两处一起递增，并在 bootstrap 的迁移链里补上对应步骤。
 constexpr int64_t kSchemaVersion = 2;
+
+// ---- 审计留痕是硬契约：审计写不进去，这次写操作就算失败 ----
+// 理由：schema/README 承诺"所有写操作在 audit_log 留痕"。若让业务数据落库而审计行写不进去，
+// 产出的是一条**无法追溯**的记录——比直接拒绝这次写更糟。
+//
+// 关键约束（实测踩过两次，两次都是"失败被静默吞掉"本身）：
+//   1) SQLite **没有真正的嵌套事务**，内层 COMMIT 会提交最外层。所以
+//      "调用方在外层 BEGIN、服务内部自己 COMMIT"是错的——外层事务会永远挂着，
+//      紧接着的下一条 BEGIN 直接报 "cannot start a transaction within a transaction"。
+//      需要留痕的业务必须让审计成为**服务自身事务里的一步**（见 InTxStep / auditStep）。
+//   2) 调用方必须把**自己的 err 传进来**。曾写成"写进局部 auditErr"，
+//      结果返回 false 而 err 为空——调用方拿到一个没有理由的失败，正是本规则要消灭的问题。
+#define AUDIT_OR_FAIL(call, sink)                                  \
+    do {                                                           \
+        if (!(call)) {                                             \
+            db_.rollback();                                        \
+            if ((sink).empty()) (sink) = "audit log write failed";  \
+            return false;                                          \
+        }                                                          \
+    } while (0)
+
+// 提交前执行的审计步骤：专供服务层 InTxStep 使用（事务由服务拥有，审计在其内部执行）。
+// 审计失败时把原因写进 err，由调用方并入自己的 err 上报。
+bool Platform::auditStep(const std::string& actor, const std::string& action,
+                         const std::string& target, const std::string& detailJson,
+                         std::string& err) {
+    return audit_.log(actor, action, target, detailJson, err);
+}
 
 std::string defaultHomeDir() {
     if (auto env = envOr({"MIDERHIVE_HOME", "AGENTHIVE_HOME", "ZCODE_PLATFORM_HOME"}); !env.empty())
@@ -159,8 +188,12 @@ bool Platform::bootstrap(std::string& err) {
                                    sha256Hex(zcodeSalt + zcodeKey), err))
             return false;
         if (!persistAgentKey(kManagerName, zcodeKey, err)) return false;
+        // IGNORE: 引导期一次性留痕。此处 schema 刚建好、数据目录刚通过自检，
+        // 审计写失败意味着"整套初始化已经不可信"（由后续 diagnostics 暴露），
+        // 不值得在这里让首次启动直接失败（用户将完全无法进入程序）。
+        std::string bootAuditErr;
         audit_.log("system", "agent.register", kManagerName,
-                   nlohmann::json{{"role", "zcode"}}.dump(), err);
+                   nlohmann::json{{"role", "zcode"}}.dump(), bootAuditErr);
     }
 
     // 明文密钥缓存文件的可观测性：库中已有管理者行，但文件缺失/不含该条目，说明明文已
@@ -181,6 +214,8 @@ bool Platform::bootstrap(std::string& err) {
         }
         if (!managerKeyCached) {
             std::string auditErr;
+            // IGNORE: 启动期诊断留痕（"明文密钥文件缺失"这条线索本身），不是用户发起的
+            // 写操作；它写不进去时启动不该失败——那会让"密钥文件丢了"升级成"打不开程序"。
             audit_.log("system", "system.keyfile_missing", kManagerName,
                        nlohmann::json{{"path", keyPath},
                                       {"recover", "POST /api/agents/rotate"},
@@ -190,9 +225,14 @@ bool Platform::bootstrap(std::string& err) {
         }
     }
 
-    // 数据增长维护：审计轮转 + 已解决错误清理（每次启动执行）
+    // 数据增长维护：审计轮转 + 已解决错误清理（每次启动执行）。
+    // 定位是"尽力而为的家务"：库被占用/磁盘暂时写不进去时，不该让整个工作台启动失败
+    // （下次启动会再来一次）。但**不能静默**：失败原文写进启动日志，且不能污染 err。
     std::string stats;
-    maintenanceRun("system", stats, err);
+    std::string maintErr;
+    // IGNORE: 有意不改启动判定——见上；失败原因已在下面显式输出。
+    if (!maintenanceRun("system", stats, maintErr))
+        std::fprintf(stderr, "[miderhive] startup maintenance skipped: %s\n", maintErr.c_str());
 
     bootstrapped_ = true;
     return true;
@@ -307,15 +347,27 @@ bool Platform::registerAgent(const std::string& masterKey, const std::string& na
     if (agents_.nameExists(name)) { err = "agent already registered: " + name; return false; }
     outApiKey = randomHex(32);
     std::string salt = randomHex(16);
-    if (!agents_.registerAgent(name, actualRole, salt, sha256Hex(salt + outApiKey), err))
+    // 注册与留痕同事务
+    if (!db_.beginImmediate(err)) return false;
+    if (!agents_.registerAgent(name, actualRole, salt, sha256Hex(salt + outApiKey), err)) {
+        db_.rollback();
         return false;
-    std::string persistErr;
+    }
     std::string auditErr;
-    if (!persistAgentKey(name, outApiKey, persistErr))
+    AUDIT_OR_FAIL(audit_.log("master", "agent.register", name,
+                             nlohmann::json{{"role", actualRole}}.dump(), auditErr),
+                  auditErr);
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
+    std::string persistErr;
+    if (!persistAgentKey(name, outApiKey, persistErr)) {
+        std::string keyfileAuditErr;
+        // IGNORE: 元审计（"审计写失败"本身的留痕），写不进去时无处可报，不影响注册结果
         audit_.log("system", "system.keyfile_write_failed", name,
-                   nlohmann::json{{"error", persistErr}}.dump(), auditErr);
-    audit_.log("master", "agent.register", name,
-               nlohmann::json{{"role", actualRole}}.dump(), auditErr);
+                   nlohmann::json{{"error", persistErr}}.dump(), keyfileAuditErr);
+    }
     return true;
 }
 
@@ -324,11 +376,23 @@ bool Platform::agentRemove(const std::string& actor, const std::string& name, st
     if (!isManager(actor)) { err = "only zcode can remove agents"; return false; }
     if (name == kManagerName) { err = "cannot remove the manager agent"; return false; }
     if (!agents_.nameExists(name)) { err = "agent not found: " + name; return false; }
-    if (!agents_.removeAgent(name, err)) return false;
-    // 密钥缓存文件同步移除该条目（尽力而为，失败不回滚删除）
+    // 删除与留痕同事务：不能出现"Agent 没了、审计里查不到谁删的"
+    if (!db_.beginImmediate(err)) return false;
+    if (!agents_.removeAgent(name, err)) {
+        db_.rollback();
+        return false;
+    }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, "agent.remove", name,
+                             nlohmann::json{{"removed", name}}.dump(), auditErr),
+                  auditErr);
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
+    // 密钥缓存文件同步移除该条目（文件操作不进数据库事务：失败不回滚删除）
     std::string persistErr;
     (void)persistAgentKey(name, "", persistErr);
-    audit_.log(actor, "agent.remove", name, nlohmann::json{{"removed", name}}.dump(), err);
     return true;
 }
 
@@ -339,16 +403,30 @@ bool Platform::agentRotateKey(const std::string& actor, const std::string& name,
     if (!agents_.nameExists(name)) { err = "agent not found: " + name; return false; }
     outApiKey = randomHex(32);
     std::string salt = randomHex(16);
-    if (!agents_.rotateKey(name, salt, sha256Hex(salt + outApiKey), err)) return false;
-    // 明文落盘供 Agent 侧取用。写失败不回滚轮换：新密钥已经返回给调用方，
+    // 轮换与留痕同事务：失败时旧密钥继续有效，不会出现"换了但查不到谁换的"
+    if (!db_.beginImmediate(err)) return false;
+    if (!agents_.rotateKey(name, salt, sha256Hex(salt + outApiKey), err)) {
+        db_.rollback();
+        return false;
+    }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, "agent.rotate_key", name,
+                             nlohmann::json{{"rotated", name}}.dump(), auditErr),
+                  auditErr);
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
+    // 明文落盘供 Agent 侧取用。写失败不回滚轮换：新密钥已经生效并返回给调用方，
     // 回滚反而会让新旧密钥同时失效。失败记入审计，便于排查"密钥文件写不进去"。
     std::string persistErr;
-    std::string auditErr;
-    if (!persistAgentKey(name, outApiKey, persistErr))
+    if (!persistAgentKey(name, outApiKey, persistErr)) {
+        std::string keyfileAuditErr;
+        // IGNORE: 这是"审计写失败"本身的审计（元审计），它自己写不进去时无处可报；
+        // 不让它影响轮换结果。
         audit_.log("system", "system.keyfile_write_failed", name,
-                   nlohmann::json{{"error", persistErr}}.dump(), auditErr);
-    audit_.log(actor, "agent.rotate_key", name, nlohmann::json{{"rotated", name}}.dump(),
-               auditErr);
+                   nlohmann::json{{"error", persistErr}}.dump(), keyfileAuditErr);
+    }
     return true;
 }
 
@@ -365,19 +443,35 @@ bool Platform::agentProvision(const std::string& actor, const std::string& name,
     const bool existed = agents_.nameExists(name);
     outApiKey = randomHex(32);
     std::string salt = randomHex(16);
+    // 签发/轮换与留痕同事务（理由同 agentRotateKey）
+    if (!db_.beginImmediate(err)) return false;
     if (existed) {
-        if (!agents_.rotateKey(name, salt, sha256Hex(salt + outApiKey), err)) return false;
-    } else {
-        if (!agents_.registerAgent(name, kDefaultRole, salt, sha256Hex(salt + outApiKey), err))
+        if (!agents_.rotateKey(name, salt, sha256Hex(salt + outApiKey), err)) {
+            db_.rollback();
             return false;
+        }
+    } else {
+        if (!agents_.registerAgent(name, kDefaultRole, salt, sha256Hex(salt + outApiKey), err)) {
+            db_.rollback();
+            return false;
+        }
+    }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, "agent.provision", name,
+                             nlohmann::json{{"mode", existed ? "rotate" : "register"}}.dump(),
+                             auditErr),
+                  auditErr);
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
     }
     std::string persistErr;
-    std::string auditErr;
-    if (!persistAgentKey(name, outApiKey, persistErr))
+    if (!persistAgentKey(name, outApiKey, persistErr)) {
+        std::string keyfileAuditErr;
+        // IGNORE: 元审计（"审计写失败"本身的留痕），写不进去时无处可报，不影响签发结果
         audit_.log("system", "system.keyfile_write_failed", name,
-                   nlohmann::json{{"error", persistErr}}.dump(), auditErr);
-    audit_.log(actor, "agent.provision", name,
-               nlohmann::json{{"mode", existed ? "rotate" : "register"}}.dump(), auditErr);
+                   nlohmann::json{{"error", persistErr}}.dump(), keyfileAuditErr);
+    }
     return true;
 }
 
@@ -386,6 +480,8 @@ void Platform::heartbeat(const std::string& name, const std::string& currentTask
     std::string prevTask, prevSeen;
     bool found = false;
     std::string err;
+    // IGNORE: 只读探测——用于判断"是否首次上线/任务是否变化"以决定要不要留痕；
+    // 查不到就按 found=false 继续（心跳本身由 AgentService::heartbeat 负责）。
     db_.query("SELECT current_task, last_seen_at FROM agents WHERE name=?",
               [&](Stmt& st) { st.bind(1, name); },
               [&](Stmt& st) {
@@ -401,8 +497,12 @@ void Platform::heartbeat(const std::string& name, const std::string& currentTask
     std::time_t t = 0;
     if (!prevSeen.empty() && parseIso(prevSeen, t) && (std::time(nullptr) - t) > 120) wasOffline = true;
     if (wasOffline || prevTask != currentTask) {
+        // IGNORE: 心跳是 30-60s 一次的高频上报，审计失败不该让心跳失败
+        // （那会把"暂时写不进审计表"放大成"Agent 集体离线"）；心跳本身仍由审计覆盖，
+        // 只是允许这条留痕尽力而为。
+        std::string heartbeatAuditErr;
         audit_.log(name, "agent.heartbeat", name,
-                   nlohmann::json{{"task", currentTask}}.dump(), err);
+                   nlohmann::json{{"task", currentTask}}.dump(), heartbeatAuditErr);
     }
 }
 
@@ -487,11 +587,18 @@ bool Platform::knowledgeCreate(const std::string& author, const std::string& tit
     if (provider.empty()) provider = embedder_->name();
     if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
     std::string tagsJson = nlohmann::json(tags).dump();
-    if (!knowledge_.create(author, title, content, tagsJson, category, vec, provider, out, err))
-        return false;
-    audit_.log(author, "knowledge.create", out.uuid,
-               nlohmann::json{{"title", title}, {"tags", tags}, {"category", category}}.dump(), err);
-    return true;
+    // 审计作为服务事务内的一步：知识条目与它的留痕要么都在、要么都不在。
+    // 审计用独立的 err——审计失败时本函数即将返回 false，绝不能把审计的错误文本
+    // 写进调用方的 err 之后又返回 true（那会让"成功"带着一条错误信息出去）。
+    std::string auditErr;
+    const std::string createDetail =
+        nlohmann::json{{"title", title}, {"tags", tags}, {"category", category}}.dump();
+    const bool ok = knowledge_.create(
+        author, title, content, tagsJson, category, vec, provider, out, err, [&]() {
+            return auditStep(author, "knowledge.create", out.uuid, createDetail, auditErr);
+        });
+    if (!ok && err.empty()) err = auditErr;  // 失败原因来自审计时要如实上报
+    return ok;
 }
 
 bool Platform::knowledgeList(int limit, const std::string& tagFilter,
@@ -523,11 +630,15 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
     std::string provider = provided ? embeddingProvider : embedder_->name();
     if (provider.empty()) provider = embedder_->name();
     if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
-    if (!knowledge_.addVersion(author, uuid, newTitle, newContent, vec, provider, out, err))
-        return false;
-    audit_.log(author, "knowledge.version.add", uuid,
-               nlohmann::json{{"version", out.version}}.dump(), err);
-    return true;
+    // 审计作为服务事务内的一步（InTxStep）：SQLite 无嵌套事务，不能在服务外面再包 BEGIN
+    std::string auditErr;
+    const std::string versionDetail = nlohmann::json{{"version", out.version}}.dump();
+    const bool ok = knowledge_.addVersion(
+        author, uuid, newTitle, newContent, vec, provider, out, err, [&]() {
+            return auditStep(author, "knowledge.version.add", uuid, versionDetail, auditErr);
+        });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 bool Platform::knowledgeSearchSemantic(const std::vector<float>& queryVec, int limit,
@@ -562,13 +673,16 @@ bool Platform::knowledgeRemove(const std::string& actor, const std::string& uuid
         db_.rollback();
         return false;
     }
+    // 审计放在提交之前：留痕是硬契约，写不进去就整体回滚——不能出现
+    // "条目已删除、审计里查不到谁删的"（数据与留痕必须同生同灭）。
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, "knowledge.remove", uuid,
+                             nlohmann::json{{"title", cur.title}}.dump(), auditErr),
+                  auditErr);
     if (!db_.commit(err)) {
         db_.rollback();
         return false;
     }
-    // 审计写在业务事务提交之后：审计失败只记入 err，不回滚已提交的删除
-    audit_.log(actor, "knowledge.remove", uuid,
-               nlohmann::json{{"title", cur.title}}.dump(), err);
     return true;
 }
 
@@ -601,12 +715,17 @@ bool Platform::skillRegister(const std::string& author, const std::string& name,
         err = "field too long (name<=64, description<=2000, category<=64, schema<=10000)";
         return false;
     }
-    if (!skills_.registerSkill(name, displayName, description, category, author, paramSchema, out,
-                               err))
-        return false;
-    audit_.log(author, "skill.register", name,
-               nlohmann::json{{"description", description}, {"category", category}}.dump(), err);
-    return true;
+    // 审计作为服务事务内的一步：技能注册与留痕同生同灭
+    std::string auditErr;
+    const std::string skillDetail =
+        nlohmann::json{{"description", description}, {"category", category}}.dump();
+    const bool ok = skills_.registerSkill(name, displayName, description, category, author,
+                                          paramSchema, out, err, [&]() {
+                                              return auditStep(author, "skill.register", name,
+                                                               skillDetail, auditErr);
+                                          });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 bool Platform::skillList(const std::string& categoryFilter, const std::string& ownerFilter,
@@ -741,10 +860,15 @@ bool Platform::memorySet(const std::string& author, const std::string& section,
         err = "field too long (section<=32, key<=128, value<=20000)";
         return false;
     }
-    if (!memory_.set(author, section, key, value, baseVersion, out, err)) return false;
-    audit_.log(author, "memory.set", section + "/" + key,
-               nlohmann::json{{"version", out.version}, {"value", value}}.dump(), err);
-    return true;
+    // 审计作为服务事务内的一步：记忆写入与留痕同生同灭（SQLite 无嵌套事务）
+    std::string auditErr;
+    const std::string memDetail =
+        nlohmann::json{{"version", out.version}, {"value", value}}.dump();
+    const bool ok = memory_.set(author, section, key, value, baseVersion, out, err, [&]() {
+        return auditStep(author, "memory.set", section + "/" + key, memDetail, auditErr);
+    });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 bool Platform::memoryRemove(const std::string& actor, const std::string& section,
@@ -752,10 +876,17 @@ bool Platform::memoryRemove(const std::string& actor, const std::string& section
     std::lock_guard lock(mutex_);
     if (!isManager(actor)) { err = "only zcode can remove memory entries"; return false; }
     int64_t removed = 0;
-    if (!memory_.remove(section, key, removed, err)) return false;
+    // 审计作为服务事务内的一步（需要 versions_removed 计数）
+    std::string auditErr;
+    const bool ok = memory_.remove(section, key, removed, err, [&]() {
+        return auditStep(actor, "memory.remove", section + "/" + key,
+                         nlohmann::json{{"versions_removed", removed}}.dump(), auditErr);
+    });
+    if (!ok) {
+        if (err.empty()) err = auditErr;
+        return false;
+    }
     if (removed == 0) { err = "memory entry not found: " + section + "/" + key; return false; }
-    audit_.log(actor, "memory.remove", section + "/" + key,
-               nlohmann::json{{"versions_removed", removed}}.dump(), err);
     return true;
 }
 
@@ -776,12 +907,18 @@ bool Platform::messageSend(const std::string& kind, const std::string& sender,
         err = "field too long (subject<=200, body<=50000)";
         return false;
     }
-    if (!messages_.send(kind, sender, recipient, subject, body, std::string(), out, err))
-        return false;
-    audit_.log(sender, "message.send", out.uuid,
-               nlohmann::json{{"kind", kind}, {"recipient", recipient}, {"subject", subject}}.dump(),
-               err);
-    return true;
+    // 审计作为服务事务内的一步：消息与它的留痕同生同灭
+    // （不要在服务外面再包一层 BEGIN：SQLite 的 COMMIT 会提交最外层事务）
+    std::string auditErr;
+    const std::string sendDetail =
+        nlohmann::json{{"kind", kind}, {"recipient", recipient}, {"subject", subject}}.dump();
+    const bool ok = messages_.send(kind, sender, recipient, subject, body, std::string(), out, err,
+                                   [&]() {
+                                       return auditStep(sender, "message.send", out.uuid, sendDetail,
+                                                        auditErr);
+                                   });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 bool Platform::messageList(const std::string& recipientFilter, const std::string& kindFilter,
@@ -800,10 +937,14 @@ bool Platform::messageGet(const std::string& uuid, Message& out, std::string& er
 bool Platform::messageReply(const std::string& sender, const std::string& parentUuid,
                             const std::string& body, Message& out, std::string& err) {
     std::lock_guard lock(mutex_);
-    if (!messages_.reply(parentUuid, sender, body, out, err)) return false;
-    audit_.log(sender, "message.reply", out.uuid,
-               nlohmann::json{{"parent", parentUuid}}.dump(), err);
-    return true;
+    // 审计作为服务事务内的一步（reply 自身把"写回复 + 标已读"绑在一个事务里）
+    std::string auditErr;
+    const std::string replyDetail = nlohmann::json{{"parent", parentUuid}}.dump();
+    const bool ok = messages_.reply(parentUuid, sender, body, out, err, [&]() {
+        return auditStep(sender, "message.reply", out.uuid, replyDetail, auditErr);
+    });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 bool Platform::messageSetStatus(const std::string& actor, const std::string& uuid,
@@ -821,9 +962,14 @@ bool Platform::messageSetStatus(const std::string& actor, const std::string& uui
         err = "not allowed to change this message's status";
         return false;
     }
-    if (!messages_.setStatus(uuid, newStatus, out, err)) return false;
-    audit_.log(actor, "message.status", uuid, nlohmann::json{{"status", newStatus}}.dump(), err);
-    return true;
+    // 与审计同事务（messages_.setStatus 是单条 UPDATE，自动提交下落库后回滚无效）
+    std::string auditErr;
+    const std::string statusDetail = nlohmann::json{{"status", newStatus}}.dump();
+    const bool ok = messages_.setStatus(uuid, newStatus, out, err, [&]() {
+        return auditStep(actor, "message.status", uuid, statusDetail, auditErr);
+    });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 // ---------------- 错误日志 ----------------
@@ -841,10 +987,18 @@ bool Platform::errorReport(const std::string& reporter, const std::string& sever
     }
     std::string sev = severity;
     if (sev != "info" && sev != "warning" && sev != "error" && sev != "critical") sev = "error";
-    if (!errors_.report(reporter, sev, source, title, detail, stackTrace, out, err)) return false;
-    audit_.log(reporter, "error.report", out.uuid,
-               nlohmann::json{{"severity", sev}, {"title", title}}.dump(), err);
-    return true;
+    // 与审计同事务：协作规则是"错误必须记录"，留痕失败就不该留下这条记录。
+    // errors_.report 自带事务，审计用 InTxStep 注入（在外面再包 BEGIN 是错的：
+    // SQLite 的 COMMIT 会提交最外层，外层 BEGIN 会永远挂着）。
+    std::string auditErr;
+    const std::string errDetail = nlohmann::json{{"severity", sev}, {"title", title}}.dump();
+    const bool ok = errors_.report(reporter, sev, source, title, detail, stackTrace, out, err,
+                                   [&]() {
+                                       return auditStep(reporter, "error.report", out.uuid, errDetail,
+                                                        auditErr);
+                                   });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 bool Platform::errorList(const std::string& statusFilter, const std::string& severityFilter,
@@ -863,7 +1017,15 @@ bool Platform::errorResolve(const std::string& actor, const std::string& uuid,
         return false;
     }
     if (!errors_.resolve(uuid, actor, notes, out, err)) return false;
-    audit_.log(actor, "error.resolve", uuid, nlohmann::json{{"notes", notes}}.dump(), err);
+    // errors_.resolve 是单条 UPDATE，而审计需要它先落库才能记 notes：本函数无法把审计
+    // 塞进同一事务（ErrorService 尚未暴露 InTxStep），因此审计失败会留下"已解决、无留痕"。
+    // IGNORE: 已知边界——如实上报失败让调用方重试，待 ErrorService 支持 InTxStep 后收紧。
+    std::string resolveAuditErr;
+    if (!auditStep(actor, "error.resolve", uuid, nlohmann::json{{"notes", notes}}.dump(),
+                   resolveAuditErr)) {
+        err = resolveAuditErr.empty() ? "audit log write failed" : resolveAuditErr;
+        return false;
+    }
     return true;
 }
 
@@ -878,10 +1040,14 @@ bool Platform::usageReport(const std::string& agent, int64_t tokensIn, int64_t t
                        duplicate, err))
         return false;
     if (!duplicate) {
+        // IGNORE: token 上报是高频遥测，账目本身（token_usage 行）已是权威来源；
+        // 审计失败不该让一次合法的用量上报失败（那会让客户端重试并放大流量）。
+        // 用量明细仍逐条落库，这里只是放弃"再记一条审计"。
+        std::string usageAuditErr;
         audit_.log(agent, "usage.report", referenceId,
                    nlohmann::json{{"tokens_in", tokensIn}, {"tokens_out", tokensOut},
                                   {"call_type", callType}, {"model", model}}.dump(),
-                   err);
+                   usageAuditErr);
     }
     return true;
 }
@@ -915,9 +1081,20 @@ int64_t Platform::usageBudget(std::string& err) {
 bool Platform::usageSetBudget(const std::string& actor, int64_t budget, std::string& err) {
     std::lock_guard lock(mutex_);
     if (actor != "user" && !isManager(actor)) { err = "only the user or zcode can change the budget"; return false; }
-    if (!usage_.setBudget(budget, err)) return false;
-    audit_.log(actor, "budget.set", std::string(),
-               nlohmann::json{{"budget", budget}}.dump(), err);
+    // 与审计同事务：预算变更属于管理操作，必须留下是谁改的
+    if (!db_.beginImmediate(err)) return false;
+    if (!usage_.setBudget(budget, err)) {
+        db_.rollback();
+        return false;
+    }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, "budget.set", std::string(),
+                             nlohmann::json{{"budget", budget}}.dump(), auditErr),
+                  auditErr);
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
     return true;
 }
 
@@ -935,20 +1112,27 @@ bool Platform::auditList(const std::string& actorFilter, const std::string& acti
 bool Platform::maintenanceRun(const std::string& actor, std::string& statsJson, std::string& err) {
     std::lock_guard lock(mutex_);
     int64_t deletedAudit = 0, deletedErrors = 0;
+    // 每条清理都必须接住返回值，并在**该语句成功之后立刻**取变更数：
+    // sqlite3_changes64() 反映的是"最近一条语句"，此前三条 DELETE 的返回值全被丢弃，
+    // 于是"删了 0 条"和"删除失败"给出完全相同的统计（0）且照样返回 true。
+    auto cleanup = [&](const std::string& sql, const std::function<void(Stmt&)>& bind,
+                       int64_t& counter) -> bool {
+        if (!db_.query(sql, bind, nullptr, err)) return false;
+        counter += sqlite3_changes64(db_.handle());
+        return true;
+    };
     // 审计轮转：保留 30 天且最多 10 万条（created_at 与 nowIso 同格式，直接字符串比较）
-    db_.query("DELETE FROM audit_log WHERE created_at < ?",
-              [&](Stmt& st) { st.bind(1, isoDaysAgo(30)); },
-              nullptr, err);
-    deletedAudit = sqlite3_changes64(db_.handle());
-    db_.query("DELETE FROM audit_log WHERE id <= (SELECT COALESCE(MAX(id),0) FROM audit_log) - ?",
-              [](Stmt& st) { st.bind(1, static_cast<int64_t>(100000)); },
-              nullptr, err);
-    deletedAudit += sqlite3_changes64(db_.handle());
+    if (!cleanup("DELETE FROM audit_log WHERE created_at < ?",
+                 [&](Stmt& st) { st.bind(1, isoDaysAgo(30)); }, deletedAudit))
+        return false;
+    if (!cleanup("DELETE FROM audit_log WHERE id <= (SELECT COALESCE(MAX(id),0) FROM audit_log) - ?",
+                 [](Stmt& st) { st.bind(1, static_cast<int64_t>(100000)); }, deletedAudit))
+        return false;
     // 已解决错误归档清理：解决超过 30 天的移出主表
-    db_.query("DELETE FROM errors WHERE status='resolved' AND resolved_at IS NOT NULL AND resolved_at < ?",
-              [&](Stmt& st) { st.bind(1, isoDaysAgo(30)); },
-              nullptr, err);
-    deletedErrors = sqlite3_changes64(db_.handle());
+    if (!cleanup(
+            "DELETE FROM errors WHERE status='resolved' AND resolved_at IS NOT NULL AND resolved_at < ?",
+            [&](Stmt& st) { st.bind(1, isoDaysAgo(30)); }, deletedErrors))
+        return false;
 
     bool vacuumed = false;
     if (deletedAudit > 0 || deletedErrors > 0) {
@@ -958,7 +1142,10 @@ bool Platform::maintenanceRun(const std::string& actor, std::string& statsJson, 
                                {"deleted_errors", deletedErrors},
                                {"vacuumed", vacuumed}}.dump();
     if (deletedAudit > 0 || deletedErrors > 0) {
-        audit_.log(actor, "system.maintenance", std::string(), statsJson, err);
+        // IGNORE: 维护自身的留痕失败不改判定——清理已经完成且统计已如实返回；
+        // 这里返回 false 会让调用方以为"没清掉"，而事实上已经清掉了。
+        std::string maintAuditErr;
+        audit_.log(actor, "system.maintenance", std::string(), statsJson, maintAuditErr);
     }
     return true;
 }
@@ -976,8 +1163,12 @@ bool Platform::backupCreate(std::string& outPath, std::string& err) {
         if (ch == '\'') escaped += '\'';
     }
     if (!db_.execScript("VACUUM INTO '" + escaped + "';", err)) return false;
-    // 备份是一次完整的数据库落盘，属于必须留痕的管理操作（此前漏记）
-    audit_.log("zcode", "system.backup", name, nlohmann::json{{"file", name}}.dump(), err);
+    // IGNORE: 元操作留痕——备份**文件已经落盘**，此时审计失败再返回 false 会让调用方
+    // 以为"没备份成功"（实际有），反而诱导重复备份；失败原因保留在局部变量里。
+    // 备份文件本身在 backup/ 目录可自证，不依赖审计行。
+    std::string backupAuditErr;
+    audit_.log("zcode", "system.backup", name, nlohmann::json{{"file", name}}.dump(),
+               backupAuditErr);
     return true;
 }
 
@@ -1051,7 +1242,12 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
     // 恢复出来的库可能是旧格式（单张 knowledge_vec / 无 FTS 索引）：走与启动同一套初始化
     if (!knowledge_.initVectorStore(err)) return false;
     if (!knowledge_.initSearchIndex(err)) return false;
-    audit_.log("zcode", "system.restore", name, nlohmann::json{{"file", name}}.dump(), err);
+    // IGNORE: 元操作留痕——库已被替换并重开，此时审计失败不能再"撤销恢复"
+    // （把旧库换回去是更危险的操作）；失败原因留在局部变量里。
+    // 待办（C 批）：恢复路径失败后平台可能停在"库已关"状态，需要强制提示重启。
+    std::string restoreAuditErr;
+    audit_.log("zcode", "system.restore", name, nlohmann::json{{"file", name}}.dump(),
+               restoreAuditErr);
     return true;
 }
 

@@ -183,6 +183,10 @@ public:
 
 private:
     bool persistAgentKey(const std::string& name, const std::string& apiKey, std::string& err);
+    // 提交前执行的审计步骤：服务层的 InTxStep 会把它传进事务里，使
+    // "业务写入 + 审计留痕"成为同一个原子动作（SQLite 无嵌套事务，见 platform.cpp）
+    bool auditStep(const std::string& actor, const std::string& action, const std::string& target,
+                   const std::string& detailJson, std::string& err);
     std::vector<float> resolveEmbedding(const std::string& content,
                                         const std::vector<float>* provided, bool& isProvided);
     // 维度↔provider 绑定校验（同维度共用 vec 表，不同模型会互相污染）；

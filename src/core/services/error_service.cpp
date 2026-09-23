@@ -7,8 +7,10 @@ namespace ah {
 bool ErrorService::report(const std::string& reporter, const std::string& severity,
                           const std::string& source, const std::string& title,
                           const std::string& detail, const std::string& stackTrace,
-                          ErrorReport& out, std::string& err) {
+                          ErrorReport& out, std::string& err, const InTxStep& inTx) {
     std::string uuid = uuid4();
+    // 需要注入步骤（审计）时才开事务：单条 INSERT 本身已是原子的
+    if (inTx && !db_.beginImmediate(err)) return false;
     if (!db_.query(
             "INSERT INTO errors(uuid, reporter, severity, source, title, detail, stack_trace, status, created_at) "
             "VALUES (?,?,?,?,?,?,?,'open',?)",
@@ -22,8 +24,21 @@ bool ErrorService::report(const std::string& reporter, const std::string& severi
                 st.bind(7, stackTrace);
                 st.bind(8, nowIso());
             },
-            nullptr, err))
+            nullptr, err)) {
+        if (inTx) db_.rollback();
         return false;
+    }
+    if (inTx) {
+        if (!inTx()) {
+            db_.rollback();
+            if (err.empty()) err = "in-transaction step failed";
+            return false;
+        }
+        if (!db_.commit(err)) {
+            db_.rollback();
+            return false;
+        }
+    }
     return get(uuid, out, err);
 }
 

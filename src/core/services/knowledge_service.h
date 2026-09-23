@@ -1,10 +1,12 @@
 #pragma once
 // 共享知识库：向量化语义搜索 + 关键词搜索；内容只追加、以版本演进。
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "core/db/database.h"
 #include "core/embed/embedder.h"
+#include "core/services/in_tx_step.h"
 #include "core/types.h"
 
 namespace ah {
@@ -29,15 +31,17 @@ public:
     // v2 迁移：给没有 embedding_dim 的旧行按"向量实际所在的维度表"回填。幂等。
     bool backfillEmbeddingDim(std::string& err);
 
+    // inTx（可空）在**提交之前**执行：返回 false 则本次写入整体回滚。
     bool create(const std::string& author, const std::string& title, const std::string& content,
                 const std::string& tagsJson, const std::string& category,
                 const std::vector<float>& embedding, const std::string& embeddingProvider,
-                KnowledgeEntry& out, std::string& err);
+                KnowledgeEntry& out, std::string& err, const InTxStep& inTx = {});
     bool latest(const std::string& uuid, KnowledgeEntry& out, std::string& err);
     bool versions(const std::string& uuid, std::vector<KnowledgeEntry>& out, std::string& err);
     bool addVersion(const std::string& author, const std::string& uuid, const std::string& newTitle,
                     const std::string& newContent, const std::vector<float>& embedding,
-                    const std::string& embeddingProvider, KnowledgeEntry& out, std::string& err);
+                    const std::string& embeddingProvider, KnowledgeEntry& out, std::string& err,
+                    const InTxStep& inTx = {});
     bool list(int limit, const std::string& tagFilter, std::vector<KnowledgeEntry>& out, std::string& err);
     bool searchKeyword(const std::string& query, int limit, const std::string& tagFilter,
                        std::vector<KnowledgeEntry>& out, std::string& err);

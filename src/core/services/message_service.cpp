@@ -7,13 +7,16 @@ namespace ah {
 bool MessageService::send(const std::string& kind, const std::string& sender,
                           const std::string& recipient, const std::string& subject,
                           const std::string& body, const std::string& parentUuid, Message& out,
-                          std::string& err) {
+                          std::string& err, const InTxStep& inTx) {
     if (kind != "note" && kind != "question" && kind != "task") {
         err = "invalid message kind: " + kind;
         return false;
     }
     std::string uuid = uuid4();
     std::string initialStatus = kind == "task" ? "pending" : "unread";
+    // inTx 要求"写入 + 该步"原子，因此事务必须**包住 INSERT 本身**：
+    // 先 INSERT 再 BEGIN 是错的——INSERT 在自动提交下已经落库，之后的 rollback 是空操作。
+    if (inTx && !db_.beginImmediate(err)) return false;
     if (!db_.query(
             "INSERT INTO messages(uuid, kind, sender, recipient, subject, body, status, parent_uuid, created_at) "
             "VALUES (?,?,?,?,?,?,?,?,?)",
@@ -33,8 +36,21 @@ bool MessageService::send(const std::string& kind, const std::string& sender,
                 st.bind(8, parentUuid);
                 st.bind(9, nowIso());
             },
-            nullptr, err))
+            nullptr, err)) {
+        if (inTx) db_.rollback();
         return false;
+    }
+    if (inTx) {
+        if (!inTx()) {
+            db_.rollback();
+            if (err.empty()) err = "in-transaction step failed";
+            return false;
+        }
+        if (!db_.commit(err)) {
+            db_.rollback();
+            return false;
+        }
+    }
     return get(uuid, out, err);
 }
 
@@ -112,21 +128,45 @@ bool MessageService::get(const std::string& uuid, Message& out, std::string& err
 }
 
 bool MessageService::reply(const std::string& parentUuid, const std::string& sender,
-                           const std::string& body, Message& out, std::string& err) {
+                           const std::string& body, Message& out, std::string& err,
+                           const InTxStep& inTx) {
     Message parent;
     if (!get(parentUuid, parent, err)) return false;
     std::string recipient = parent.sender == sender ? parent.recipient : parent.sender;
-    if (!send("note", sender, recipient, std::string("Re: ") + (parent.subject.empty() ? "" : parent.subject),
-              body, parentUuid, out, err))
+    // "写入回复"与"把父消息标记为已读"是同一个用户可见动作的两步：必须同事务。
+    // 此前是两次独立写入，第二步的返回值还被丢弃——回复写成功、标已读失败时，
+    // 系统停在一个既没报错也没完成的半截状态。
+    //
+    // 说明：这里用嵌套事务（Platform::messageReply 在外面还包了一层用于覆盖审计）。
+    // SQLite 不支持真正的嵌套事务，但 COMMIT 会延迟到最外层——因此内层的 commit
+    // 只是"不提前提交"，语义正确。本函数若被单独调用（无外层事务），这一层就是
+    // 真正的边界，行为不变。
+    if (!db_.beginImmediate(err)) return false;
+    if (!send("note", sender, recipient,
+              std::string("Re: ") + (parent.subject.empty() ? "" : parent.subject), body, parentUuid,
+              out, err)) {
+        db_.rollback();
         return false;
-    // 回复即视为已读父消息（状态流转，不修改内容）
-    db_.query("UPDATE messages SET status='read' WHERE uuid=? AND kind!='task'",
-              [&](Stmt& st) { st.bind(1, parentUuid); }, nullptr, err);
+    }
+    if (!db_.query("UPDATE messages SET status='read' WHERE uuid=? AND kind!='task'",
+                   [&](Stmt& st) { st.bind(1, parentUuid); }, nullptr, err)) {
+        db_.rollback();
+        return false;
+    }
+    // 提交前的最后一步（审计留痕）
+    if (inTx && !inTx()) {
+        db_.rollback();
+        if (err.empty()) err = "in-transaction step failed";
+        return false;
+    }
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
     return true;
 }
-
 bool MessageService::setStatus(const std::string& uuid, const std::string& newStatus, Message& out,
-                               std::string& err) {
+                               std::string& err, const InTxStep& inTx) {
     Message cur;
     if (!get(uuid, cur, err)) return false;
 
@@ -143,9 +183,24 @@ bool MessageService::setStatus(const std::string& uuid, const std::string& newSt
         err = "illegal status transition: " + cur.kind + " " + cur.status + " -> " + newStatus;
         return false;
     }
+    // 同 send：事务必须包住 UPDATE 本身
+    if (inTx && !db_.beginImmediate(err)) return false;
     if (!db_.query("UPDATE messages SET status=? WHERE uuid=?",
-                   [&](Stmt& st) { st.bind(1, newStatus); st.bind(2, uuid); }, nullptr, err))
+                   [&](Stmt& st) { st.bind(1, newStatus); st.bind(2, uuid); }, nullptr, err)) {
+        if (inTx) db_.rollback();
         return false;
+    }
+    if (inTx) {
+        if (!inTx()) {
+            db_.rollback();
+            if (err.empty()) err = "in-transaction step failed";
+            return false;
+        }
+        if (!db_.commit(err)) {
+            db_.rollback();
+            return false;
+        }
+    }
     return get(uuid, out, err);
 }
 

@@ -7,8 +7,14 @@ namespace ah {
 bool SkillService::registerSkill(const std::string& name, const std::string& displayName,
                                  const std::string& description, const std::string& category,
                                  const std::string& ownerAgent, const std::string& paramSchema,
-                                 SkillInfo& out, std::string& err) {
-    if (isRegistered(name)) { err = "skill already registered: " + name; return false; }
+                                 SkillInfo& out, std::string& err, const InTxStep& inTx) {
+    // 事务必须包住 INSERT 本身（先 INSERT 再 BEGIN，回滚就是空操作）
+    if (inTx && !db_.beginImmediate(err)) return false;
+    if (isRegistered(name)) {
+        if (inTx) db_.rollback();
+        err = "skill already registered: " + name;
+        return false;
+    }
     std::string now = nowIso();
     if (!db_.query(
             "INSERT INTO skills(name, display_name, description, category, owner_agent, param_schema, "
@@ -23,8 +29,21 @@ bool SkillService::registerSkill(const std::string& name, const std::string& dis
                 st.bind(7, now);
                 st.bind(8, now);
             },
-            nullptr, err))
+            nullptr, err)) {
+        if (inTx) db_.rollback();
         return false;
+    }
+    if (inTx) {
+        if (!inTx()) {
+            db_.rollback();
+            if (err.empty()) err = "in-transaction step failed";
+            return false;
+        }
+        if (!db_.commit(err)) {
+            db_.rollback();
+            return false;
+        }
+    }
     return get(name, out, err);
 }
 
@@ -89,6 +108,8 @@ bool SkillService::list(const std::string& categoryFilter, const std::string& ow
 bool SkillService::isRegistered(const std::string& name) {
     std::string err;
     bool found = false;
+    // IGNORE: 存在性探测——查不到（或查询失败）一律按"未注册"处理；
+    // 注册写入由 UNIQUE 约束兜底，这里不需要区分失败与不存在。
     db_.query("SELECT 1 FROM skills WHERE name=?",
               [&](Stmt& st) { st.bind(1, name); },
               [&](Stmt&) { found = true; }, err);
