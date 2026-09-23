@@ -60,6 +60,7 @@ python scripts/mcp_check.py 8787 <mcp-exe> zcode <key>   # MCP stdio JSON-RPC
 python scripts/verify_clients.py                   # per-client connect matrix (skips absent tools)
 python scripts/fuzz_config_merge.py                # adversarial shapes against the config merger
 python scripts/embed_cli_check.py                  # external embedding endpoint round-trip (mock server)
+python scripts/check_bool_returns.py               # bool-return discipline (report mode; --fail for CI)
 python scripts/diag_latency.py 19291               # latency-floor diagnosis (measurement, not a test)
 python scripts/bench_search.py --rows 10000        # search benchmark (measurement, not a test)
 python scripts/bench_concurrent.py                 # concurrency scaling, mixed/read/write (measurement)
@@ -77,9 +78,10 @@ agent-cli apply-config --tool claude-code --dir <project-root> --name claude --k
 What CI runs on every push and PR: the build, a check that the GUI binary actually exists, `ctest`,
 the feasibility and MCP integration checks against a real `platformd` on a scratch data directory,
 **both self-tests above** — the offscreen GUI end-to-end (`gui_selftest`) and the
-onboarding/key-rotation script — plus the config-merge fuzz suite, the per-client connect matrix and
-the external-embedding round-trip. A regression in first-run onboarding, the health banner, key
-rotation, config merging or the connect snippets therefore turns the badge red instead of shipping.
+onboarding/key-rotation script — plus the config-merge fuzz suite, the per-client connect matrix,
+the external-embedding round-trip and the bool-return discipline check. A regression in first-run
+onboarding, the health banner, key rotation, config merging, the connect snippets or a silently
+swallowed failure therefore turns the badge red instead of shipping.
 
 `soak_test.py` and the measurement scripts stay manual on purpose: they take minutes and assert
 nothing, so they answer questions rather than guard behaviour.
@@ -100,6 +102,16 @@ nothing, so they answer questions rather than guard behaviour.
   [`docs/api.md`](docs/api.md) and update the doc in the same PR.
 - **Migrations must be idempotent and additive.** Existing databases upgrade in place on startup,
   and keys issued by older versions must keep authenticating.
+- **Failures must be reported, never swallowed.** A `bool`-returning call from the checked list in
+  `scripts/check_bool_returns.py` must either have its return value used or carry a `// IGNORE:
+  <reason>` — a bare discard turns CI red.
+- **SQLite has no nested transactions.** `Database::commit()` issues a plain `COMMIT`, which ends
+  the *outermost* transaction, so `BEGIN` in a caller plus `COMMIT` inside a service is a bug: the
+  caller's transaction stays open and the next `BEGIN` fails with *cannot start a transaction within
+  a transaction*. When a write must be atomic with an audit row, pass an `InTxStep` into the service
+  (see `src/core/services/in_tx_step.h`) so the audit runs **inside that service's own transaction**
+  — or, if the caller owns the transaction, put the audit before `commit()` and use
+  `AUDIT_OR_FAIL(..., err)`.
 - **No new third-party dependencies** without discussing it in an issue first — the project keeps
   its dependency surface deliberately small.
 - **Nothing fails silently.** If an operation can fail, surface it (banner, translated error with a

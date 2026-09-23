@@ -166,3 +166,17 @@ jobs:
         run: |
           python scripts/embed_cli_check.py --agent-cli build\src\cli\Release\agent-cli.exe --platformd build\src\cli\Release\platformd.exe
           if ($LASTEXITCODE -ne 0) { throw "external embedding round-trip failed - real-semantic path regressed" }
+
+      # ---- bool 返回值纪律（"不静默失败"唯一的机检防线）----
+      # 由来：同一个 audit_.log(...) 在 skillInvoke 里是硬契约（失败即回滚），在另外 20 多处
+      # 却是装饰（返回值被丢弃）；maintenanceRun 里三条 DELETE 的返回值同样被丢弃后拿
+      # sqlite3_changes64() 报统计——"删了 0 条"与"删除失败"完全同形。这些缺陷能长期存在，
+      # 是因为**没有任何一层在检查失败路径**：实现按功能写、测试只断言字段存在、文档照样
+      # 声明 "no silent failures"。这条检查把该承诺钉成机检规则。
+      # 规则：清单内调用的返回值必须被使用；确要忽略时该行（或就近注释）必须写
+      # `// IGNORE: 理由`——理由必填，豁免本身也要能被审计。
+      - name: Bool-return discipline
+        shell: pwsh
+        run: |
+          python scripts/check_bool_returns.py --fail
+          if ($LASTEXITCODE -ne 0) { throw "bool-return check failed - a bool return is being silently discarded" }
