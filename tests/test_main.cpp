@@ -1618,6 +1618,136 @@ static void test_embed_provider_binding() {
     fs::remove_all(tmp, ec);
 }
 
+// ---- 失败面测试：注入失败后必须"如实报错 + 不留半截状态" ----
+// 注入手段是**真实的数据库触发器**（RAISE(ABORT)），不是测试替身：
+//   * 只在注入的那一条语句上触发，其他路径完全不受影响；
+//   * 错误经由 sqlite3 真实回传，走的是产品代码原样的错误分支；
+//   * 不需要为测试改动任何生产 API。
+// 这补的是此前 21 个测试函数共同的盲区：它们全都只断言正常路径，
+// 于是"辅助写入失败被静默吞掉"这类缺陷可以永久绿灯（例如维护统计只断言字段名存在）。
+static bool installAbortTrigger(const fs::path& dbPath, const std::string& name,
+                                const std::string& ddl) {
+    ah::Database raw;
+    std::string err;
+    if (!raw.open(dbPath.string(), err)) return false;
+    bool ok = raw.execScript("CREATE TRIGGER IF NOT EXISTS " + name + " " + ddl, err) &&
+              raw.execScript("DROP TRIGGER IF EXISTS " + name, err) &&
+              raw.execScript("CREATE TRIGGER " + name + " " + ddl, err);
+    raw.close();
+    return ok;
+}
+
+// 拆掉注入，让后续步骤回到正常路径（否则审计失败会掩盖真正要测的那条失败）
+static bool dropTrigger(const fs::path& dbPath, const std::string& name) {
+    ah::Database raw;
+    std::string err;
+    if (!raw.open(dbPath.string(), err)) return false;
+    const bool ok = raw.execScript("DROP TRIGGER IF EXISTS " + name, err);
+    raw.close();
+    return ok;
+}
+
+static bool execOnDb(const fs::path& dbPath, const std::string& sql) {
+    ah::Database raw;
+    std::string err;
+    if (!raw.open(dbPath.string(), err)) return false;
+    const bool ok = raw.execScript(sql, err);
+    raw.close();
+    return ok;
+}
+
+static void test_failure_paths_report_errors() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_fail_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+
+        // ---- 1. 审计写不进去 → 写操作必须失败，且业务数据不得落库 ----
+        CHECK(installAbortTrigger(dbPath, "trig_audit_insert",
+                                  "BEFORE INSERT ON audit_log BEGIN "
+                                  "SELECT RAISE(ABORT,'injected: audit unavailable'); END"));
+        {
+            ah::KnowledgeEntry e;
+            std::string e1;
+            CHECK(!p.knowledgeCreate("hermes", "审计失败不得入库", "正文", {}, "", {}, "", e, e1));
+            CHECK(!e1.empty());
+            // 副作用不存在：不是"返回了 false 但数据还在"
+            CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries"), 0);
+        }
+        {
+            ah::MemoryEntry m;
+            std::string e2;
+            CHECK(!p.memorySet("hermes", "project", "status", "x", 0, m, e2));
+            CHECK(!e2.empty());
+            CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM memory_entries"), 0);
+        }
+        {
+            ah::Message out;
+            std::string e3;
+            CHECK(!p.messageSend("note", "hermes", "claude", "s", "body", out, e3));
+            CHECK(!e3.empty());
+            CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM messages"), 0);
+        }
+
+        // ---- 2. 消息回复：写回复与标已读必须同事务 ----
+        // 先拆掉审计注入：下面要测的是"正文写入失败导致整体回滚"，不该被审计失败掩盖
+        CHECK(dropTrigger(dbPath, "trig_audit_insert"));
+        ah::Message parent;
+        CHECK(p.messageSend("note", "claude", "hermes", "问题", "父消息正文", parent, err));
+        CHECK(installAbortTrigger(dbPath, "trig_msg_update",
+                                  "BEFORE UPDATE ON messages BEGIN "
+                                  "SELECT RAISE(ABORT,'injected: mark-read failed'); END"));
+        {
+            ah::Message reply;
+            std::string e4;
+            CHECK(!p.messageReply("hermes", parent.uuid, "回复正文", reply, e4));
+            CHECK(!e4.empty());
+            // 回滚生效：父消息之外没有多出回复行
+            CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM messages"), 1);
+        }
+        CHECK(dropTrigger(dbPath, "trig_msg_update"));
+
+        // ---- 3. 维护统计：删除失败必须如实返回失败 ----
+        // 注意：SQLite 的行级触发器**只在真的匹配到行时才触发**。审计行都是刚写的
+        // （30 天以内），所以三条 DELETE 本来匹配 0 行、触发器根本不响——必须先塞一条
+        // 过期审计行，这条用例才真的在测"删除失败"。
+        // 这条也是实测教训：第一版用例因此假绿（返回 true 被当成"没触发"）。
+        CHECK(execOnDb(dbPath,
+                       "INSERT INTO audit_log(actor, action, target, detail, created_at) "
+                       "VALUES ('tester','test.old','x','{}','2000-01-01T00:00:00Z')"));
+        CHECK(installAbortTrigger(dbPath, "trig_audit_delete",
+                                  "BEFORE DELETE ON audit_log BEGIN "
+                                  "SELECT RAISE(ABORT,'injected: rotate failed'); END"));
+        {
+            std::string stats, e5;
+            CHECK(!p.maintenanceRun("zcode", stats, e5));
+            CHECK(!e5.empty());
+            // 失败时不得留下"维护成功"的统计与审计
+            CHECK(stats.empty());
+        }
+        CHECK(dropTrigger(dbPath, "trig_audit_delete"));
+
+        // ---- 4. 预算读不出来 → summary 必须失败，且 err 不能被后续查询覆盖 ----
+        // SQLite 没有 SELECT 触发器，用"把表改名"制造真实的读失败（等价于表被锁/损坏）
+        CHECK(execOnDb(dbPath, "ALTER TABLE settings RENAME TO settings_hidden"));
+        {
+            ah::UsageSummary sum;
+            std::string e6;
+            CHECK(!p.usageSummary(sum, e6));
+            CHECK(e6.find("weekly_token_budget") != std::string::npos);  // 是预算读失败，不是别的
+            std::string e7;
+            CHECK_EQ(p.usageBudget(e7), static_cast<int64_t>(-1));  // 调用方拿得到"读失败"
+        }
+        CHECK(execOnDb(dbPath, "ALTER TABLE settings_hidden RENAME TO settings"));
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1645,6 +1775,7 @@ int main() {
     run("schema_version_gate", test_schema_version_gate);
     run("embed_provider_binding", test_embed_provider_binding);
     run("embedding_dim_tracking", test_embedding_dim_tracking);
+    run("failure_paths_report_errors", test_failure_paths_report_errors);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
