@@ -1748,6 +1748,127 @@ static void test_failure_paths_report_errors() {
     fs::remove_all(tmp, ec);
 }
 
+// 库结构版本读写（第二个连接直接操作 PRAGMA）：bootstrap 的版本门与恢复路径共用同一判据
+static int64_t readSchemaVersion(const fs::path& dbPath) {
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(dbPath.string().c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return -1;
+    }
+    int64_t v = -1;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &st, nullptr) == SQLITE_OK && st &&
+        sqlite3_step(st) == SQLITE_ROW)
+        v = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return v;
+}
+
+static bool writeSchemaVersion(const fs::path& dbPath, int64_t v) {
+    sqlite3* db = nullptr;
+    if (sqlite3_open(dbPath.string().c_str(), &db) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return false;
+    }
+    char* msg = nullptr;
+    const std::string sql = "PRAGMA user_version = " + std::to_string(v) + ";";
+    const bool ok = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &msg) == SQLITE_OK;
+    sqlite3_free(msg);
+    sqlite3_close(db);
+    return ok;
+}
+
+// ---- C 批：恢复备份的失败路径与迁移重放 ----
+// 两个此前真实存在的问题：
+//   1) 恢复成功后**不重放迁移链**，所以恢复出来的旧库不会重新打上 user_version——
+//      "拒绝来自更新版本的库"那道门在恢复路径上是空的（bootstrap 打了，restore 没打）。
+//   2) db_.close() 之后有 5 条裸 return false：磁盘满/权限/文件被占时，Platform 被留在
+//      "库已关"状态，而调用方只看到一个提示，继续跑则每个操作都静默失效。
+static void test_backup_restore_failure_paths() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_restore_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    const fs::path dbPath = tmp / "platform.db";
+    std::string backupName;
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+
+        // ---- 1. 恢复"旧 schema"的备份：必须重新应用迁移并打上当前 user_version ----
+        std::string bp;
+        CHECK(p.backupCreate(bp, err));
+        backupName = fs::path(bp).filename().string();
+        // 把备份伪装成旧版本库（user_version=1）。当前版本是 2，因此它不会被版本门拒绝，
+        // 恢复后必须由迁移链重新打上 2；若恢复路径漏了迁移，这里会停在 1。
+        CHECK(writeSchemaVersion(fs::path(bp), 1));
+        CHECK(p.backupRestore(backupName, err));
+        p.shutdown();
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(2));
+    }
+    {
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));
+
+        // ---- 2. 版本门：拒绝来自更新版本的备份，且原库必须原样 ----
+        std::string bp;
+        CHECK(p.backupCreate(bp, err));
+        const std::string newerName = fs::path(bp).filename().string();
+        CHECK(writeSchemaVersion(fs::path(bp), 99));
+        std::string newerErr;
+        CHECK(!p.backupRestore(newerName, newerErr));
+        CHECK(newerErr.find("newer") != std::string::npos);
+        CHECK(p.isUsable());  // 拒绝不是失败：平台必须还能用
+
+        // ---- 3. 恢复中途失败（备份文件头合法、内容损坏）----
+        // 真实故障形态：copy 成功、sqlite3_open 也成功（惰性），但初始化里的第一条
+        // 查询就报 "database disk image is malformed" —— 此时库文件已被换掉、连接已关。
+        // 期望：补偿把旧库放回去并重开，平台**仍然可用**，且 err 不宣称需要重启。
+        // 注意顺序：先写标记条目、再备份，这样"补偿后的旧库"本身就含该条目——
+        // 断言才同时证明了两件事（放回的是旧库，且内容完整）。
+        ah::KnowledgeEntry marker;
+        CHECK(p.knowledgeCreate("hermes", "恢复前写入", "这条必须活过失败的恢复。", {}, "", {}, "",
+                                marker, err));
+        std::string bp2;
+        CHECK(p.backupCreate(bp2, err));
+        const std::string badName = fs::path(bp2).filename().string();
+        {
+            std::ifstream in(bp2, std::ios::binary);
+            std::string bytes((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+            in.close();
+            CHECK(bytes.size() > 200);
+            // 保留前 100 字节（SQLite 头：magic/页大小/页数），其余清零。
+            // 页数不变 → 头仍然合法，因此能 open，但读第一页数据即判定损坏。
+            for (size_t i = 100; i < bytes.size(); ++i) bytes[i] = '\0';
+            std::ofstream out(bp2, std::ios::binary | std::ios::trunc);
+            out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        }
+        std::string badErr;
+        CHECK(!p.backupRestore(badName, badErr));
+        CHECK(!badErr.empty());
+        // 补偿成功时明确告诉用户"旧库没被动过"，不该把人吓去重启
+        CHECK(badErr.find("unusable") == std::string::npos);
+        CHECK(p.isUsable());
+        // 库连接确实活着：写一条新的必须成功（若停在"库已关"，这里必然失败）
+        ah::KnowledgeEntry after;
+        std::string afterErr;
+        CHECK(p.knowledgeCreate("hermes", "恢复失败后仍可写", "补偿把旧库放回来了。", {}, "", {}, "",
+                                after, afterErr));
+        CHECK(!after.uuid.empty());
+        CHECK(!after.uuid.empty());
+        CHECK(p.diagnostics().store_unusable == false);
+        p.shutdown();
+        // 旧库原样回来了：标记条目仍在（若是被损坏文件覆盖，这里会是 0 或读不出来）
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE title='恢复前写入'"),
+                 1);
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(2));
+    }
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1776,6 +1897,7 @@ int main() {
     run("embed_provider_binding", test_embed_provider_binding);
     run("embedding_dim_tracking", test_embedding_dim_tracking);
     run("failure_paths_report_errors", test_failure_paths_report_errors);
+    run("backup_restore_failure_paths", test_backup_restore_failure_paths);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
