@@ -169,8 +169,11 @@ bool UsageService::breakdown(int days, const std::string& agentFilter,
 
 int64_t UsageService::budget(std::string& err) {
     int64_t value = kDefaultWeeklyBudget;
-    db_.query("SELECT value FROM settings WHERE key='weekly_token_budget'", nullptr,
-              [&](Stmt& st) { value = st.i64(0); }, err);
+    // 读失败必须能被区分出来：返回 -1（而不是静默返回默认值），调用方据此报错。
+    // 此前返回值被丢弃，"预算读不出来"会伪装成"预算就是 1000 万"。
+    if (!db_.query("SELECT value FROM settings WHERE key='weekly_token_budget'", nullptr,
+                   [&](Stmt& st) { value = st.i64(0); }, err))
+        return -1;
     return value;
 }
 
@@ -185,7 +188,14 @@ bool UsageService::setBudget(int64_t newBudget, std::string& err) {
 bool UsageService::summary(UsageSummary& out, std::string& err) {
     out = UsageSummary{};
     out.week_start = weekStartIso();
-    out.budget = budget(err);
+    // 预算读失败即失败：a) 不能把"读不到"当成默认预算；b) 用独立 err，否则下面几个
+    // 查询复用同一个 err 会把预算读失败的诊断信息当场覆盖掉。
+    std::string budgetErr;
+    out.budget = budget(budgetErr);
+    if (out.budget < 0) {
+        err = "cannot read weekly_token_budget: " + budgetErr;
+        return false;
+    }
 
     if (!db_.query(
             "SELECT COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0) FROM token_usage WHERE week_start=?",

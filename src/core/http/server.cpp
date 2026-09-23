@@ -879,7 +879,10 @@ void HttpServer::setupRoutes() {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;
         std::string err;
-        send(res, ok(json{{"budget", p.usageBudget(err)}}));
+        const int64_t budget = p.usageBudget(err);
+        // 读失败如实报 500，不把 -1 当预算发出去
+        if (budget < 0) { send(res, fail(500, err.empty() ? "cannot read budget" : err)); return; }
+        send(res, ok(json{{"budget", budget}}));
     });
 
     srv.Put("/api/usage/budget", [&](const httplib::Request& req, httplib::Response& res) {

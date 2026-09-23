@@ -37,6 +37,8 @@ public:
     // 按模型与逐日序列——同一条 WHERE 聚合，四个视图口径一致
     bool breakdown(int days, const std::string& agent, const std::string& model,
                    UsageBreakdown& out, std::string& err);
+    // 读周预算。**失败返回 -1**（不是默认值）——调用方必须判负并报错，
+    // 否则"预算读不出来"会伪装成"预算就是默认值"（GUI 侧对非正值一律回退默认显示）。
     int64_t budget(std::string& err);
     bool setBudget(int64_t budget, std::string& err);
 
