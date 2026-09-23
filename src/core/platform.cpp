@@ -101,17 +101,7 @@ Platform::Platform(std::string homeDir)
 
 Platform::~Platform() { shutdown(); }
 
-bool Platform::bootstrap(std::string& err) {
-    std::lock_guard lock(mutex_);
-    if (bootstrapped_) return true;
-
-    std::error_code ec;
-    fs::create_directories(fs::path(home_dir_) / "config", ec);
-    fs::create_directories(fs::path(home_dir_) / "backup", ec);
-    if (ec) { err = "cannot create home dir: " + ec.message(); return false; }
-
-    std::string dbPath = (fs::path(home_dir_) / "platform.db").string();
-    if (!db_.open(dbPath, err)) return false;
+bool Platform::initStoreLocked(std::string& err) {
     // ---- 库结构版本门（schema.sql 末尾 PRAGMA user_version 写入）----
     // 必须在执行 schema **之前**比对：更高版本的库不能被本程序按旧 schema 解读。
     int64_t dbVersion = 0;
@@ -161,6 +151,33 @@ bool Platform::bootstrap(std::string& err) {
                    },
                    nullptr, err))
         return false;
+    return true;
+}
+
+bool Platform::refuseIfUnusable(std::string& err) const {
+    if (usable_) return false;
+    err = "the data store is unusable after a failed backup restore; restart MiderHive";
+    return true;
+}
+
+bool Platform::isUsable() const {
+    std::lock_guard lock(mutex_);
+    return usable_;
+}
+
+bool Platform::bootstrap(std::string& err) {
+    std::lock_guard lock(mutex_);
+    if (bootstrapped_) return true;
+
+    std::error_code ec;
+    fs::create_directories(fs::path(home_dir_) / "config", ec);
+    fs::create_directories(fs::path(home_dir_) / "backup", ec);
+    if (ec) { err = "cannot create home dir: " + ec.message(); return false; }
+
+    std::string dbPath = (fs::path(home_dir_) / "platform.db").string();
+    if (!db_.open(dbPath, err)) return false;
+    // 库初始化（版本门/schema/迁移/vec/FTS/默认设置）——与恢复备份路径共用同一套
+    if (!initStoreLocked(err)) return false;
 
     // 主密钥：环境变量优先，其次运行期生成的文件；绝不写入源码
     std::string masterKey;
@@ -1152,11 +1169,32 @@ bool Platform::maintenanceRun(const std::string& actor, std::string& statsJson, 
 
 bool Platform::backupCreate(std::string& outPath, std::string& err) {
     std::lock_guard lock(mutex_);
-    // VACUUM INTO 生成一致性好、含 WAL 已提交数据的独立快照文件
+    // VACUUM INTO 生成一致性好、含 WAL 已提交数据的独立快照文件。
+    // 名字粒度是**秒**，而 VACUUM INTO 遇到已存在的输出文件会直接失败
+    // （"output file already exists"）——同一秒内连点两次"立即备份"就会撞名。
+    // 撞名时补一个短后缀保证唯一（用户视角是"第二次备份也能成功"，而不是一句
+    // 语焉不详的 SQLite 报错）。
     std::string name = "platform-" + nowIso() + ".db";
     for (auto& ch : name)
         if (ch == ':') ch = '-';
-    outPath = (fs::path(home_dir_) / "backup" / name).string();
+    auto pathFor = [&](const std::string& n) {
+        return (fs::path(home_dir_) / "backup" / n).string();
+    };
+    std::error_code ec;
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        const std::string candidate =
+            attempt == 0 ? name
+                         : name.substr(0, name.size() - 3) + "-" + randomHex(3) + ".db";
+        const std::string candidatePath = pathFor(candidate);
+        if (fs::exists(candidatePath, ec)) continue;
+        outPath = candidatePath;
+        name = candidate;
+        break;
+    }
+    if (outPath.empty()) {
+        err = "cannot allocate a unique backup file name";
+        return false;
+    }
     std::string escaped;
     for (char ch : outPath) {
         escaped += ch;
@@ -1229,22 +1267,77 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
         }
     }
     // 关闭连接（自动 checkpoint WAL）→ 覆盖 → 重开
-    db_.close();
+    //
+    // 这一段是"库已关、必须重开"的危险窗口：任何一步失败，如果就这么返回，调用方
+    // 会继续拿着一个 db_ 已关闭的 Platform 跑——面板刷新、心跳、HTTP 全部静默失效，
+    // 而界面上只有一个"恢复失败"的提示。因此在窗口内失败时按优先级做两件事：
+    //   1) 尝试把旧的库文件放回去并重开（补偿），失败也无妨，只要重新 open 成功；
+    //   2) 都失败就把平台标记为不可用（usable_ = false），HTTP 统一 503、界面强制提示重启。
+    const fs::path livePath = fs::path(home_dir_) / "platform.db";
+    const fs::path prePath = fs::path(home_dir_) / "platform.db.before-restore";
     std::error_code ec;
-    fs::copy_file(src, fs::path(home_dir_) / "platform.db",
-                  fs::copy_options::overwrite_existing, ec);
-    if (ec) { err = "copy failed: " + ec.message(); return false; }
-    if (!db_.open((fs::path(home_dir_) / "platform.db").string(), err)) return false;
-    if (sqlite3_vec_init(db_.handle(), nullptr, nullptr) != SQLITE_OK) {
-        err = sqlite3_errmsg(db_.handle());
+    // 顺序是硬约束：**必须先关连接**。Windows 上 SQLite 还持有 platform.db 句柄时
+    // fs::rename 会直接失败（实测："The process cannot access the file because it is
+    // being used by another process"），而关连接同时会把 WAL checkpoint 回主库。
+    db_.close();
+    // 旧库改名留底：copy_file(overwrite) 中途失败会留下半截文件，那时旧库还在
+    // .before-restore 里，能原样放回去。
+    fs::remove(prePath, ec);
+    ec.clear();
+    fs::rename(livePath, prePath, ec);
+    if (ec) {
+        // 连留底都做不到：没动过任何文件，直接把连接开回去即可（平台仍可用）。
+        // 注意必须重新注册 vec0——sqlite3_vec_init 是按**连接**生效的，新连接上
+        // 不认识 vec0，随后任何语义检索/向量写入都会报 "no such module: vec0"。
+        std::string reopenErr;
+        if (db_.open(livePath.string(), reopenErr)) {
+            sqlite3_vec_init(db_.handle(), nullptr, nullptr);
+        } else {
+            usable_ = false;
+        }
+        err = "cannot stash current database: " + ec.message();
         return false;
     }
-    // 恢复出来的库可能是旧格式（单张 knowledge_vec / 无 FTS 索引）：走与启动同一套初始化
-    if (!knowledge_.initVectorStore(err)) return false;
-    if (!knowledge_.initSearchIndex(err)) return false;
+
+    auto bail = [&](const std::string& why) -> bool {
+        // 关键：先关掉"可能已经打开但不可信"的连接。失败点可能是 open 之后
+        // （initStoreLocked 失败），此时句柄还开着——不关就 rename 不动（Windows 占用）
+        // 且随后的 open 也会失败，补偿等于白做（实测：平台被误判为不可用）。
+        db_.close();
+        // 补偿：把旧库放回原位并重开；成功则平台仍可用（数据回到恢复前的样子）。
+        // 同时清掉同名的 -wal/-shm：库文件是被整体换掉的，旧 WAL 的头部序列号与新主库
+        // 对不上，留着只会让 SQLite 走一次不确定的 WAL 恢复。
+        std::error_code rec;
+        fs::remove(livePath, rec);
+        rec.clear();
+        fs::remove(fs::path(livePath.string() + "-wal"), rec);
+        fs::remove(fs::path(livePath.string() + "-shm"), rec);
+        rec.clear();
+        fs::rename(prePath, livePath, rec);
+        std::string reopenErr;
+        if (!rec && db_.open(livePath.string(), reopenErr)) {
+            // sqlite3_vec_init 是按连接生效的：补偿用的新连接必须重新注册 vec0，
+            // 否则平台"看起来可用"，而向量写入与语义检索全都报 no such module: vec0。
+            sqlite3_vec_init(db_.handle(), nullptr, nullptr);
+            err = why + " (your previous database was left untouched)";
+            return false;
+        }
+        usable_ = false;
+        err = why + "; the data store is now unusable - restart MiderHive";
+        return false;
+    };
+
+    ec.clear();
+    fs::copy_file(src, livePath, fs::copy_options::overwrite_existing, ec);
+    if (ec) return bail("copy failed: " + ec.message());
+    if (!db_.open(livePath.string(), err)) return bail("cannot reopen database: " + err);
+    // 与启动完全同一套初始化：版本门、schema、迁移、vec/FTS。
+    // 少了这一步，恢复出来的旧库不会重新打上 user_version——"拒绝更新版本库"那道门
+    // 在恢复路径上就是空的（此前只跑了 initVectorStore/initSearchIndex）。
+    if (!initStoreLocked(err)) return bail("initializing the restored database failed: " + err);
+    fs::remove(prePath, ec);  // 成功：丢弃前一份库
     // IGNORE: 元操作留痕——库已被替换并重开，此时审计失败不能再"撤销恢复"
     // （把旧库换回去是更危险的操作）；失败原因留在局部变量里。
-    // 待办（C 批）：恢复路径失败后平台可能停在"库已关"状态，需要强制提示重启。
     std::string restoreAuditErr;
     audit_.log("zcode", "system.restore", name, nlohmann::json{{"file", name}}.dump(),
                restoreAuditErr);
@@ -1285,6 +1378,7 @@ Diagnostics Platform::diagnostics() {
     std::lock_guard lock(mutex_);
     Diagnostics d;
     d.home_dir = home_dir_;
+    d.store_unusable = !usable_;
     d.port = http_ ? http_->port() : 0;
     d.http_running = http_ && http_->running();
 

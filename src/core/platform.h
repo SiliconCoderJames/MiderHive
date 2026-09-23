@@ -177,11 +177,24 @@ public:
     // HTTP 服务状态、已注册但明文密钥缺失的 Agent 清单。不改变任何状态。
     Diagnostics diagnostics();
 
+    // ---- 可用性（恢复失败后的硬失败状态）----
+    // 恢复备份时若"库已关、重开失败"（磁盘满/权限/文件被占），继续跑下去只会让
+    // 每一个操作都静默失败。此时把平台标记为不可用：HTTP 侧统一 503，界面显示
+    // "必须重启"，而不是让用户对着一堆空面板猜原因。
+    bool isUsable() const;
+
     // ---- 向量工具 ----
     std::vector<float> embedText(const std::string& text);
     int embeddingDim() const;
 
 private:
+    // 库初始化（bootstrap 与 backupRestore 共用同一套）：版本门 → schema → 迁移 →
+    // vec/FTS 初始化 → 默认设置。**恢复路径必须复用**，否则恢复出来的库不会重新
+    // 打上 user_version，那道"拒绝更新版本库"的门在恢复路径上就是空的。
+    // 调用方须持有 mutex_ 且 db_ 已 open。
+    bool initStoreLocked(std::string& err);
+    // 不可用状态下的统一拒绝；可用时返回 false（表示"没被拦住"）
+    bool refuseIfUnusable(std::string& err) const;
     bool persistAgentKey(const std::string& name, const std::string& apiKey, std::string& err);
     // 提交前执行的审计步骤：服务层的 InTxStep 会把它传进事务里，使
     // "业务写入 + 审计留痕"成为同一个原子动作（SQLite 无嵌套事务，见 platform.cpp）
@@ -207,6 +220,7 @@ private:
     std::unique_ptr<HttpServer> http_;
     std::string master_key_hash_;
     bool bootstrapped_ = false;
+    bool usable_ = true;  // 恢复备份失败后置 false：必须重启（见 isUsable）
     mutable std::recursive_mutex mutex_;
 };
 

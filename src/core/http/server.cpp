@@ -165,6 +165,12 @@ void HttpServer::stop() {
 // 从请求头取出 Agent 身份并校验
 static bool checkAgent(const httplib::Request& req, Platform& platform, std::string& actor,
                        httplib::Response& res) {
+    // 库不可用（恢复备份失败后）时统一 503：继续让请求走到服务层只会得到一堆
+    // 语焉不详的失败，调用方无法判断该重试还是该找运维。
+    if (!platform.isUsable()) {
+        send(res, fail(503, "data store unusable after a failed backup restore; restart MiderHive"));
+        return false;
+    }
     if (!req.has_header("X-Agent-Name") || !req.has_header("X-Api-Key")) {
         send(res, fail(401, "missing X-Agent-Name / X-Api-Key headers"));
         return false;
@@ -179,6 +185,10 @@ static bool checkAgent(const httplib::Request& req, Platform& platform, std::str
 }
 
 static bool checkMaster(const httplib::Request& req, Platform& platform, httplib::Response& res) {
+    if (!platform.isUsable()) {
+        send(res, fail(503, "data store unusable after a failed backup restore; restart MiderHive"));
+        return false;
+    }
     if (!req.has_header("X-Master-Key") ||
         !platform.authenticateMaster(req.get_header_value("X-Master-Key"))) {
         send(res, fail(403, "invalid master key"));

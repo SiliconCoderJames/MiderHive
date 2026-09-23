@@ -269,6 +269,15 @@ void DashboardPanel::refreshHealth() {
     };
     QVector<Row> rows;
     QStringList sig;
+    // 硬失败放最前：恢复备份失败后库连接已关，**任何操作都不会生效**——必须先重启。
+    // 这不是"某功能不可用"的提示，而是"整体不可用"的定性，所以不进详情弹窗、直接说清出路。
+    if (d.store_unusable) {
+        rows.push_back({i18n::trs("数据存储不可用：恢复备份时失败，读写都不会生效。请关闭并重新启动 MiderHive。",
+                                  "Data store unusable: restoring a backup failed, so reads and "
+                                  "writes will not take effect. Please close and restart MiderHive."),
+                        QString(), "unusable"});
+        sig << "unusable";
+    }
     if (!d.http_running) {
         rows.push_back({i18n::trs("本机服务未运行：Agent 现在无法接入工作台。",
                                   "Local service is not running: agents cannot reach the "

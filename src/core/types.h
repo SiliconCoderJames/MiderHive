@@ -169,6 +169,9 @@ struct Diagnostics {
     bool db_ok = false;                      // 数据库可读且核心表存在
     bool agents_json_readable = false;       // 明文密钥缓存可读
     bool http_running = false;               // 本机 HTTP 服务在跑
+    // 恢复备份失败后置位：库连接已关闭、内存状态不可信，**必须重启程序**。
+    // 这是一个"硬失败"信号——不是提示，而是"现在所有读写都不会生效"。
+    bool store_unusable = false;
     int port = 0;                            // 计划/实际端口
     std::string home_dir;                    // 数据目录（展示用）
     std::vector<std::string> keyfile_missing;  // 已注册但明文密钥条目缺失的 Agent（修复=轮换密钥）
