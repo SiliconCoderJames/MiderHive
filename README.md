@@ -24,11 +24,12 @@ English | **[简体中文](README.zh-CN.md)**
 
 **[Download](#quick-start)** · **[HTTP API docs](docs/api.md)** · **[MCP setup](docs/mcp.md)** · **[FAQ](#faq)** · **[Release notes](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[Discussions](https://github.com/SiliconCoderJames/MiderHive/discussions)** · **[Contributing](#contributing)** · **[Security](SECURITY.md)**
 
-**New in 1.2.0** — one-click connect for eight AI coding tools (Claude, Codex/ChatGPT, Droid, DSH,
-Hermes, ZCode, Cursor, Copilot), **27 MCP tools**, a fully bilingual workbench, and **real semantic
-search**: point the CLI at your own embedding endpoint instead of settling for the built-in n-gram
-matcher.
-**[Release notes →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.2.0)**
+**New in 1.2.1** — a reliability release: writes and their audit trail now live or die together,
+restoring a backup is safe to retry (your original database is kept), and CI gained a
+machine-checked rule against silently swallowed failures.
+**[Release notes →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.2.1)** ·
+New in 1.2.0 — one-click connect for eight AI coding tools, 27 MCP tools, a bilingual workbench
+and real semantic search via your own embedding endpoint.
 
 <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive workbench overview" width="100%"/>
 

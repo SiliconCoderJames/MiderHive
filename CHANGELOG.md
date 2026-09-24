@@ -24,6 +24,8 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-25
+
 ### Fixed
 - **Audit trailing is now part of the write it describes**: a write whose audit row cannot be
   persisted is rejected and rolled back instead of silently succeeding without a trace. The schema
@@ -32,7 +34,8 @@ join the hive over HTTP or MCP.
   data that cannot be traced back to an actor. Writes and their audit rows now share one
   transaction (data and trace live or die together); genuinely best-effort trails — heartbeat,
   token telemetry, meta-audits — are marked `// IGNORE:` with the reason inline, so every
-  exemption is itself auditable.
+  exemption is itself auditable. Resolving an error is covered too, which also closes a race
+  where two concurrent resolves of the same error could overwrite each other's notes.
 - **Maintenance stats and the budget read report failure honestly**: `maintenanceRun` discarded
   the result of its three DELETE statements and then read `sqlite3_changes64()` anyway, so
   "deleted 0 rows" and "the delete failed" produced identical stats and a success return. Reading
@@ -410,7 +413,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/SiliconCoderJames/MiderHive/compare/V1.0.4...v1.1.0

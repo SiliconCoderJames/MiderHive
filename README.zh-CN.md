@@ -23,10 +23,11 @@
 
 **[下载安装](#快速开始)** · **[HTTP 接口文档](docs/api.md)** · **[MCP 接入](docs/mcp.md)** · **[常见问题](#常见问题)** · **[发行说明](https://github.com/SiliconCoderJames/MiderHive/releases)** · **[讨论区](https://github.com/SiliconCoderJames/MiderHive/discussions)** · **[参与贡献](#参与贡献)** · **[安全策略](SECURITY.md)**
 
-**1.2.0 新增**——八种 AI 编码工具一键接入（Claude、Codex/ChatGPT、Droid、DSH、Hermes、ZCode、
-Cursor、Copilot）、**27 个 MCP 工具**、中英双语工作台，以及**真正的语义检索**：把 CLI 指向你自己的
-嵌入端点，不必再将就内置的 n-gram 匹配。
-**[发行说明 →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.2.0)**
+**1.2.1 新增**——可靠性版本：写入与其审计留痕同生同灭、恢复备份可以安全重试（原始库
+会被保留）、CI 新增针对"静默吞掉失败"的机检规则。
+**[发行说明 →](https://github.com/SiliconCoderJames/MiderHive/releases/tag/v1.2.1)** ·
+1.2.0 新增——八种 AI 编码工具一键接入、**27 个 MCP 工具**、中英双语工作台，以及指向你
+自己的嵌入端点的**真正的语义检索**。
 
 <img src="docs/assets/screenshot-dashboard.png" alt="MiderHive 工作台总览" width="100%"/>
 
