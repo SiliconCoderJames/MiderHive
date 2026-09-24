@@ -33,12 +33,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # 需要检查的关键调用（写路径 + 有副作用且会失败的服务调用）。
 # 只放"漏检会真的造成数据/留痕缺口"的调用，不放纯读取助手。
-KEY_CALL = r"(?:db_|Database::)\.(?:query|execScript)\(" r"|(?:audit_|knowledge_|skills_|memory_|messages_|errors_|usage_|agents_)\.(?:log|create|addVersion|set|remove|send|reply|report|register|record[A-Za-z]*|rotate|update)\("
+# 两组清单：
+#   * 服务层（Platform 内部经由成员服务发出的写）
+#   * Platform 门面层（GUI / CLI / 测试直接调用的写方法）——扩展到这一层后，
+#     界面或脚本里"裸丢弃 platform_.xxx(...) 返回值"也会被抓住，而不只是核心内部
+KEY_CALL = (
+    r"(?:db_|Database::)\.(?:query|execScript)\("
+    r"|(?:audit_|knowledge_|skills_|memory_|messages_|errors_|usage_|agents_)\."
+    r"(?:log|create|addVersion|set|remove|send|reply|report|register|record[A-Za-z]*|rotate|update)\("
+    r"|(?:p|platform_|platform)\."
+    r"(?:knowledgeCreate|knowledgeAddVersion|knowledgeRemove|memorySet|memoryRemove|"
+    r"messageSend|messageReply|messageSetStatus|errorReport|errorResolve|skillRegister|"
+    r"usageSetBudget|registerAgent|agentRemove|agentRotateKey|agentProvision|"
+    r"backupCreate|backupRestore|maintenanceRun)\("
+)
 
-# 语句以关键词开头 = 返回值这一层已经不存在，无需检查
+# 语句以关键词开头 = 返回值这一层已经不存在（或已被消费），无需检查。
+# CHECK / CHECK_EQ 是单元测试的断言宏——断言即消费：`CHECK(p.foo(...))` 失败会让
+# 测试变红，这正是"返回值被使用"的一种形态（不豁免它会把所有测试断言误报成违规）。
 STMT_KEYWORDS = (
     "if", "while", "for", "switch", "else", "return", "assert",
     "case", "do", "catch", "throw", "namespace", "using",
+    "CHECK", "CHECK_EQ", "CHECK_NE", "VERIFY",
 )
 
 SCAN_DIRS = ("src",)

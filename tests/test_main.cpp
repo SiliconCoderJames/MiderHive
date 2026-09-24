@@ -527,6 +527,38 @@ static void test_platform_end_to_end() {
                              badBudget.dump(), "application/json");
             CHECK(r && r->status == 400);
         }
+        // ---- 加固项：预算**读**失败必须如实 500（曾经把 -1 当预算发出去）----
+        // 注入方式：从第二个连接把 settings 表改名，制造真实的读失败
+        //（与表被锁/损坏同构；平台空闲时无写锁，DDL 可拿到）。
+        {
+            const fs::path liveDb = tmp / "platform.db";
+            sqlite3* raw = nullptr;
+            CHECK(sqlite3_open(liveDb.string().c_str(), &raw) == SQLITE_OK);
+            char* msg = nullptr;
+            const bool renamed =
+                sqlite3_exec(raw, "ALTER TABLE settings RENAME TO settings_hidden", nullptr,
+                             nullptr, &msg) == SQLITE_OK;
+            sqlite3_free(msg);
+            sqlite3_close(raw);
+            CHECK(renamed);
+            auto failResp = cli.Get("/api/usage/budget",
+                                    {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}});
+            CHECK(failResp && failResp->status == 500);
+            if (failResp) {
+                auto body = json::parse(failResp->body);
+                CHECK_EQ(body["code"], 500);  // 信封同步携带错误码，不是裸 500
+            }
+            raw = nullptr;
+            CHECK(sqlite3_open(liveDb.string().c_str(), &raw) == SQLITE_OK);
+            msg = nullptr;
+            sqlite3_exec(raw, "ALTER TABLE settings_hidden RENAME TO settings", nullptr, nullptr,
+                         &msg);
+            sqlite3_free(msg);
+            sqlite3_close(raw);
+            auto okResp = cli.Get("/api/usage/budget",
+                                  {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}});
+            CHECK(okResp && okResp->status == 200);
+        }
         // 用量统计端点：正常请求 200 + 数据形态；异常 days 400
         auto httpDaily = cli.Get("/api/usage/daily?days=7",
                                  {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}});
@@ -1857,8 +1889,32 @@ static void test_backup_restore_failure_paths() {
         CHECK(p.knowledgeCreate("hermes", "恢复失败后仍可写", "补偿把旧库放回来了。", {}, "", {}, "",
                                 after, afterErr));
         CHECK(!after.uuid.empty());
-        CHECK(!after.uuid.empty());
         CHECK(p.diagnostics().store_unusable == false);
+
+        // ---- 4. 留底轮转：重试恢复不得删掉上一次失败留下的救援副本 ----
+        // 场景：上次恢复失败且补偿也没成功（usable_=false），prePath 是用户原始数据的
+        // 最后一份；用户重启后重试恢复——旧行为是无条件 fs::remove(prePath)，把它删了。
+        const fs::path preStash = tmp / "platform.db.before-restore";
+        const fs::path prevStash = tmp / "platform.db.before-restore.previous";
+        const std::string stashMarker = "RESCUE-COPY-MARKER-v1";
+        {
+            std::ofstream out(preStash, std::ios::binary | std::ios::trunc);
+            out.write(stashMarker.data(), static_cast<std::streamsize>(stashMarker.size()));
+        }
+        std::string bp3;
+        CHECK(p.backupCreate(bp3, err));
+        CHECK(p.backupRestore(fs::path(bp3).filename().string(), err));  // 成功的恢复
+        // 救援副本未消失：被轮转到了 .previous，内容原样
+        CHECK(fs::exists(prevStash));
+        {
+            std::ifstream in(prevStash, std::ios::binary);
+            std::string got((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+            CHECK_EQ(got, stashMarker);
+        }
+        // 本次留底在成功后被清理（.previous 不受成功路径影响，那是上一代的）
+        CHECK(!fs::exists(preStash));
+        CHECK(p.isUsable());
         p.shutdown();
         // 旧库原样回来了：标记条目仍在（若是被损坏文件覆盖，这里会是 0 或读不出来）
         CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE title='恢复前写入'"),
