@@ -24,6 +24,49 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+### Fixed
+- **Audit trailing is now part of the write it describes**: a write whose audit row cannot be
+  persisted is rejected and rolled back instead of silently succeeding without a trace. The schema
+  and README promise "every write is recorded in `audit_log`"; until now that held in exactly one
+  place (`skill.invoke`) while some twenty other write paths discarded the audit result — leaving
+  data that cannot be traced back to an actor. Writes and their audit rows now share one
+  transaction (data and trace live or die together); genuinely best-effort trails — heartbeat,
+  token telemetry, meta-audits — are marked `// IGNORE:` with the reason inline, so every
+  exemption is itself auditable.
+- **Maintenance stats and the budget read report failure honestly**: `maintenanceRun` discarded
+  the result of its three DELETE statements and then read `sqlite3_changes64()` anyway, so
+  "deleted 0 rows" and "the delete failed" produced identical stats and a success return. Reading
+  the weekly budget used to swallow the failure and return the default (10M) — a user who set
+  5M saw no hint that the real answer was unknown. `GET /api/usage/budget` now returns 500 when
+  the value cannot be read, and `usage/summary` fails with the budget error instead of letting a
+  later query overwrite the diagnosis.
+- **Restoring a backup no longer bypasses the schema gate or strands the workbench on a dead
+  connection**: the restore path now replays the same initialization as startup (version gate,
+  schema, migrations, vec/FTS), so a restored older database is stamped with the current
+  `user_version` — previously the "refuse a newer database" gate simply did not exist on this
+  path. If anything fails mid-restore, the previous database is stashed first and put back
+  (compensation), so the platform stays usable and the error says the old database was left
+  untouched; only if that also fails does the platform enter an explicit unusable state — every
+  authenticated endpoint returns 503 and the dashboard leads with a "restart MiderHive" banner —
+  instead of silently running against a closed connection.
+- **Retrying a restore no longer deletes the last copy of your original database**: a failed
+  restore whose compensation also failed deliberately keeps the pre-restore file
+  (`platform.db.before-restore`); retrying a restore used to delete it unconditionally as the
+  first step. The stash now rotates to `.before-restore.previous` (two generations kept), and the
+  hard-failure message names the file so the rescue copy can be found.
+- **A second backup within the same second no longer fails**: backup filenames have
+  second-resolution timestamps and `VACUUM INTO` refuses to overwrite, so "back up now" twice in
+  a row — or backup → restore → backup — died with `output file already exists`. Collisions now
+  get a short random suffix; normal filenames are unchanged.
+
+### Added
+- **A machine-checked rule that failures are not silently swallowed**: CI now runs
+  `scripts/check_bool_returns.py --fail` — calls from a checked list (database writes, audit
+  logging, service mutations) must use their `bool` return, or carry an inline `// IGNORE:`
+  with a reason. A deliberately injected violation was verified to fail the check before it was
+  wired in; the unit suite also grew failure-path tests that inject real SQLite `RAISE(ABORT)`
+  triggers and assert both the honest failure and the absence of half-applied state.
+
 ## [1.2.0] - 2026-09-18
 
 ### Added
