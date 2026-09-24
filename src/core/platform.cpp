@@ -1275,6 +1275,7 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
     //   2) 都失败就把平台标记为不可用（usable_ = false），HTTP 统一 503、界面强制提示重启。
     const fs::path livePath = fs::path(home_dir_) / "platform.db";
     const fs::path prePath = fs::path(home_dir_) / "platform.db.before-restore";
+    const fs::path prevPath = fs::path(home_dir_) / "platform.db.before-restore.previous";
     std::error_code ec;
     // 顺序是硬约束：**必须先关连接**。Windows 上 SQLite 还持有 platform.db 句柄时
     // fs::rename 会直接失败（实测："The process cannot access the file because it is
@@ -1282,7 +1283,14 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
     db_.close();
     // 旧库改名留底：copy_file(overwrite) 中途失败会留下半截文件，那时旧库还在
     // .before-restore 里，能原样放回去。
-    fs::remove(prePath, ec);
+    //
+    // 留底轮转（而不是删除）：prePath 若已存在，说明上一次恢复失败且补偿也没成功
+    // （usable_=false 那条路径会**故意**留下它）——那是用户原始数据的最后一份救援副本。
+    // 用户重启后重试恢复是最常见的动作，无条件 fs::remove(prePath) 会把这份副本静默
+    // 删掉。因此先把旧留底转存为 .previous（保持至多两代：本次 + 上次），再留新的底。
+    fs::remove(prevPath, ec);   // 丢弃更老的一代（保底两代，不无限增长）
+    ec.clear();
+    fs::rename(prePath, prevPath, ec);  // prePath 不存在属正常（上次恢复成功已清理）
     ec.clear();
     fs::rename(livePath, prePath, ec);
     if (ec) {
@@ -1323,7 +1331,9 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
             return false;
         }
         usable_ = false;
-        err = why + "; the data store is now unusable - restart MiderHive";
+        // 指明留底位置：这是用户原始数据的手工救援路径，不能让人猜文件在哪
+        err = why + "; the data store is now unusable - restart MiderHive "
+              "(your previous database was kept as " + prePath.filename().string() + ")";
         return false;
     };
 
@@ -1335,7 +1345,9 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
     // 少了这一步，恢复出来的旧库不会重新打上 user_version——"拒绝更新版本库"那道门
     // 在恢复路径上就是空的（此前只跑了 initVectorStore/initSearchIndex）。
     if (!initStoreLocked(err)) return bail("initializing the restored database failed: " + err);
-    fs::remove(prePath, ec);  // 成功：丢弃前一份库
+    // 成功：丢弃**本次**留底。不动 .previous——那可能是更早一次失败留下的救援副本，
+    // 用户此刻刚恢复成功，删掉它没有任何收益，轮转逻辑会在下次恢复时自然处理。
+    fs::remove(prePath, ec);
     // IGNORE: 元操作留痕——库已被替换并重开，此时审计失败不能再"撤销恢复"
     // （把旧库换回去是更危险的操作）；失败原因留在局部变量里。
     std::string restoreAuditErr;
