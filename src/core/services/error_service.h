@@ -21,8 +21,10 @@ public:
     bool list(const std::string& statusFilter, const std::string& severityFilter, int limit,
               std::vector<ErrorReport>& out, std::string& err);
     bool get(const std::string& uuid, ErrorReport& out, std::string& err);
+    // resolve 是"读旧说明 → 合并 → 写回"三步，必须整体原子：除了审计留痕（inTx），
+    // 也封住并发窗口——两个进程同时 resolve 同一条时，后写者会覆盖先写者的说明。
     bool resolve(const std::string& uuid, const std::string& actor, const std::string& notes,
-                 ErrorReport& out, std::string& err);
+                 ErrorReport& out, std::string& err, const InTxStep& inTx = {});
 
 private:
     Database& db_;

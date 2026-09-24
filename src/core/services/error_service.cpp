@@ -108,27 +108,45 @@ bool ErrorService::get(const std::string& uuid, ErrorReport& out, std::string& e
 }
 
 bool ErrorService::resolve(const std::string& uuid, const std::string& actor, const std::string& notes,
-                           ErrorReport& out, std::string& err) {
+                           ErrorReport& out, std::string& err, const InTxStep& inTx) {
+    // 事务必须包住"读旧说明 → 合并 → 写回"全过程：
+    //   * 并发窗口——不包事务时，两个进程同时 resolve 同一条，后写者拿不到先写者的
+    //     说明，合并结果直接覆盖（丢数据）；
+    //   * 审计留痕（inTx）必须在提交前执行，失败即整体回滚（同 report 的理由）。
+    if (!db_.beginImmediate(err)) return false;
     // 解决说明是追加而非覆盖
     std::string merged = notes;
-    bool ok = db_.query(
-        "SELECT resolution_notes, status FROM errors WHERE uuid=?",
-        [&](Stmt& st) { st.bind(1, uuid); },
-        [&](Stmt& st) {
-            if (!st.isNull(0) && !st.text(0).empty()) merged = st.text(0) + "\n---\n" + notes;
-        },
-        err);
-    if (!ok) return false;
-    ok = db_.query(
-        "UPDATE errors SET status='resolved', resolved_by=?, resolved_at=?, resolution_notes=? WHERE uuid=?",
-        [&](Stmt& st) {
-            st.bind(1, actor);
-            st.bind(2, nowIso());
-            st.bind(3, merged);
-            st.bind(4, uuid);
-        },
-        nullptr, err);
-    if (!ok) return false;
+    if (!db_.query(
+            "SELECT resolution_notes, status FROM errors WHERE uuid=?",
+            [&](Stmt& st) { st.bind(1, uuid); },
+            [&](Stmt& st) {
+                if (!st.isNull(0) && !st.text(0).empty()) merged = st.text(0) + "\n---\n" + notes;
+            },
+            err)) {
+        db_.rollback();
+        return false;
+    }
+    if (!db_.query(
+            "UPDATE errors SET status='resolved', resolved_by=?, resolved_at=?, resolution_notes=? WHERE uuid=?",
+            [&](Stmt& st) {
+                st.bind(1, actor);
+                st.bind(2, nowIso());
+                st.bind(3, merged);
+                st.bind(4, uuid);
+            },
+            nullptr, err)) {
+        db_.rollback();
+        return false;
+    }
+    if (inTx && !inTx()) {
+        db_.rollback();
+        if (err.empty()) err = "in-transaction step failed";
+        return false;
+    }
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
     return get(uuid, out, err);
 }
 

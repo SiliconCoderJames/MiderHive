@@ -1698,6 +1698,10 @@ static void test_failure_paths_report_errors() {
         CHECK(p.bootstrap(err));
 
         // ---- 1. 审计写不进去 → 写操作必须失败，且业务数据不得落库 ----
+        // 先造一条待解决的错误（errorReport 也走审计，必须赶在装触发器之前）
+        ah::ErrorReport seed;
+        CHECK(p.errorReport("claude", "error", "seed", "待解决的错误", "正文", "", seed, err));
+        CHECK(!seed.uuid.empty());
         CHECK(installAbortTrigger(dbPath, "trig_audit_insert",
                                   "BEFORE INSERT ON audit_log BEGIN "
                                   "SELECT RAISE(ABORT,'injected: audit unavailable'); END"));
@@ -1722,6 +1726,17 @@ static void test_failure_paths_report_errors() {
             CHECK(!p.messageSend("note", "hermes", "claude", "s", "body", out, e3));
             CHECK(!e3.empty());
             CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM messages"), 0);
+        }
+        {
+            // 解决错误同样受审计硬契约约束：失败时不得留下"已解决但无留痕"的半截状态
+            ah::ErrorReport resolved;
+            std::string e4;
+            CHECK(!p.errorResolve("zcode", seed.uuid, "第一次解决说明", resolved, e4));
+            CHECK(!e4.empty());
+            const std::string stillOpen = "SELECT COUNT(*) FROM errors WHERE uuid='" + seed.uuid +
+                                          "' AND status='open'";
+            CHECK_EQ(countRows(dbPath, stillOpen.c_str()),
+                     1);  // 回滚生效：仍是 open，说明也没写进去
         }
 
         // ---- 2. 消息回复：写回复与标已读必须同事务 ----

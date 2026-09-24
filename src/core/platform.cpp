@@ -1033,17 +1033,15 @@ bool Platform::errorResolve(const std::string& actor, const std::string& uuid,
         err = "only the reporter or zcode can resolve this error";
         return false;
     }
-    if (!errors_.resolve(uuid, actor, notes, out, err)) return false;
-    // errors_.resolve 是单条 UPDATE，而审计需要它先落库才能记 notes：本函数无法把审计
-    // 塞进同一事务（ErrorService 尚未暴露 InTxStep），因此审计失败会留下"已解决、无留痕"。
-    // IGNORE: 已知边界——如实上报失败让调用方重试，待 ErrorService 支持 InTxStep 后收紧。
-    std::string resolveAuditErr;
-    if (!auditStep(actor, "error.resolve", uuid, nlohmann::json{{"notes", notes}}.dump(),
-                   resolveAuditErr)) {
-        err = resolveAuditErr.empty() ? "audit log write failed" : resolveAuditErr;
-        return false;
-    }
-    return true;
+    // 审计作为服务事务内的一步：解决记录与留痕同生同灭（此前是 A 批策略唯一
+    // 标注 IGNORE 的写路径边界，现与其它服务一致）
+    std::string auditErr;
+    const std::string notesJson = nlohmann::json{{"notes", notes}}.dump();
+    const bool ok = errors_.resolve(uuid, actor, notes, out, err, [&]() {
+        return auditStep(actor, "error.resolve", uuid, notesJson, auditErr);
+    });
+    if (!ok && err.empty()) err = auditErr;
+    return ok;
 }
 
 // ---------------- Token 用量 ----------------
