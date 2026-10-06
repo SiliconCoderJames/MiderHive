@@ -24,6 +24,8 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-06
+
 ### Fixed
 - **Audit rows now name the object they describe**: `knowledge.create`, `message.send` and
   `error.report` wrote audit rows with an empty `target` (the service filled the output struct
@@ -518,7 +520,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.0...v1.1.1
