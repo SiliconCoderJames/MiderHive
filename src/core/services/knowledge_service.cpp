@@ -25,6 +25,18 @@ void parseTags(KnowledgeEntry& e) {
     } catch (...) {
     }
 }
+// LIKE 通配符转义：用户输入里的 % 与 _ 是匹配语法而不是字面量（反斜杠同理需最先
+// 转义）。不转义的话查询 "100%" 会匹配一串毫不相关的条目、tag "_" 会让标签过滤
+// 形同虚设。所有 LIKE ? 绑定值一律过这里，SQL 侧统一 ESCAPE '\'。
+std::string escapeLike(const std::string& v) {
+    std::string out;
+    out.reserve(v.size() + 8);
+    for (char c : v) {
+        if (c == '\\' || c == '%' || c == '_') out += '\\';
+        out += c;
+    }
+    return out;
+}
 }  // namespace
 
 std::string KnowledgeService::vecTableFor(size_t dim) const {
@@ -524,14 +536,14 @@ bool KnowledgeService::list(int limit, const std::string& tagFilter,
                             std::vector<KnowledgeEntry>& out, std::string& err) {
     std::string sql =
         "SELECT id FROM knowledge_entries WHERE is_latest=1";
-    if (!tagFilter.empty()) sql += " AND tags_json LIKE ?";
+    if (!tagFilter.empty()) sql += " AND tags_json LIKE ? ESCAPE '\\'";
     sql += " ORDER BY id DESC LIMIT ?";
     std::vector<int64_t> ids;
     if (!db_.query(
             sql,
             [&](Stmt& st) {
                 int idx = 1;
-                if (!tagFilter.empty()) st.bind(idx++, "%\"" + tagFilter + "\"%");
+                if (!tagFilter.empty()) st.bind(idx++, "%\"" + escapeLike(tagFilter) + "\"%");
                 st.bind(idx, static_cast<int64_t>(limit > 0 ? limit : 100));
             },
             [&](Stmt& st) { ids.push_back(st.i64(0)); }, err))
@@ -552,10 +564,11 @@ bool KnowledgeService::searchKeyword(const std::string& query, int limit,
 bool KnowledgeService::searchKeywordLike(const std::string& query, int limit,
                                          const std::string& tagFilter,
                                          std::vector<KnowledgeEntry>& out, std::string& err) {
-    std::string like = "%" + query + "%";
+    const std::string like = "%" + escapeLike(query) + "%";
     std::string sql =
-        "SELECT id FROM knowledge_entries WHERE is_latest=1 AND (title LIKE ? OR content LIKE ?)";
-    if (!tagFilter.empty()) sql += " AND tags_json LIKE ?";
+        "SELECT id FROM knowledge_entries WHERE is_latest=1 AND (title LIKE ? ESCAPE '\\' "
+        "OR content LIKE ? ESCAPE '\\')";
+    if (!tagFilter.empty()) sql += " AND tags_json LIKE ? ESCAPE '\\'";
     sql += " ORDER BY id DESC LIMIT ?";
     std::vector<int64_t> ids;
     if (!db_.query(
@@ -564,7 +577,7 @@ bool KnowledgeService::searchKeywordLike(const std::string& query, int limit,
                 st.bind(1, like);
                 st.bind(2, like);
                 int idx = 3;
-                if (!tagFilter.empty()) st.bind(idx++, "%\"" + tagFilter + "\"%");
+                if (!tagFilter.empty()) st.bind(idx++, "%\"" + escapeLike(tagFilter) + "\"%");
                 st.bind(idx, static_cast<int64_t>(limit > 0 ? limit : 20));
             },
             [&](Stmt& st) { ids.push_back(st.i64(0)); }, err))
@@ -587,7 +600,7 @@ bool KnowledgeService::searchKeywordFts(const std::string& query, int limit,
     std::string sql =
         "SELECT ke.id FROM knowledge_entries ke WHERE ke.is_latest=1 AND ke.id IN "
         "(SELECT rowid FROM knowledge_fts WHERE knowledge_fts MATCH ?)";
-    if (!tagFilter.empty()) sql += " AND ke.tags_json LIKE ?";
+    if (!tagFilter.empty()) sql += " AND ke.tags_json LIKE ? ESCAPE '\\'";
     sql += " ORDER BY ke.id DESC LIMIT ?";
     std::vector<int64_t> ids;
     if (!db_.query(
@@ -595,7 +608,7 @@ bool KnowledgeService::searchKeywordFts(const std::string& query, int limit,
             [&](Stmt& st) {
                 st.bind(1, ftsQuery);
                 int idx = 2;
-                if (!tagFilter.empty()) st.bind(idx++, "%\"" + tagFilter + "\"%");
+                if (!tagFilter.empty()) st.bind(idx++, "%\"" + escapeLike(tagFilter) + "\"%");
                 st.bind(idx, static_cast<int64_t>(limit > 0 ? limit : 20));
             },
             [&](Stmt& st) { ids.push_back(st.i64(0)); }, err))

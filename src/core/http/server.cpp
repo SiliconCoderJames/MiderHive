@@ -591,8 +591,10 @@ void HttpServer::setupRoutes() {
             send(res, fail(400, err));
             return;
         }
+        // 用量汇总是三次独立的后续读取（调用记录已落库），读失败绝不能伪装成
+        // 成功数据返回——与 /api/usage/report、/api/usage/summary 同一契约
         UsageSummary sum;
-        p.usageSummary(sum, err);
+        if (!p.usageSummary(sum, err)) { send(res, fail(500, err)); return; }
         send(res, ok(json{{"skill", req.matches[1]},
                           {"remaining_tokens", sum.budget - sum.total_tokens},
                           {"budget", sum.budget},
@@ -678,11 +680,18 @@ void HttpServer::setupRoutes() {
     srv.Post(R"(/api/messages/([0-9a-fA-F-]{36})/reply)", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;
+        // 损坏/非对象 JSON 统一 400：此前静默当空正文处理，会真的落库一条空回复
         auto body = json::parse(req.body, nullptr, false);
-        std::string text = body.is_object() ? body.value("body", "") : "";
+        if (body.is_discarded() || !body.is_object()) { send(res, fail(400, "invalid JSON body")); return; }
+        std::string text = body.value("body", "");
         Message out;
         std::string err;
-        if (!p.messageReply(actor, req.matches[1], text, out, err)) { send(res, fail(404, err)); return; }
+        if (!p.messageReply(actor, req.matches[1], text, out, err)) {
+            // 回复权限不足/父消息不存在都走这条：404 会把权限错误伪装成"消息不存在"，
+            // 按 400 如实上报（body 为空等用法错误同样在此）
+            send(res, fail(400, err));
+            return;
+        }
         send(res, ok(json{{"uuid", out.uuid}, {"recipient", out.recipient}, {"status", out.status}}));
     });
 
@@ -690,7 +699,8 @@ void HttpServer::setupRoutes() {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;
         auto body = json::parse(req.body, nullptr, false);
-        std::string status = body.is_object() ? body.value("status", "") : "";
+        if (body.is_discarded() || !body.is_object()) { send(res, fail(400, "invalid JSON body")); return; }
+        std::string status = body.value("status", "");
         Message out;
         std::string err;
         if (!p.messageSetStatus(actor, req.matches[1], status, out, err)) {
@@ -750,8 +760,10 @@ void HttpServer::setupRoutes() {
     srv.Post(R"(/api/errors/([0-9a-fA-F-]{36})/resolve)", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;
+        // 损坏/非对象 JSON 统一 400：此前静默当空说明处理，会把错误置为已解决且无说明
         auto body = json::parse(req.body, nullptr, false);
-        std::string notes = body.is_object() ? body.value("notes", "") : "";
+        if (body.is_discarded() || !body.is_object()) { send(res, fail(400, "invalid JSON body")); return; }
+        std::string notes = body.value("notes", "");
         ErrorReport out;
         std::string err;
         if (!p.errorResolve(actor, req.matches[1], notes, out, err)) { send(res, fail(400, err)); return; }

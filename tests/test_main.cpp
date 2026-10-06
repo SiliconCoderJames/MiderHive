@@ -574,6 +574,32 @@ static void test_platform_end_to_end() {
                              badBudget.dump(), "application/json");
             CHECK(r && r->status == 400);
         }
+        // ---- 加固项：损坏/非对象 JSON 统一 400（此前 reply/resolve 静默当空数据
+        // 处理并真的落库：一条空正文回复、一次无说明的"已解决"）----
+        {
+            nlohmann::json replyOk = {{"body", "正常回复"}};
+            auto rOk = cli.Post("/api/messages/" + pm.uuid + "/reply",
+                                {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}},
+                                replyOk.dump(), "application/json");
+            CHECK(rOk && rOk->status == 200);
+            auto rBad = cli.Post("/api/messages/" + pm.uuid + "/reply",
+                                 {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}},
+                                 "{ this is not json", "application/json");
+            CHECK(rBad && rBad->status == 400);
+            ah::ErrorReport rep;
+            CHECK(p.errorReport("hermes", "info", "probe", "resolve probe", "detail", "", rep, err));
+            auto eBad = cli.Post("/api/errors/" + rep.uuid + "/resolve",
+                                 {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}},
+                                 "not json at all", "application/json");
+            CHECK(eBad && eBad->status == 400);
+            // 损坏请求不得产生副作用：该错误仍是未解决状态
+            std::vector<ah::ErrorReport> errs;
+            CHECK(p.errorList("", "", 50, errs, err));
+            bool stillOpen = false;
+            for (const auto& e : errs)
+                if (e.uuid == rep.uuid && e.status == "open") stillOpen = true;
+            CHECK(stillOpen);
+        }
         // ---- 加固项：预算**读**失败必须如实 500（曾经把 -1 当预算发出去）----
         // 注入方式：从第二个连接把 settings 表改名，制造真实的读失败
         //（与表被锁/损坏同构；平台空闲时无写锁，DDL 可拿到）。
@@ -2090,6 +2116,54 @@ static void test_audit_target_and_version() {
     fs::remove_all(tmp, ec);
 }
 
+// LIKE 通配符必须按字面量匹配：用户查询与标签里的 % / _ 是普通字符，不是匹配语法。
+// 此前查询 "100%" 会当通配符扫出一串无关条目、tag "_" 会让标签过滤形同虚设
+//（三处 LIKE：短查询回退路径、列表标签过滤、FTS 路径的标签过滤）。
+static void test_like_wildcard_escaping() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_like_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    ah::Platform p(tmp.string());
+    std::string err;
+    CHECK(p.bootstrap(err));
+
+    ah::KnowledgeEntry a, b;
+    CHECK(p.knowledgeCreate("hermes", "progress 100%", "含字面量百分号的正文", {"a_b"}, "", {},
+                            "", a, err));
+    CHECK(p.knowledgeCreate("hermes", "unrelated", "完全无关的条目", {"other"}, "", {}, "", b,
+                            err));
+
+    // 查询 "100%"（<3 码点走 LIKE 回退路径）：只命中字面量包含 100% 的那条
+    std::vector<ah::KnowledgeHit> hits;
+    CHECK(p.knowledgeSearch("100%", ah::SearchMode::Keyword, 20, "", hits, err));
+    CHECK_EQ(hits.size(), static_cast<size_t>(1));
+    if (hits.size() == 1) CHECK_EQ(hits[0].entry.uuid, a.uuid);
+    // 查询 "_"（LIKE 路径）：字面量匹配，标题与正文都不含下划线 → 空
+    hits.clear();
+    CHECK(p.knowledgeSearch("_", ah::SearchMode::Keyword, 20, "", hits, err));
+    CHECK(hits.empty());
+    // ≥3 码点走 FTS 路径：标签过滤同样按字面量
+    hits.clear();
+    CHECK(p.knowledgeSearch("unrelated", ah::SearchMode::Keyword, 20, "other", hits, err));
+    CHECK_EQ(hits.size(), static_cast<size_t>(1));
+    // 列表的标签过滤："a_b" 按字面量命中（含通配符语义时同样命中，作对照）；
+    // "_" 按字面量不存在（没有恰好叫 _ 的标签）→ 空——若 %/_ 仍是通配符，
+    // 这里会扫出全部条目
+    std::vector<ah::KnowledgeEntry> listed;
+    CHECK(p.knowledgeList(50, "a_b", listed, err));
+    CHECK_EQ(listed.size(), static_cast<size_t>(1));
+    if (listed.size() == 1) CHECK_EQ(listed[0].uuid, a.uuid);
+    listed.clear();
+    CHECK(p.knowledgeList(50, "_", listed, err));
+    CHECK(listed.empty());
+    // "a%b" 按字面量不存在 → 空（若 % 仍是通配符，这里会误命中 a_b）
+    listed.clear();
+    CHECK(p.knowledgeList(50, "a%b", listed, err));
+    CHECK(listed.empty());
+    p.shutdown();
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -2111,6 +2185,7 @@ int main() {
     run("embedding_dims", test_embedding_dims);
     run("legacy_vec_migration", test_legacy_vec_migration);
     run("keyword_fts", test_keyword_fts);
+    run("like_wildcard_escaping", test_like_wildcard_escaping);
     run("fts_rebuild_legacy", test_fts_rebuild_legacy);
     run("semantic_tag_pushdown", test_semantic_tag_pushdown);
     run("heartbeat_audit", test_heartbeat_audit);
