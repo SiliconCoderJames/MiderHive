@@ -24,6 +24,111 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+### Fixed
+- **Audit rows now name the object they describe**: `knowledge.create`, `message.send` and
+  `error.report` wrote audit rows with an empty `target` (the service filled the output struct
+  only after commit, while the audit step runs inside the transaction), and the `version` in
+  `knowledge.version.add` / `memory.set` details was always the caller's default `1` (the detail
+  string was built before the write happened). The trail existed but could not be traced back to
+  an object — contrary to the "actor + time + action + object" contract. Services now populate
+  the output before their in-transaction audit step, and the details are built when the audit
+  actually runs.
+- **Self-declared embeddings must name their model**: posting a raw `embedding` with an empty
+  `embedder` used to be labeled with the built-in `ngram-hash-v2` tag — any model's vectors could
+  then enter a dimension table under that fake identity, defeating the dimension-provider binding
+  (cross-model vectors silently polluted each other's kNN results), while later honest writes were
+  rejected by the fake registration. Such requests are now rejected with 400 on the platform side;
+  the MCP server no longer defaults `embedder` to `agent`, and `agent-cli` demands
+  `--embedder`/`--embed-model` at the entrance.
+- **An interrupted restore can no longer leave you on a silent empty database**: the restore
+  flow renames the live database to `platform.db.before-restore` before copying the backup in;
+  a process killed between those steps used to let the next startup create a fresh empty database
+  (SQLite creates on open) and run happily on it. Bootstrap now detects "main database missing,
+  pre-restore stash present", moves the stash back, and logs a `system.restore_recovered` audit
+  row; the startup self-check gains a `db_restore_leftover` item for the rare case where even the
+  recovery is blocked. Writing `master.key` on first start is also checked honestly now (a failed
+  write used to leave the platform running with a key that would silently rotate on every
+  restart), and the two `create_directories` calls no longer share one error code.
+- **Replying to a message and reading the audit log respect visibility**: `messageReply` had no
+  permission check anywhere along HTTP - Platform - Service — any authenticated agent could reply
+  to any message uuid and, as a side effect, flip a private message between two other agents to
+  read (a terminal state). The same whitelist as status changes applies now (user, manager,
+  sender, recipient; broadcasts are open), plus an empty-body rejection mirroring `messageSend`.
+  `GET /api/audit` is no longer world-readable to agents: audit details carry point-to-point
+  recipients and subjects, so non-manager agents now see only their own rows (the workbench,
+  which talks to the platform in-process, still sees everything).
+- **Two cross-process races closed**: the legacy `knowledge_vec` migration probed, copied and
+  dropped in three separate auto-committed statements — a workbench and platformd starting
+  simultaneously on an old database could collide on "no such table" and fail the whole
+  bootstrap (the copy/drop now run in one BEGIN IMMEDIATE with an in-transaction recheck).
+  `MessageService::setStatus` validated the state machine against a read outside the
+  transaction, so two processes racing on the same task could land an illegal transition such as
+  accepted - declined; the read-validate-write sequence is now atomic.
+- **LIKE patterns are literals now**: knowledge keyword fallback search and all three tag
+  filters treated `%` and `_` in user input as wildcards — searching "100%" matched unrelated
+  entries and the tag filter `_` matched everything. Values are escaped and the queries carry
+  an explicit escape character.
+- **The skill-invoke response reports usage failures honestly**: it discarded the
+  `usageSummary` return value and answered 200 with a default-filled summary on a read failure —
+  the same shape of bug as the fixed "budget read pretends the default" issue. Malformed or
+  non-object JSON bodies on reply/resolve are now a 400 instead of being treated as empty data
+  (which used to write an empty reply or mark an error resolved without notes).
+- **Credentials come from the OS CSPRNG**: master key, agent keys, salts and uuids were generated
+  from an `mt19937_64` seeded with at most 64 bits of entropy; not exploitable within the stated
+  same-user trust model, but there is no reason to keep a predictable source. The outbound URL
+  guard also normalizes hosts now (percent-decoded and trailing-dot forms such as
+  `%31%32%37.0.0.1` and `localhost.` no longer slip past the literal-address checks).
+- **agent-cli tells the truth again**: the advertised `--port N` option was never read (silent
+  connections to the wrong instance in multi-instance setups), and every "unknown command /
+  unknown subcommand / missing required option" path exited 0. `--port` works (1..65535,
+  validated), usage-error paths exit 2. `platformd` installs real signal handlers — the empty
+  handlers plus a loop that never checked any flag made "press Ctrl+C to stop" a lie and headless
+  operation an unkillable loop.
+- **Environment variables arrive as UTF-8 on Windows**: `std::getenv` hands out ANSI code-page
+  bytes (GBK on Chinese systems) while the platform stores agent names as UTF-8 — a Chinese agent
+  name in `MIDERHIVE_AGENT_NAME` could never authenticate (401) or registered a garbled duplicate
+  identity via the master-key path. `ah::envOr` reads the wide environment block and converts to
+  UTF-8; the MCP server's identity resolution inherits the fix.
+- **The onboarding writer cannot corrupt your config files anymore**: the Codex TOML branch reused
+  the YAML quoter, and TOML literal strings do not support doubled-quote escaping — a name like
+  O'Brien produced a config.toml that fails to parse entirely, while the UI reported success. The
+  YAML path mistook `mcp_servers: {}` (flow value) for a parent key and inserted an indented block
+  under it (structurally illegal YAML), and the TOML append path ignored existing non-canonical
+  shapes, producing a TOML redefinition conflict. Unmergeable shapes are now refused with a
+  paste-it-yourself hint; the backup step reports failure and refuses to write instead of
+  claiming a `.miderhive.bak` exists; and pasted CLI commands quote name/key values so `&` in a
+  name cannot become a command separator in cmd.exe.
+- **The connect wizard pairs identity with credentials**: `ConnectDialog` kept the issued key but
+  re-read the name field when writing — renaming after issuing produced a (new name, old key)
+  config whose agent can never authenticate, while the panel waits forever. `WelcomeDialog`
+  switched the write target before validating, so a failed pick left the previous tool's
+  credentials pointing at the new tool's config file. Both fixed; the MCP executable path is no
+  longer hardcoded with a `.exe` suffix outside Windows.
+- **The updater is single-flight and honest about disk errors**: double-clicking "install" or
+  triggering downloads from two windows concurrently appended into the same version-named
+  temp MSI (Qt opens files with shared write on Windows), producing a corrupt file that was then
+  misreported as "possibly tampered". Downloads ignore re-entry while in flight; failed disk
+  writes now abort with a clear message instead of reaching the SHA-256 gate; and a broken
+  manifest no longer suppresses automatic checks for 24 hours (`markChecked` moved behind field
+  validation).
+- **Panels stop dressing read failures up as empty states**: six panels discarded list-call
+  return values while the service layer clears the output before failing — a read failure showed
+  "no errors — all clear", "0 memories", "no messages", etc. Failures now toast through
+  `humanError` and keep the previous content. The errors panel also survives its own 3-second
+  auto-refresh (selection restored by uuid, so "Mark resolved" can no longer write the note onto
+  a different record), manual reports use the contract enum `warning` (not `warn`), the log
+  panel's date filter converts the local midnight correctly, the memory panel aborts a save when
+  the version probe fails instead of silently skipping optimistic concurrency, and a failed
+  welcome-memory write no longer claims success.
+- **Deploy / release / installer stop failing silently**: `deploy.ps1` mirrors the target with
+  robocopy `/MIR` after checking only that `miderhive.exe` exists — a missing `_stage` fell back
+  to the GUI build output (three files) and would delete platformd, the CLIs, licenses and all
+  Qt DLLs from a working install; a required-files gate now refuses to run. The release workflow
+  checks `$LASTEXITCODE` after `gh release upload/edit` (a silent upload failure used to leave a
+  green step and a stale `latest.json`). The MSI closes `platformd.exe` during upgrades
+  (TerminateProcess — the console daemon has no window to receive WM_CLOSE), so a passive upgrade
+  no longer ends 3010 with a stale daemon.
+
 ## [1.2.1] - 2026-09-25
 
 ### Fixed

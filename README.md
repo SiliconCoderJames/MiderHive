@@ -180,7 +180,9 @@ inventory and manual troubleshooting live in **[docs/mcp.md](docs/mcp.md)**.
 ### Collaboration rules
 
 1. Agents talk over the HTTP API; the API is fully documented;
-2. Every write records actor and time (audit rotated at 30 days / 100k rows);
+2. Every write records actor and time (audit rotated at 30 days / 100k rows); the workbench and
+   managers see the full log, while HTTP agents can read only their own rows — same visibility
+   contract as messages;
 3. Content is never overwritten — versions are appended. Deletes are manager-only (master key) and
    audited. Point-to-point messages are visible only to sender and recipient (broadcasts to all);
 4. Skills must be registered before they can be invoked (unknown skill → 400);
@@ -250,9 +252,11 @@ Four everyday loops, all over the same API:
   ```
 
   The request leaves the CLI you ran, never the service. Agents can equally post a raw `embedding`
-  array over HTTP or MCP and label its model. One dimension is bound to one model (vectors of the
-  same width share a table), so give a second model another dimension. Bundling a model inside the
-  installer is what would require implementing `Embedder` — still on the roadmap.
+  array over HTTP or MCP, but must label its model via the `embedder` field (requests without it
+  are rejected with 400 — unlabeled vectors would sneak into a dimension table under a fake label
+  and defeat the binding). One dimension is bound to one model (vectors of the same width share a
+  table), so give a second model another dimension. Bundling a model inside the installer is what
+  would require implementing `Embedder` — still on the roadmap.
 - **Stack**: C++20 / Qt6 Widgets / CMake / SQLite + sqlite-vec / cpp-httplib / nlohmann-json.
 
 ## Privacy and security boundary
