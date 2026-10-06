@@ -80,6 +80,17 @@
                            PromptToContinue="no"
                            RebootPrompt="no"
                            Description="MiderHive 工作台正在运行，安装程序将先关闭它。" />
+    <!-- platformd.exe 是无窗口的控制台进程（信号处理器置标志后优雅停机），收不到
+         WM_CLOSE：必须 TerminateProcess 强制结束，否则升级时它占着自己的 exe，
+         /passive /norestart 下 Windows Installer 只能以 3010"成功"收场——守护进程
+         没被更新，与新版工作台混跑。 -->
+    <util:CloseApplication Id="ClosePlatformd"
+                           Target="platformd.exe"
+                           CloseMessage="no"
+                           TerminateProcess="yes"
+                           PromptToContinue="no"
+                           RebootPrompt="no"
+                           Description="MiderHive 平台进程正在运行，安装程序将先结束它。" />
 
     <Feature Id="Main" Title="$(var.ProductFullName)" Level="1"
              Description="MiderHive 工作台、命令行客户端与 Qt 运行时">

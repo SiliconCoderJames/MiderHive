@@ -1,4 +1,4 @@
-# Deploy the workbench to %LOCALAPPDATA%\MiderHive and create a desktop shortcut.
+﻿# Deploy the workbench to %LOCALAPPDATA%\MiderHive and create a desktop shortcut.
 # Survives repo/build directory cleanup.
 #
 # NOTE: for releases prefer the MSI (release/MiderHive-<ver>-x64.msi), which installs to the
@@ -28,6 +28,20 @@ if ($FromStage -or (Test-Path (Join-Path $root "_stage\miderhive.exe"))) {
 }
 if (-not (Test-Path (Join-Path $src "miderhive.exe"))) {
     Write-Error "miderhive.exe not found in $src`n  build first: cmake --build $BuildDir --config Release`n  or install the stage dir: cmake --install $BuildDir --config Release --prefix _stage --component Runtime"
+    exit 1
+}
+# /MIR 会把目标里"源里没有"的东西整体删掉（等同 /E + /PURGE）。构建树的 GUI
+# 输出目录只有 miderhive.exe 三个文件——没有 platformd/agent-cli/miderhive-mcp、
+# 没有 licenses、连 Qt6*.dll 都不在（windeployqt 只写安装前缀）。拿它 /MIR 一个
+# 正常工作的部署目录，会把守护进程、CLI、许可乃至全部 Qt 运行库删光，已装环境
+# 从此起不来。所以部署源必须**完整**，缺件就拒绝并给下一步，绝不 /MIR。
+$required = @("miderhive.exe", "agent-cli.exe", "platformd.exe", "miderhive-mcp.exe",
+              "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll", "Qt6Svg.dll",
+              "licenses\THIRD-PARTY-NOTICES.md", "licenses\LICENSE")
+$missing = @()
+foreach ($f in $required) { if (-not (Test-Path (Join-Path $src $f))) { $missing += $f } }
+if ($missing.Count -gt 0) {
+    Write-Error "source dir is incomplete (would /MIR-delete these from the target): $($missing -join ', ')`n  install a complete stage first: cmake --install $BuildDir --config Release --prefix _stage --component Runtime`n  then re-run with -FromStage (or let the script pick up _stage automatically)"
     exit 1
 }
 Write-Host "SRC=$src"

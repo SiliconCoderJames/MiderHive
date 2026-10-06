@@ -135,14 +135,20 @@ jobs:
           $pre = @()
           if ($verRaw -match '-') { $pre = @('--prerelease') }
 
-          # 已存在同标签的 Release 时直接补充资产，避免重复创建失败
+          # 已存在同标签的 Release 时直接补充资产，避免重复创建失败。
+          # pwsh run 块只以**最后一条命令**的状态决定步骤成败——upload/edit 之后
+          # 必须显式检查 $LASTEXITCODE，否则 upload 静默失败（重跑同 tag、网络/权限
+          # 抖动）时步骤照样绿，应用内更新器会拿着陈旧的 latest.json 让用户错过更新。
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $msi $zip $sums $manifest --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
             gh release edit $tag --notes $notes @pre
+            if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
           } else {
             # --target 让新建的标签指向本次实际构建的 commit（workflow_dispatch 手动触发时
             # 标签还不存在，不加会把标签打到默认分支头上，产物与 commit 对不上）
             gh release create $tag $msi $zip $sums $manifest `
               --title "MiderHive $ver" --notes $notes --target $env:GITHUB_SHA @pre
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
           }
