@@ -241,15 +241,18 @@ int main(int argc, char** argv) {
                                      .toObject();
         chk(srvc.value("args").isArray(), "integrations: cursor 配置含 args 数组");
 
-        // Codex TOML 必须用字面量字符串（单引号）：Windows 路径里的 '\Q' 在 TOML
-        // 基本字符串里是非法转义，会让整份 config.toml 解析失败。
+        // Codex TOML 用基本字符串（双引号）：反斜杠按 TOML 语义双写为字面反斜杠，
+        // 含单引号的值（O'Brien 这类名字）也能安全表达——此前的单引号字面量字符串
+        // 不支持 '' 转义，名字含单引号会让整份 config.toml 解析失败。
         const QString winExe = "C:\\Qt\\6.8.3\\msvc2022_64\\bin\\miderhive-mcp.exe";
         const QString toml = ui::integrations::generateConfig("codex", winExe, "a1", "k1");
         chk(toml.contains("[mcp_servers.miderhive]") && toml.contains("MIDERHIVE_AGENT_NAME"),
             "integrations: codex 生成 TOML 配置");
-        chk(toml.contains("command = '" + winExe + "'"),
-            "integrations: codex 路径用 TOML 字面量字符串（反斜杠不需转义）");
-        chk(!toml.contains("command = \""), "integrations: codex 不使用双引号基本字符串");
+        chk(toml.contains("command = \"C:\\\\Qt\\\\6.8.3\\\\msvc2022_64\\\\bin\\\\miderhive-mcp.exe\""),
+            "integrations: codex 路径用 TOML 基本字符串（反斜杠双写）");
+        chk(ui::integrations::generateConfig("codex", winExe, "O'Brien", "k'1")
+                    .contains("MIDERHIVE_AGENT_NAME = \"O'Brien\""),
+            "integrations: codex 含单引号的名字安全表达");
 
         // DSH：插入式补丁 + 密钥必须落在 env 里（DSH 会清洗子进程环境中的 *KEY*/*TOKEN*）
         const QString dsh = ui::integrations::generateConfig("dsh", winExe, "a1", "k1");
@@ -354,15 +357,15 @@ int main(int argc, char** argv) {
             chk(after == garbage, "applyConfig 拒绝时原文件一字未改");
         }
 
-        // ---- TOML（Codex）：写入字面量路径，且重复写入替换而非追加 ----
+        // ---- TOML（Codex）：写入基本字符串路径，且重复写入替换而非追加 ----
         ar = ui::integrations::applyConfig("codex", "C:\\Qt\\mcp.exe", "x1", "k1");
         {
             QFile f(ui::integrations::configPath("codex"));
             QString t;
             if (f.open(QIODevice::ReadOnly)) t = QString::fromUtf8(f.readAll());
             chk(ar.ok && t.contains("[mcp_servers.miderhive]") &&
-                    t.contains("command = 'C:\\Qt\\mcp.exe'"),
-                "applyConfig codex 写入 TOML 字面量路径");
+                    t.contains("command = \"C:\\\\Qt\\\\mcp.exe\""),
+                "applyConfig codex 写入 TOML 基本字符串路径");
         }
         ar = ui::integrations::applyConfig("codex", "C:\\Qt\\mcp2.exe", "x2", "k2");
         {
