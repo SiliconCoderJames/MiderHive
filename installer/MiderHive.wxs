@@ -87,7 +87,7 @@
     <util:CloseApplication Id="ClosePlatformd"
                            Target="platformd.exe"
                            CloseMessage="no"
-                           TerminateProcess="yes"
+                           TerminateProcess="1"
                            PromptToContinue="no"
                            RebootPrompt="no"
                            Description="MiderHive 平台进程正在运行，安装程序将先结束它。" />
