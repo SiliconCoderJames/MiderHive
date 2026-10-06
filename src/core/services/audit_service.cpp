@@ -20,16 +20,20 @@ bool AuditService::log(const std::string& actor, const std::string& action, cons
 
 bool AuditService::list(const std::string& actorFilter, const std::string& actionFilter,
                         const std::string& sinceIso, int limit, std::vector<AuditRecord>& out,
-                        std::string& err) {
+                        std::string& err, const std::string& viewer) {
+    // 可见性收敛：审计 detail 会携带点对点消息的收件人/主题等元数据，全量开放
+    // 等于绕过消息的可见性收敛。viewer 非空时强制只看自己作为主体的行
+    // （此时 actorFilter 一并按 viewer 收敛——查别人直接得到空结果而非报错）。
+    const std::string effectiveActor = viewer.empty() ? actorFilter : viewer;
     std::string sql =
         "SELECT id, actor, action, target, detail, created_at FROM audit_log WHERE 1=1";
-    if (!actorFilter.empty()) sql += " AND actor = ?";
+    if (!effectiveActor.empty()) sql += " AND actor = ?";
     if (!actionFilter.empty()) sql += " AND action = ?";
     if (!sinceIso.empty()) sql += " AND created_at >= ?";
     sql += " ORDER BY id DESC LIMIT ?";
     int idx = 1;
     auto bind = [&](Stmt& st) {
-        if (!actorFilter.empty()) st.bind(idx++, actorFilter);
+        if (!effectiveActor.empty()) st.bind(idx++, effectiveActor);
         if (!actionFilter.empty()) st.bind(idx++, actionFilter);
         if (!sinceIso.empty()) st.bind(idx++, sinceIso);
         st.bind(idx, static_cast<int64_t>(limit > 0 ? limit : 100));

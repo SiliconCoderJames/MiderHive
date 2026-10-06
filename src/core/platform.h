@@ -152,9 +152,11 @@ public:
     bool usageSetBudget(const std::string& actor, int64_t budget, std::string& err);
 
     // ---- 操作日志 ----
+    // viewer 非空 = HTTP 侧普通 Agent：只能看到自己作为主体的行（可见性收敛）；
+    // viewer 为空 = 进程内 GUI/管理视角，看全量
     bool auditList(const std::string& actorFilter, const std::string& actionFilter,
                    const std::string& sinceIso, int limit, std::vector<AuditRecord>& out,
-                   std::string& err);
+                   std::string& err, const std::string& viewer = {});
 
     // ---- 运维：维护 / 备份恢复 ----
     // 审计轮转（30 天或 10 万条）+ 已解决错误归档清理；有删除时 VACUUM。

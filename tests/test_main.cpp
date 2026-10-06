@@ -479,6 +479,19 @@ static void test_platform_end_to_end() {
         CHECK(p.messageSend("note", "hermes", "", "广播", "全员可见", bm, err));
         CHECK(seen("roleprobe", bm.uuid, f));
         CHECK(f);
+        // 回复权限：无关 Agent 不能回复别人的点对点消息（此前整条链路零校验，
+        // 副作用还会把私密消息翻成已读）；收件人与发件人正常回复，广播人人可回
+        ah::Message rp;
+        std::string replyErr;
+        CHECK(!p.messageReply("roleprobe", pm.uuid, "无关者想插话", rp, replyErr));
+        CHECK(replyErr.find("not allowed") != std::string::npos);
+        CHECK(p.messageReply("claude", pm.uuid, "收件人回复", rp, err));
+        CHECK_EQ(rp.parent_uuid, pm.uuid);
+        CHECK(p.messageReply("hermes", pm.uuid, "发件人补充", rp, err));
+        CHECK(p.messageReply("roleprobe", bm.uuid, "广播下的回复", rp, err));
+        // 空正文拒绝（与 messageSend 同一契约；此前会落库一条空回复）
+        CHECK(!p.messageReply("claude", pm.uuid, "", rp, replyErr));
+        CHECK(replyErr.find("body is required") != std::string::npos);
 
         // HTTP API 冒烟：启动服务，Agent 客户端访问
         step("http.start");
@@ -507,6 +520,40 @@ static void test_platform_end_to_end() {
         else if (bad->status != 401)
             std::printf("  bad-key status=%d body=%s\n", bad->status, bad->body.c_str());
         CHECK(bad && bad->status == 401);
+
+        // ---- 加固项：审计可见性收敛——普通 Agent 只能看自己作为主体的行 ----
+        // （审计 detail 携带点对点消息的收件人/主题，全量开放会绕过消息可见性）
+        p.heartbeat("roleprobe", "audit visibility probe");
+        auto auditSelf = cli.Get("/api/audit?limit=500",
+                                 {{"X-Agent-Name", "roleprobe"}, {"X-Api-Key", hKey}});
+        CHECK(auditSelf && auditSelf->status == 200);
+        if (auditSelf) {
+            auto body = json::parse(auditSelf->body);
+            CHECK_EQ(body["code"], 0);
+            CHECK(!body["data"].empty());  // 至少能看到自己那条心跳
+            bool onlySelf = true;
+            for (const auto& r : body["data"])
+                if (r["actor"] != "roleprobe") onlySelf = false;
+            CHECK(onlySelf);
+        }
+        // 管理者（zcode）看全量：能看到别人的行
+        std::string zcodeKey;
+        {
+            std::ifstream aj(tmp / "config" / "agents.json");
+            json j = json::parse(aj);
+            zcodeKey = j.at("zcode").get<std::string>();
+        }
+        auto auditMgr = cli.Get("/api/audit?limit=500",
+                                {{"X-Agent-Name", "zcode"}, {"X-Api-Key", zcodeKey}});
+        CHECK(auditMgr && auditMgr->status == 200);
+        if (auditMgr) {
+            auto body = json::parse(auditMgr->body);
+            CHECK_EQ(body["code"], 0);
+            bool sawHermes = false;
+            for (const auto& r : body["data"])
+                if (r["actor"] == "hermes") sawHermes = true;
+            CHECK(sawHermes);
+        }
 
         // ---- 加固项：HTTP 输入健壮性（异常参数必须返回 4xx 而非 500/崩溃）----
         auto badLimit = cli.Get("/api/knowledge?limit=abc",

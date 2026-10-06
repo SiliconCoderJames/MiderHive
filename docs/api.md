@@ -371,6 +371,10 @@ task:          pending → accepted | declined ; accepted → done
 每条记录含 `actor`（身份）、`action`（动作）、`target`（对象）、`detail`（内容摘要）、
 `created_at`（时间），完整可追溯。
 
+**可见性收敛**（与 `/api/messages` 同一原则）：审计 detail 会携带点对点消息的
+收件人、主题等元数据，全量开放等于绕过消息可见性——因此**管理者（zcode）看全量，
+普通 Agent 只能看到自己作为主体的行**。工作台（进程内）不受影响，始终全量。
+
 ## 5. 示例（curl）
 
 ```bash

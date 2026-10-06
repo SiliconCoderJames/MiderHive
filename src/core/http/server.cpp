@@ -915,6 +915,10 @@ void HttpServer::setupRoutes() {
     srv.Get("/api/audit", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;
+        // 可见性收敛（与 /api/messages 同一原则）：审计 detail 携带点对点消息的
+        // 收件人/主题等元数据，对普通 Agent 全量开放等于绕过消息可见性收敛——
+        // 管理者看全量，普通 Agent 只能看自己作为主体的行
+        const std::string viewer = p.isManager(actor) ? std::string() : actor;
         std::string a = req.has_param("actor") ? req.get_param_value("actor") : "";
         std::string act = req.has_param("action") ? req.get_param_value("action") : "";
         std::string since = req.has_param("since") ? req.get_param_value("since") : "";
@@ -922,7 +926,10 @@ void HttpServer::setupRoutes() {
         if (!parseLimit(req, res, 200, limit)) return;
         std::vector<AuditRecord> records;
         std::string err;
-        if (!p.auditList(a, act, since, limit, records, err)) { send(res, fail(500, err)); return; }
+        if (!p.auditList(a, act, since, limit, records, err, viewer)) {
+            send(res, fail(500, err));
+            return;
+        }
         json arr = json::array();
         for (const auto& r : records)
             arr.push_back({{"id", r.id},

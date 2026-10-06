@@ -1011,6 +1011,17 @@ bool Platform::messageGet(const std::string& uuid, Message& out, std::string& er
 bool Platform::messageReply(const std::string& sender, const std::string& parentUuid,
                             const std::string& body, Message& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    if (body.empty()) { err = "body is required"; return false; }
+    // 可见性/权限校验（此前整条链路都没有，任意 Agent 可回复任意 uuid，还会把
+    // 别人之间点对点消息翻成已读）：与 messageSetStatus 同一白名单——user、
+    // 管理者、父消息的发件人或收件人；广播（无收件人）人人可回。
+    Message parent;
+    if (!messages_.get(parentUuid, parent, err)) return false;
+    if (sender != "user" && !isManager(sender) && !parent.recipient.empty() &&
+        sender != parent.recipient && sender != parent.sender) {
+        err = "not allowed to reply to this message";
+        return false;
+    }
     // 审计作为服务事务内的一步（reply 自身把"写回复 + 标已读"绑在一个事务里）
     std::string auditErr;
     const std::string replyDetail = nlohmann::json{{"parent", parentUuid}}.dump();
@@ -1174,9 +1185,9 @@ bool Platform::usageSetBudget(const std::string& actor, int64_t budget, std::str
 
 bool Platform::auditList(const std::string& actorFilter, const std::string& actionFilter,
                          const std::string& sinceIso, int limit, std::vector<AuditRecord>& out,
-                         std::string& err) {
+                         std::string& err, const std::string& viewer) {
     std::lock_guard lock(mutex_);
-    return audit_.list(actorFilter, actionFilter, sinceIso, limit, out, err);
+    return audit_.list(actorFilter, actionFilter, sinceIso, limit, out, err, viewer);
 }
 
 // ---------------- 运维：维护 / 备份恢复 ----------------
