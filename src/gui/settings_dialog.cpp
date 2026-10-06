@@ -723,28 +723,36 @@ QWidget* SettingsDialog::buildUpdatePage() {
     lay->addStretch(1);
 
     updater_ = new ui::UpdateChecker(this);
-    connect(updater_, &ui::UpdateChecker::checking, this, [this] {
+    // 检查/下载期间禁用两个按钮（UpdateChecker 有单飞保护，这里同步界面状态，
+    // 让"点了没反应"变成"按钮本来就不可点"）
+    connect(updater_, &ui::UpdateChecker::checking, this, [this, checkBtn] {
         latest_->setText(i18n::trs("正在检查…", "Checking…"));
         installBtn_->setEnabled(false);
+        checkBtn->setEnabled(false);
     });
-    connect(updater_, &ui::UpdateChecker::upToDate, this, [this](const QString& cur) {
+    connect(updater_, &ui::UpdateChecker::upToDate, this, [this, checkBtn](const QString& cur) {
         pending_ = {};
         installBtn_->setEnabled(false);
+        checkBtn->setEnabled(true);
         skipBtn_->setVisible(false);
         latest_->setText(i18n::trs("已是最新版本。", "You're up to date.") + "  v" + cur);
     });
     connect(updater_, &ui::UpdateChecker::updateAvailable, this,
-            [this](const ui::UpdateInfo& info) {
+            [this, checkBtn](const ui::UpdateInfo& info) {
                 pending_ = info;
                 const bool skipped = ui::UpdateChecker::isSkippedVersion(info.version);
                 latest_->setText(i18n::trs("发现新版本 ", "New version available ") + "v" +
                                  info.version +
                                  (skipped ? i18n::trs("（此前被跳过）", " (previously skipped)") : ""));
                 installBtn_->setEnabled(ui::UpdateChecker::isInstalledCopy());
+                checkBtn->setEnabled(true);
                 skipBtn_->setVisible(true);
             });
-    connect(updater_, &ui::UpdateChecker::failed, this, [this](const QString& why) {
+    connect(updater_, &ui::UpdateChecker::failed, this, [this, checkBtn](const QString& why) {
         progress_->setVisible(false);
+        checkBtn->setEnabled(true);
+        // 下载失败后允许重试同一版本（检查按钮同样恢复）
+        installBtn_->setEnabled(pending_.valid() && ui::UpdateChecker::isInstalledCopy());
         latest_->setText(i18n::trs("更新失败：", "Update failed: ") + why);
     });
     connect(updater_, &ui::UpdateChecker::downloadProgress, this,

@@ -71,6 +71,8 @@ public:
 
     void check();                                       // 拉清单并比对版本
     void downloadAndInstall(const UpdateInfo& info);    // 下载 → 校验 → 安装 → 退出
+    // 检查或下载是否正在进行（设置页据此禁用按钮；重入会被忽略并留痕）
+    bool busy() const { return inFlight_; }
 
 signals:
     void checking();
@@ -95,6 +97,13 @@ private:
     int dlAttempt_ = 0;
     int dlTries_ = 0;
     qint64 dlGot_ = 0;
+    // 单飞保护：同实例重复触发（双击按钮、设置页与弹窗并发）此前会并发写同一个
+    // 按版本固定的临时 MSI（Qt 的文件共享模式允许第二个句柄），产出损坏文件并被
+    // 误报"可能被篡改"。检查与下载全程置位，到任一终态信号复位。
+    bool inFlight_ = false;
+    // 下载写盘失败（磁盘满/配额/被锁）：网络层一切正常，必须在写盘处如实失败，
+    // 否则截断的文件一路走到 SHA256 被误诊为"可能被篡改"
+    bool dlWriteFailed_ = false;
 };
 
 }  // namespace ui

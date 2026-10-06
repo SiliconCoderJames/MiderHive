@@ -117,7 +117,14 @@ void stripMarkOfTheWeb(const QString& path) {
 
 }  // namespace
 
-UpdateChecker::UpdateChecker(QObject* parent) : QObject(parent) {}
+UpdateChecker::UpdateChecker(QObject* parent) : QObject(parent) {
+    // 单飞保护的复位点：到任一终态即结束（checking/verifying/downloadProgress 是中间态）
+    auto endFlight = [this] { inFlight_ = false; };
+    connect(this, &UpdateChecker::failed, this, endFlight);
+    connect(this, &UpdateChecker::upToDate, this, endFlight);
+    connect(this, &UpdateChecker::updateAvailable, this, endFlight);
+    connect(this, &UpdateChecker::installing, this, endFlight);
+}
 
 bool UpdateChecker::autoCheckEnabled() {
     QSettings s;
@@ -186,6 +193,11 @@ bool UpdateChecker::isInstalledCopy() {
 }
 
 void UpdateChecker::check() {
+    if (inFlight_) {
+        trace("check() ignored: another check/download is in flight");
+        return;
+    }
+    inFlight_ = true;
     emit checking();
     trace(QString("check() start, url=%1").arg(manifestUrl().toString()));
     fetchManifest(1);
@@ -235,7 +247,6 @@ void UpdateChecker::fetchManifest(int attempt) {
         info.portableUrl = QUrl(portable.value("url").toString());
         info.portableSha256 = portable.value("sha256").toString().toLower();
 
-        markChecked();
         const QString current = QString::fromLatin1(ah::kPlatformVersion);
         trace(QString("manifest bytes=%1 version='%2' msi='%3' sha=%4chars current='%5' valid=%6 newer=%7")
                   .arg(raw.size())
@@ -245,9 +256,12 @@ void UpdateChecker::fetchManifest(int attempt) {
                   .arg(info.valid() ? 1 : 0)
                   .arg(ah::isNewerVersion(info.version.toStdString(), current.toStdString()) ? 1 : 0));
         if (!info.valid()) {
+            // 坏清单不算"检查过"：markChecked 提前会把自动检查抑制 24 小时
+            //（发布侧 latest.json 打错字段，用户就一天收不到任何提示）
             emit failed(i18n::trs("更新清单缺少必要字段", "manifest is missing required fields"));
             return;
         }
+        markChecked();  // 只有清单有效才算检查过（网络失败路径同样不记，语义一致）
         if (ah::isNewerVersion(info.version.toStdString(), current.toStdString()))
             emit updateAvailable(info);
         else
@@ -269,6 +283,10 @@ static QString withTagCaseSwapped(const QString& url) {
 }
 
 void UpdateChecker::downloadAndInstall(const UpdateInfo& info) {
+    if (inFlight_) {
+        trace("downloadAndInstall() ignored: another check/download is in flight");
+        return;
+    }
     if (!isInstalledCopy()) {
         // 便携版：装 MSI 会在系统里多出一份，交给用户自己选
         emit failed(i18n::trs("便携版请到下载页手动更新（避免装出第二份）",
@@ -279,6 +297,9 @@ void UpdateChecker::downloadAndInstall(const UpdateInfo& info) {
         emit failed(i18n::trs("清单里没有可用的安装包信息", "manifest has no usable installer entry"));
         return;
     }
+    inFlight_ = true;
+    // 复用 checking 信号：设置页收到即禁用检查/下载按钮，下载期间无法重复触发
+    emit checking();
     // 候选地址顺序：直连 GitHub → 用户自定义镜像 → 公共镜像（仅在允许时）
     dlInfo_ = info;
     dlPath_ = tempMsiPath(info.version);
@@ -334,6 +355,7 @@ void UpdateChecker::startAttempt() {
         return;
     }
     dlGot_ = have;
+    dlWriteFailed_ = false;
     if (total > 0) emit downloadProgress(dlGot_, total);
     // 服务器忽略 Range 而返回 200 时，续传会拼出脏文件——发现即截断重写
     connect(reply, &QNetworkReply::metaDataChanged, this, [this, reply, out, have] {
@@ -345,23 +367,41 @@ void UpdateChecker::startAttempt() {
         }
     });
     connect(reply, &QNetworkReply::readyRead, this, [this, reply, out] {
+        if (dlWriteFailed_) return;  // 已决定失败，等 finished 收尾
         const QByteArray chunk = reply->readAll();
-        out->write(chunk);
+        // 写盘失败必须当场如实失败（abort 触发 finished 走统一收尾）：磁盘满时
+        // 网络层一切正常，不检查的话短文件一路走到 SHA256，被误诊"可能被篡改"
+        if (out->write(chunk) < 0) {
+            dlWriteFailed_ = true;
+            trace(QString("download write failed at %1 bytes: %2")
+                      .arg(dlGot_)
+                      .arg(out->errorString()));
+            reply->abort();
+            return;
+        }
         dlGot_ += chunk.size();
         if (dlInfo_.msiSize > 0) emit downloadProgress(dlGot_, dlInfo_.msiSize);
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, out] {
-        out->write(reply->readAll());
+        // 收尾段写盘同样要检查（缓冲里可能还有最后一段）
+        if (!dlWriteFailed_ && out->write(reply->readAll()) < 0) dlWriteFailed_ = true;
         out->close();
         out->deleteLater();
+        reply->deleteLater();
+        if (dlWriteFailed_) {
+            dlWriteFailed_ = false;
+            QFile::remove(dlPath_);  // 清掉截断的半成品
+            emit failed(i18n::trs("下载内容写盘失败（磁盘空间不足或文件被占用？），已清理半成品。",
+                                  "Writing the download failed (disk full or file locked?); the "
+                                  "partial file was removed."));
+            return;
+        }
         const QString usedUrl = dlUrls_.at(dlUrlIdx_);
         if (reply->error() == QNetworkReply::NoError) {
-            reply->deleteLater();
             verifyAndInstall(dlInfo_, dlPath_);
             return;
         }
         const QString why = reply->errorString();
-        reply->deleteLater();
         trace(QString("download try %1 failed (%2): %3").arg(dlTries_).arg(usedUrl).arg(why));
         if (dlAttempt_ < kAssetAttempts) {  // 同一地址再试（续传，只补差额）
             QTimer::singleShot(backoffMs(dlAttempt_), this, [this] { startAttempt(); });
