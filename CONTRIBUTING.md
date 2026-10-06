@@ -171,6 +171,12 @@ Builds, stages, self-checks, then produces the MSI (with ICE validation), the po
 publish a GitHub Release using `release/RELEASE_NOTES-<version>.md` as the release body, so write
 that file before tagging.
 
+Before cutting a release, run the full-tree audit workflow once (`.zcode/workflows/release-audit.dwf.ts`,
+available in ZCode as the saved workflow `release-audit`): nine areas are read in parallel, every
+candidate finding is independently confirmed or refuted, and you get a Chinese report with
+path:line evidence and a fix roadmap. 1.2.2 was shipped entirely out of its first run — it is
+cheap insurance against shipping the kind of latent defects that release fixed.
+
 ## License
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE), the
