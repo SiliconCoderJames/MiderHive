@@ -922,12 +922,21 @@ static void test_integrations_generate() {
         CHECK_EQ(srv["env"]["MIDERHIVE_AGENT_KEY"].get<std::string>(), "k1");
         CHECK(cursor ? srv.contains("args") : !srv.contains("args"));
     }
-    // TOML：字面量字符串（反斜杠不转义）；双引号基本字符串会让 config.toml 解析失败
+    // TOML：基本字符串（双引号）。反斜杠按 TOML 语义双写为字面反斜杠；此前用
+    // 单引号字面量字符串——它不支持 '' 转义，值含单引号时整份 config.toml 解析失败
     const std::string winExe = "C:\\Qt\\6.8.3\\bin\\miderhive-mcp.exe";
     const std::string toml = generateConfig("codex", winExe, "a1", "k1");
     CHECK(toml.find("[mcp_servers.miderhive]") != std::string::npos);
-    CHECK(toml.find("command = '" + winExe + "'") != std::string::npos);
-    CHECK(toml.find("command = \"") == std::string::npos);
+    CHECK(toml.find("command = \"C:\\\\Qt\\\\6.8.3\\\\bin\\\\miderhive-mcp.exe\"") !=
+          std::string::npos);
+    // 含单引号的名字也能安全表达（此前会生成非法 TOML）
+    const std::string tomlQuote = generateConfig("codex", winExe, "O'Brien", "k'1");
+    CHECK(tomlQuote.find("MIDERHIVE_AGENT_NAME = \"O'Brien\"") != std::string::npos);
+    CHECK(tomlQuote.find("MIDERHIVE_AGENT_KEY = \"k'1\"") != std::string::npos);
+    // cliCommand 的名字/密钥加引号：& 等 cmd.exe 元字符不能变成命令分隔符
+    const std::string cc =
+        cliCommand("claude-code", winExe, "R&D", "k1");
+    CHECK(cc.find("-e MIDERHIVE_AGENT_NAME=\"R&D\"") != std::string::npos);
     // DSH：密钥必须落在 env 块（DSH 会清洗子进程环境中的 *KEY*/*TOKEN*）
     const std::string dsh = generateConfig("dsh", winExe, "d1", "k1");
     CHECK(dsh.find("- insert:") != std::string::npos);
@@ -1003,6 +1012,53 @@ static void test_integrations_write() {
         CHECK(first != std::string::npos);
         CHECK(txt.find("[mcp_servers.miderhive]", first + 1) == std::string::npos);
         CHECK(txt.find("mcp2.exe") != std::string::npos);
+    }
+
+    // TOML 非规范形状：miderhive 已被 [mcp_servers] 内联表占用时拒绝追加——
+    // 硬追加会构成 TOML 重定义冲突，整份 config.toml 拒载。原文件一字未改。
+    {
+        const std::string tomlPath = (tmp / ".codex/config.toml").string();
+        const std::string nonCanonical =
+            "[mcp_servers]\nmiderhive = { command = \"x\" }\n\n[other]\nkey = 1\n";
+        writeFileUtf8(tomlPath, nonCanonical);
+        r = writeConfigUnderRoot(tmp.string(), "codex", exe, "x3", "k3");
+        CHECK(!r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(tomlPath, txt));
+        CHECK(txt == nonCanonical);
+    }
+
+    // Hermes 父键带 flow 值（mcp_servers: {}）：缩进块插在 flow 值后面是结构性
+    // 非法 YAML（宽容与严格解析器都拒载）。形状没把握就拒绝，原文件不动。
+    {
+        const std::string hermesPath = (tmp / "hermes/config.yaml").string();
+        const std::string flowShape = "model:\n  default: t\n\nmcp_servers: {}\n\ntts:\n  enabled: true\n";
+        writeFileUtf8(hermesPath, flowShape);
+        r = writeConfigUnderRoot(tmp.string(), "hermes", exe, "h-flow", "k1");
+        CHECK(!r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(hermesPath, txt));
+        CHECK(txt == flowShape);
+        // 清掉污染现场，让后面"Hermes 新建"的用例从干净状态开始
+        fs::remove(hermesPath);
+    }
+
+    // 备份失败必须中止写入：.miderhive.bak 位置放一个**非空目录**——remove 删不掉
+    // （目录非空）、copy_file 也进不去，备份必败。此前错误码被吞、界面谎称"已备份"，
+    // 用户被无备份覆盖还以为有安全网。
+    {
+        const std::string cursorPath = (tmp / ".cursor/mcp.json").string();
+        const std::string before = "{\"mcpServers\":{}}";
+        writeFileUtf8(cursorPath, before);
+        fs::remove(cursorPath + ".miderhive.bak");  // 前面用例留下的 .bak 是普通文件，先清掉
+        fs::create_directories(cursorPath + ".miderhive.bak");
+        writeFileUtf8(cursorPath + ".miderhive.bak/keep.txt", "x");  // 非空：remove 必败
+        r = writeConfigUnderRoot(tmp.string(), "cursor", exe, "cbk", "k1");
+        CHECK(!r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(cursorPath, txt));
+        CHECK(txt == before);  // 原文件一字未改
+        fs::remove_all(cursorPath + ".miderhive.bak");
     }
 
     // DSH 补丁：顶层裸 "[]" 摘掉后追加；重复写入替换整块

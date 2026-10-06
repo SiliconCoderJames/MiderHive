@@ -96,19 +96,32 @@ inline std::string yamlQuote(const std::string& v) {
     return out;
 }
 
+// TOML 基本字符串（双引号）：反斜杠与双引号必须转义，控制字符不允许裸出现。
+// 此前 TOML 分支复用 yamlQuote——TOML 的**字面量字符串**（单引号）不支持 ''
+// 转义，名字/路径含单引号（如 O'Brien）会生成整份解析失败的 config.toml。
+inline std::string tomlQuote(const std::string& v) {
+    std::string out = "\"";
+    for (char c : v) {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    out += "\"";
+    return out;
+}
+
 // 生成该工具的接入配置片段。command 为 miderhive-mcp 可执行文件完整路径。
 inline std::string generateConfig(const std::string& id, const std::string& command,
                                   const std::string& agentName, const std::string& agentKey) {
     std::ostringstream o;
     switch (formatOf(id)) {
         case Format::TomlCodex:
-            // 必须用 TOML 字面量字符串（单引号）：基本字符串里 '\Q' 是非法转义，
-            // 而 Windows 路径全是反斜杠——双引号包裹会让整份 config.toml 解析失败。
+            // TOML 基本字符串（双引号）：反斜杠必须双写（\\ 在 TOML 里是字面反斜杠，
+            // 单个 \Q 才是非法转义），引号与含单引号的值也都能安全表达。
             o << "[mcp_servers.miderhive]\n"
-              << "command = " << yamlQuote(command) << "\n"
+              << "command = " << tomlQuote(command) << "\n"
               << "args = []\n"
-              << "env = { MIDERHIVE_AGENT_NAME = " << yamlQuote(agentName)
-              << ", MIDERHIVE_AGENT_KEY = " << yamlQuote(agentKey) << " }\n";
+              << "env = { MIDERHIVE_AGENT_NAME = " << tomlQuote(agentName)
+              << ", MIDERHIVE_AGENT_KEY = " << tomlQuote(agentKey) << " }\n";
             return o.str();
         case Format::DshPatchYaml:
             // DSH 会清洗子进程环境（名字含 KEY/TOKEN/SECRET 的一律删除），
@@ -170,17 +183,30 @@ inline std::string generateConfig(const std::string& id, const std::string& comm
 }
 
 // 有可替代配置文件写法的手工命令（复制给用户；claude-code 另有 .mcp.json 文件路线）。
+// 名字与密钥一律加引号：值里出现 & | ^ " 等 cmd.exe 元字符时，不加引号的拼装会被
+// 当成命令分隔符——名字含 & 时，提示用户粘贴的命令会在 cmd.exe 里执行名字中携带
+// 的后续内容。
+inline std::string cmdQuote(const std::string& v) {
+    std::string out = "\"";
+    for (char c : v) {
+        if (c == '"') out += '\\';
+        out += c;
+    }
+    out += "\"";
+    return out;
+}
+
 inline std::string cliCommand(const std::string& id, const std::string& command,
                               const std::string& agentName, const std::string& agentKey) {
     if (id == "claude-code")
         return "claude mcp add miderhive \\\n"
-               "  -e MIDERHIVE_AGENT_NAME=" + agentName +
-               " \\\n  -e MIDERHIVE_AGENT_KEY=" + agentKey +
+               "  -e MIDERHIVE_AGENT_NAME=" + cmdQuote(agentName) +
+               " \\\n  -e MIDERHIVE_AGENT_KEY=" + cmdQuote(agentKey) +
                " \\\n  -- \"" + command + "\"";
     if (id == "droid")
         return "droid mcp add miderhive \"" + command +
-               "\" \\\n  --env MIDERHIVE_AGENT_NAME=" + agentName +
-               " --env MIDERHIVE_AGENT_KEY=" + agentKey;
+               "\" \\\n  --env MIDERHIVE_AGENT_NAME=" + cmdQuote(agentName) +
+               " --env MIDERHIVE_AGENT_KEY=" + cmdQuote(agentKey);
     return "";
 }
 
@@ -354,12 +380,26 @@ inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
 
     std::vector<std::string> lines = splitLines(text);
 
-    // 1) 顶层父键（允许行尾注释）
+    // 1) 顶层父键（允许行尾注释）。前缀匹配后必须确认剩余部分为空或注释——
+    //    否则 "mcp_servers: {}"（flow 值）或 "mcp_servers_foo:" 这类形状会被误认成父键：
+    //    前者会在 flow 值下面插缩进块（结构性非法 YAML，整份拒载），后者是别的键。
     int parent = -1;
     for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
         const std::string& l = lines[i];
         if (indentOf(l) != 0) continue;
-        if (l.compare(0, parentKey.size(), parentKey) == 0) { parent = i; break; }
+        if (l.compare(0, parentKey.size(), parentKey) != 0) continue;
+        const std::string tail = trimCopy(l.substr(parentKey.size()));
+        if (!tail.empty() && tail[0] != '#') {
+            // 命中字面但形状没把握（flow 值、别的键名恰好以它为前缀）——按
+            // "形状没把握就拒绝"契约给出可执行的下一步，绝不部分写入
+            whyZh = "该 YAML 的 " + parentKey + " 行带有内联值（如 {}），形状无法安全合并，请手工粘贴。";
+            whyEn = "The " + parentKey +
+                    " line in this YAML carries an inline value (e.g. {}); I cannot merge it "
+                    "safely — please paste manually.";
+            return false;
+        }
+        parent = i;
+        break;
     }
 
     if (parent < 0) {
@@ -491,13 +531,19 @@ inline bool writeFileUtf8(const std::string& path, const std::string& text) {
 }
 
 // 覆盖前留一份 .miderhive.bak（单份、可预测，不堆目录）。
-inline void backupFile(const std::string& path) {
+// 返回 false = 备份失败：调用方必须中止写入。"原文件已备份"是用户敢让工具动手
+// 改配置的前提——此前 remove/copy_file 的错误码全部被吞、成功文案无条件宣称
+// 已备份，备份失败时用户被无备份覆盖却被告知有安全网。bak 为只读/被锁/目录时
+// 可真实发生。
+inline bool backupFile(const std::string& path) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    if (!fs::exists(path)) return;
+    if (!fs::exists(path)) return true;  // 没有原文件就不存在"覆盖丢内容"
     const std::string bak = path + ".miderhive.bak";
     fs::remove(bak, ec);
+    ec.clear();
     fs::copy_file(path, bak, fs::copy_options::overwrite_existing, ec);
+    return !ec;
 }
 
 // ---------------- 写入 ----------------
@@ -580,6 +626,26 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
         for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
             if (lines[i].compare(0, marker.size(), marker) == 0) { at = i; break; }
         }
+        // 追加前拒绝"本工具无法安全合并"的既有形状：[mcp_servers] 表内的 inline
+        // table / 点号键已经占用了 miderhive 这个键，此时追加整张
+        // [mcp_servers.miderhive] 表会构成 TOML 重定义冲突——整份 config.toml
+        // 拒载（实测 tomllib 报 Cannot declare twice）。形状没把握就不写。
+        if (at < 0 && hasFile) {
+            for (const auto& l : lines) {
+                const std::string t = trimCopy(l);
+                if (t == "[mcp_servers]" ||
+                    t.find("mcp_servers.miderhive") != std::string::npos) {
+                    return makeResult(
+                        false,
+                        "现有 config.toml 用了本工具无法安全合并的写法（[mcp_servers] 内联表"
+                        "或 mcp_servers.miderhive 点号键），请手工粘贴，避免整份文件解析失败。",
+                        "The existing config.toml uses a shape I cannot merge safely "
+                        "(an inline table under [mcp_servers] or a dotted "
+                        "mcp_servers.miderhive key) — please paste manually to avoid "
+                        "breaking the whole file.");
+                }
+            }
+        }
         if (at >= 0) {
             int end = static_cast<int>(lines.size());
             for (int i = at + 1; i < static_cast<int>(lines.size()); ++i) {
@@ -612,15 +678,24 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
                           "This tool has no config file that can be written automatically.");
     }
 
-    backupFile(path);
+    // 备份失败必须中止：不能在安全网缺失时覆盖用户配置（成功文案宣称的
+    // ".miderhive.bak" 必须是真的）
+    if (hasFile && !backupFile(path)) {
+        return makeResult(false,
+                          "备份原文件失败（.miderhive.bak 无法写入），为避免丢失原内容没有写入：" +
+                              path,
+                          "Backing up the original failed (.miderhive.bak is not writable); "
+                          "nothing was written, to avoid losing it: " +
+                              path);
+    }
     // 原文件是 CRLF 就写回 CRLF：整份被改成 LF 会产生满屏 diff（配置常进版本库）
     if (wasCrlf) out = toCrlf(out);
     if (!writeFileUtf8(path, out)) {
         return makeResult(false,
-                          "写入失败：" + path + "（可能有权限或文件被占用）。原文件已回退到 .miderhive.bak。",
+                          "写入失败：" + path + "（可能有权限或文件被占用）。原文件未被改动，副本在 .miderhive.bak。",
                           "Write failed: " + path +
-                              " (permissions, or the file is locked). The original is kept at "
-                              ".miderhive.bak.");
+                              " (permissions, or the file is locked). The original is untouched; "
+                              "a copy is at .miderhive.bak.");
     }
     const char* zh = hasFile ? "已写入 %1（原文件备份为 .miderhive.bak）。" : "已创建 %1。";
     const char* en = hasFile ? "Written to %1 (original backed up as .miderhive.bak)."
