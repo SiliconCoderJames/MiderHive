@@ -179,8 +179,17 @@ bool MessageService::reply(const std::string& parentUuid, const std::string& sen
 }
 bool MessageService::setStatus(const std::string& uuid, const std::string& newStatus, Message& out,
                                std::string& err, const InTxStep& inTx) {
+    // 读旧状态 → 校验状态机 → 写新状态，全过程包在同一个 BEGIN IMMEDIATE 里：
+    // 校验若基于事务外的旧读取，GUI 与 platformd 双进程并发流转同一条消息时，
+    // 后提交的一方会按"过期校验"落库非法流转（如 accepted 之后改成 declined，
+    // 而 declined 是终态，再无 API 能修复）。单进程有 Platform 大锁，跨进程只有
+    // 事务能兜住（同族加固见 memory_service::set / knowledge_service::addVersion）。
+    if (!db_.beginImmediate(err)) return false;
     Message cur;
-    if (!get(uuid, cur, err)) return false;
+    if (!get(uuid, cur, err)) {
+        db_.rollback();
+        return false;
+    }
 
     bool allowed = false;
     if (cur.kind == "task") {
@@ -193,25 +202,23 @@ bool MessageService::setStatus(const std::string& uuid, const std::string& newSt
     }
     if (!allowed) {
         err = "illegal status transition: " + cur.kind + " " + cur.status + " -> " + newStatus;
+        db_.rollback();
         return false;
     }
-    // 同 send：事务必须包住 UPDATE 本身
-    if (inTx && !db_.beginImmediate(err)) return false;
     if (!db_.query("UPDATE messages SET status=? WHERE uuid=?",
                    [&](Stmt& st) { st.bind(1, newStatus); st.bind(2, uuid); }, nullptr, err)) {
-        if (inTx) db_.rollback();
+        db_.rollback();
         return false;
     }
-    if (inTx) {
-        if (!inTx()) {
-            db_.rollback();
-            if (err.empty()) err = "in-transaction step failed";
-            return false;
-        }
-        if (!db_.commit(err)) {
-            db_.rollback();
-            return false;
-        }
+    // 提交前的最后一步（调用方注入，例如审计留痕）：失败即整体回滚
+    if (inTx && !inTx()) {
+        db_.rollback();
+        if (err.empty()) err = "in-transaction step failed";
+        return false;
+    }
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
     }
     return get(uuid, out, err);
 }

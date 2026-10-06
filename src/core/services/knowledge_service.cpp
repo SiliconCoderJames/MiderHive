@@ -50,10 +50,13 @@ bool KnowledgeService::ensureVecTableFor(size_t dim, std::string& err) {
 bool KnowledgeService::initVectorStore(std::string& err) {
     // 旧库迁移：老版本只有一张固定维度的 knowledge_vec；现在按维度分表。
     // vec0 虚拟表不支持 ALTER/RENAME，只能"新建-复制-删除"。
-    // 幂等且并发安全（工作台与 platformd 可能同时首启）：
-    //   * INSERT 带 NOT IN 守卫——两边都复制也不会重复；
-    //   * DROP 用 IF EXISTS——对方先删了也不再报错；
-    //   * 复制后旧表随即删除，后续启动 hasLegacy 恒为 false。
+    // 并发安全的关键：探测、复制、删除三步包在同一个 BEGIN IMMEDIATE 里，且
+    // **事务内重查**旧表是否还在——工作台与 platformd 同时首启时，若只靠事务外的
+    // 一次探测，A 进程完成 DROP 后 B 进程的复制会撞 "no such table"（普通 SQL
+    // 错误，busy_timeout 救不了），整个 bootstrap 直接失败。事务内重查后，旧表
+    // 已消失 = 对方已迁完 = 本进程幂等成功。
+    //   * INSERT 带 NOT IN 守卫——即便交错挤进"复制后、删除前"的间隙也不会重复；
+    //   * DROP 用 IF EXISTS；复制后旧表随即删除，后续启动不再进入迁移分支。
     bool hasLegacy = false;
     if (!db_.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_vec'",
                    nullptr,
@@ -61,14 +64,34 @@ bool KnowledgeService::initVectorStore(std::string& err) {
         return false;
     if (hasLegacy) {
         const size_t builtinDim = static_cast<size_t>(embedder_.dim());
+        // 建目标表放在事务外：幂等 DDL，理由同 create()（vec0 在事务内建表行为未知）
         if (!ensureVecTableFor(builtinDim, err)) return false;
-        if (!db_.execScript("INSERT INTO " + vecTableFor(builtinDim) +
-                                "(entry_id, embedding) SELECT entry_id, embedding FROM knowledge_vec "
-                                "WHERE entry_id NOT IN (SELECT entry_id FROM " +
-                                vecTableFor(builtinDim) + ")",
-                            err))
+        if (!db_.beginImmediate(err)) return false;
+        // 事务内重查：可能已被并发的另一个进程迁移完成
+        bool stillThere = false;
+        if (!db_.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_vec'",
+                       nullptr, [&](Stmt&) { stillThere = true; }, err)) {
+            db_.rollback();
             return false;
-        if (!db_.execScript("DROP TABLE IF EXISTS knowledge_vec", err)) return false;
+        }
+        if (stillThere) {
+            if (!db_.execScript("INSERT INTO " + vecTableFor(builtinDim) +
+                                    "(entry_id, embedding) SELECT entry_id, embedding FROM knowledge_vec "
+                                    "WHERE entry_id NOT IN (SELECT entry_id FROM " +
+                                    vecTableFor(builtinDim) + ")",
+                                err)) {
+                db_.rollback();
+                return false;
+            }
+            if (!db_.execScript("DROP TABLE IF EXISTS knowledge_vec", err)) {
+                db_.rollback();
+                return false;
+            }
+        }
+        if (!db_.commit(err)) {
+            db_.rollback();
+            return false;
+        }
     }
     return ensureVecTableFor(static_cast<size_t>(embedder_.dim()), err);
 }
