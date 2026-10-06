@@ -380,9 +380,11 @@ inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
 
     std::vector<std::string> lines = splitLines(text);
 
-    // 1) 顶层父键（允许行尾注释）。前缀匹配后必须确认剩余部分为空或注释——
-    //    否则 "mcp_servers: {}"（flow 值）或 "mcp_servers_foo:" 这类形状会被误认成父键：
-    //    前者会在 flow 值下面插缩进块（结构性非法 YAML，整份拒载），后者是别的键。
+    // 1) 顶层父键（允许行尾注释）。前缀匹配后必须确认剩余部分为空、注释，或**单独的
+    //    锚点/标签**（"mcp_servers: &base"——锚点作用于下面的整块映射，块内容照常合并，
+    //    fuzz 用例锁定该语义）。其余内联值拒绝：{} / [..] 是 flow 值，下面再挂缩进块是
+    //    结构性非法 YAML；普通标量（"mcp_servers: foo"）与缩进块语义冲突；带值的锚点
+    //    （&a {} / &a v）同理。命中即按"形状没把握就拒绝"契约给出可执行的下一步。
     int parent = -1;
     for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
         const std::string& l = lines[i];
@@ -390,13 +392,17 @@ inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
         if (l.compare(0, parentKey.size(), parentKey) != 0) continue;
         const std::string tail = trimCopy(l.substr(parentKey.size()));
         if (!tail.empty() && tail[0] != '#') {
-            // 命中字面但形状没把握（flow 值、别的键名恰好以它为前缀）——按
-            // "形状没把握就拒绝"契约给出可执行的下一步，绝不部分写入
-            whyZh = "该 YAML 的 " + parentKey + " 行带有内联值（如 {}），形状无法安全合并，请手工粘贴。";
-            whyEn = "The " + parentKey +
-                    " line in this YAML carries an inline value (e.g. {}); I cannot merge it "
-                    "safely — please paste manually.";
-            return false;
+            const bool anchorish = tail[0] == '&' || tail[0] == '!';
+            const size_t sp = tail.find_first_of(" \t");
+            const bool justAnchor = anchorish && sp == std::string::npos;
+            if (!justAnchor) {
+                whyZh = "该 YAML 的 " + parentKey +
+                        " 行带有内联值（如 {}），形状无法安全合并，请手工粘贴。";
+                whyEn = "The " + parentKey +
+                        " line in this YAML carries an inline value (e.g. {}); I cannot merge it "
+                        "safely — please paste manually.";
+                return false;
+            }
         }
         parent = i;
         break;
