@@ -55,6 +55,10 @@ private:
     QVector<Row> rows_;
     int current_ = -1;
     QString issuedKey_;      // 本次签发的明文密钥（只留到对话框关闭）
+    QString issuedName_;     // 与 issuedKey_ 绑定的签发名：密钥按名哈希存库，
+                             // 写配置时必须用签发时的名字——用户签发后改名输入框，
+                             // 写出 (新名, 旧钥) 会让该 Agent 永远 401（welcome_dialog
+                             // 有 issuedName_ 正确先例，此前这里漏了）
     QString actionNotice_;   // 上一次操作的结果文案（与连接状态分行显示）
 
     QListWidget* list_ = nullptr;

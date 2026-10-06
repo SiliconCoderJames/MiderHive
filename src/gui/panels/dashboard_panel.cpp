@@ -1,5 +1,7 @@
 #include "dashboard_panel.h"
 
+#include "../integrations.h"
+
 #include <algorithm>
 
 #include <QApplication>
@@ -444,7 +446,7 @@ void DashboardPanel::showAgentActions(const QString& name, bool online) {
     menu.addSeparator();
     // 离线 Agent 的出路：把接入命令直接复制走，用户不用去翻文档凑参数
     menu.addAction(i18n::trs("复制接入命令", "Copy connect command"), this, [this, name] {
-        const QString exe = QCoreApplication::applicationDirPath() + "/miderhive-mcp.exe";
+        const QString exe = ui::integrations::mcpExePath();  // 非 Windows 无 .exe 后缀
         // 命令本体是固定 CLI 语法，只有密钥占位符是给用户看的中文，按语言切换
         const QString cmd = i18n::trs("claude mcp add miderhive --env MIDERHIVE_AGENT_NAME=%1 "
                                       "--env MIDERHIVE_AGENT_KEY=<该 Agent 的密钥> -- \"%2\"",

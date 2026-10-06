@@ -255,6 +255,17 @@ inline QString configDir(const QString& id) {
     return p.isEmpty() ? QString() : QFileInfo(p).absolutePath();
 }
 
+// 本机 miderhive-mcp 可执行文件路径（配置片段与"复制接入命令"共用）。
+// 非 Windows 构建没有 .exe 后缀——此前 welcome/dashboard 硬编码 .exe，会把
+// 不存在的路径写进用户配置，工具重启后拉不起 MCP（connect_dialog 有正确先例）。
+inline QString mcpExePath() {
+#ifdef Q_OS_WIN
+    return QCoreApplication::applicationDirPath() + "/miderhive-mcp.exe";
+#else
+    return QCoreApplication::applicationDirPath() + "/miderhive-mcp";
+#endif
+}
+
 // ---------------- 片段生成与写入（全部委托 core）----------------
 
 inline QString generateConfig(const QString& id, const QString& command, const QString& agentName,

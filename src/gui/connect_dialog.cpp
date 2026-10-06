@@ -275,6 +275,7 @@ void ConnectDialog::provision() {
         return;
     }
     issuedKey_ = QString::fromStdString(key);
+    issuedName_ = name;  // 密钥按这个名字的哈希存库；之后写入配置一律用它
 
     // 2) 生成该工具真正能用的片段（JSON / TOML / YAML / 环境变量 / 指令块）
     const QString exe = mcpExePath();
@@ -326,9 +327,10 @@ void ConnectDialog::provision() {
 void ConnectDialog::writeToConfig() {
     if (current_ < 0 || issuedKey_.isEmpty()) return;
     const ui::integrations::Tool& t = rows_[current_].tool;
-    const QString name = nameEdit_->text().trimmed();
+    // 用签发时的名字，不是输入框的当前文本：密钥是按签发名的哈希存的，
+    // 改名后写入 (新名, 旧钥) 会让该工具永远鉴权失败
     const ui::integrations::ApplyResult r = ui::integrations::applyConfig(
-        t.id, mcpExePath(), name, issuedKey_);
+        t.id, mcpExePath(), issuedName_, issuedKey_);
     actionNotice_ = i18n::trs(r.detailZh, r.detailEn);
     if (r.ok) actionNotice_ += "\n" + i18n::trs("下一步：完全退出并重启该工具。",
                                                 "Next: fully quit and restart that tool.");
@@ -359,7 +361,7 @@ void ConnectDialog::writeProjectConfig() {
     if (dir.isEmpty()) return;  // 用户取消：不算失败，也不留任何提示噪音
     s.setValue("ui/lastProjectDir", dir);
 
-    const QString name = nameEdit_->text().trimmed();
+    const QString name = issuedName_;  // 同 writeToConfig：写配置必须配签发名
     const ui::integrations::ApplyResult r =
         ui::integrations::applyProjectConfig(dir, mcpExePath(), name, issuedKey_);
     actionNotice_ = i18n::trs(r.detailZh, r.detailEn);

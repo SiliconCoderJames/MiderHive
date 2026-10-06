@@ -251,7 +251,9 @@ WelcomeDialog::WelcomeDialog(ah::Platform& platform, QWidget* parent)
 }
 
 void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
-    current_ = tool;
+    // 注意：current_（写配置的目标工具）只有在名字与签发都成功后才切换——
+    // 此前它在本行就被改写，校验失败提前 return 时旧凭据残留，之后点
+    // 「自动写入」会把上一个工具签发的身份写进新工具的配置文件
     for (auto* b : toolBtns_) b->setChecked(b->property("toolId") == tool.id);
 
     // 1) 本地检测：PATH 或常见安装路径（检测不到不影响配置——先装后配同样可行）
@@ -275,11 +277,12 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
                              ui::humanError(QString::fromStdString(err)));
         return;
     }
+    current_ = tool;  // 到这里（名字合法 + 密钥签发成功）才切换写入目标，凭据与工具保持配对
     issuedKey_ = QString::fromStdString(apiKey);
     issuedName_ = agentName;
 
     // 3) 生成该工具的接入片段并展示 + 复制（JSON / TOML / YAML / 环境变量 / 指令块）
-    const QString exe = QCoreApplication::applicationDirPath() + "/miderhive-mcp.exe";
+    const QString exe = ui::integrations::mcpExePath();
     configView_->setPlainText(
         ui::integrations::generateConfig(tool.id, exe, agentName, issuedKey_));
     QApplication::clipboard()->setText(configView_->toPlainText());
@@ -323,7 +326,7 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
 
 void WelcomeDialog::writeToConfig() {
     if (issuedKey_.isEmpty()) return;
-    const QString exe = QCoreApplication::applicationDirPath() + "/miderhive-mcp.exe";
+    const QString exe = ui::integrations::mcpExePath();
     const ui::integrations::ApplyResult r =
         ui::integrations::applyConfig(current_.id, exe, issuedName_, issuedKey_);
     stepsLabel_->setText(i18n::trs(r.detailZh, r.detailEn));
