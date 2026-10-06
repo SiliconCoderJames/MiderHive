@@ -1940,6 +1940,71 @@ static void test_backup_restore_failure_paths() {
     fs::remove_all(tmp, ec);
 }
 
+// 审计留痕的字段真实性：target 必须指认得了被操作的对象，detail 里的 version 必须是
+// 实际写入的版本号。此前三类写路径（knowledge.create / message.send / error.report）
+// 的审计行 target 恒为空串——服务在提交后才回填 out，审计却在服务事务内执行；
+// knowledge.version.add 与 memory.set 的审计 detail 里 version 恒为调用方默认值 1
+// （detail 字符串在服务调用前就拼好了）。留痕存在却指认不了对象，违背"身份+时间+
+// 动作+对象"的硬契约。
+static void test_audit_target_and_version() {
+    fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_audit_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+    ah::Platform p(tmp.string());
+    std::string err;
+    CHECK(p.bootstrap(err));
+
+    ah::KnowledgeEntry k;
+    CHECK(p.knowledgeCreate("hermes", "audit probe", "content v1", {}, "", {}, "", k, err));
+    CHECK(p.knowledgeAddVersion("hermes", k.uuid, "", "content v2", {}, "", k, err));
+    CHECK_EQ(k.version, 2);
+
+    ah::Message m;
+    CHECK(p.messageSend("note", "hermes", "claude", "audit subject", "audit body", m, err));
+    ah::ErrorReport e;
+    CHECK(p.errorReport("hermes", "warning", "test", "audit error", "detail", "", e, err));
+    ah::MemoryEntry mem;
+    CHECK(p.memorySet("hermes", "project", "audit_key", "v1", 0, mem, err));
+    CHECK(p.memorySet("hermes", "project", "audit_key", "v2", mem.version, mem, err));
+    CHECK_EQ(mem.version, 2);
+
+    std::vector<ah::AuditRecord> recs;
+    CHECK(p.auditList("", "", "", 1000, recs, err));
+    auto findLatest = [&recs](const std::string& action) -> const ah::AuditRecord* {
+        const ah::AuditRecord* hit = nullptr;
+        for (const auto& r : recs)
+            if (r.action == action && (!hit || r.id > hit->id)) hit = &r;
+        return hit;
+    };
+
+    const ah::AuditRecord* kc = findLatest("knowledge.create");
+    CHECK(kc != nullptr);
+    if (kc) CHECK_EQ(kc->target, k.uuid);
+    const ah::AuditRecord* ms = findLatest("message.send");
+    CHECK(ms != nullptr);
+    if (ms) CHECK_EQ(ms->target, m.uuid);
+    const ah::AuditRecord* er = findLatest("error.report");
+    CHECK(er != nullptr);
+    if (er) CHECK_EQ(er->target, e.uuid);
+
+    const ah::AuditRecord* va = findLatest("knowledge.version.add");
+    CHECK(va != nullptr);
+    if (va) {
+        auto j = nlohmann::json::parse(va->detail, nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) CHECK_EQ(j.value("version", 0), 2);
+    }
+    const ah::AuditRecord* mset = findLatest("memory.set");
+    CHECK(mset != nullptr);
+    if (mset) {
+        auto j = nlohmann::json::parse(mset->detail, nullptr, false);
+        CHECK(!j.is_discarded());
+        if (!j.is_discarded()) CHECK_EQ(j.value("version", 0), 2);
+    }
+    p.shutdown();
+    std::error_code ec;
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -1964,6 +2029,7 @@ int main() {
     run("fts_rebuild_legacy", test_fts_rebuild_legacy);
     run("semantic_tag_pushdown", test_semantic_tag_pushdown);
     run("heartbeat_audit", test_heartbeat_audit);
+    run("audit_target_and_version", test_audit_target_and_version);
     run("schema_version_gate", test_schema_version_gate);
     run("embed_provider_binding", test_embed_provider_binding);
     run("embedding_dim_tracking", test_embedding_dim_tracking);

@@ -28,6 +28,9 @@ bool ErrorService::report(const std::string& reporter, const std::string& severi
         if (inTx) db_.rollback();
         return false;
     }
+    // 先把 uuid 填进 out 再执行事务内最后一步：调用方（审计）以 out.uuid 作留痕对象
+    // （范式与 memory_service::set 一致；末尾的 get() 仍会回填完整字段）
+    out.uuid = uuid;
     if (inTx) {
         if (!inTx()) {
             db_.rollback();

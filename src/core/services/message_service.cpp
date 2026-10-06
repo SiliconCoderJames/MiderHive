@@ -14,6 +14,7 @@ bool MessageService::send(const std::string& kind, const std::string& sender,
     }
     std::string uuid = uuid4();
     std::string initialStatus = kind == "task" ? "pending" : "unread";
+    const std::string createdAt = nowIso();
     // inTx 要求"写入 + 该步"原子，因此事务必须**包住 INSERT 本身**：
     // 先 INSERT 再 BEGIN 是错的——INSERT 在自动提交下已经落库，之后的 rollback 是空操作。
     if (inTx && !db_.beginImmediate(err)) return false;
@@ -34,12 +35,23 @@ bool MessageService::send(const std::string& kind, const std::string& sender,
                 st.bind(6, body);
                 st.bind(7, initialStatus);
                 st.bind(8, parentUuid);
-                st.bind(9, nowIso());
+                st.bind(9, createdAt);
             },
             nullptr, err)) {
         if (inTx) db_.rollback();
         return false;
     }
+    // 先填好返回值再执行事务内最后一步：调用方（审计）以 out.uuid 作留痕对象
+    // （范式与 memory_service::set 一致；末尾的 get() 仍会回填完整字段）
+    out.uuid = uuid;
+    out.kind = kind;
+    out.sender = sender;
+    out.recipient = recipient;
+    out.subject = subject;
+    out.body = body;
+    out.status = initialStatus;
+    out.parent_uuid = parentUuid;
+    out.created_at = createdAt;
     if (inTx) {
         if (!inTx()) {
             db_.rollback();

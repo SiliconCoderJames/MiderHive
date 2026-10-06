@@ -158,6 +158,9 @@ bool KnowledgeService::create(const std::string& author, const std::string& titl
     // 提交前的最后一步（调用方注入，例如审计留痕）：失败即整体回滚。
     // 必须落在服务自己的事务里——SQLite 没有真正的嵌套事务（内层 COMMIT 会提交
     // 最外层），所以在服务提交之后再补一步，rollback 就是空操作了。
+    // 先把 uuid 填进 out 再执行该步：调用方（审计）以 out.uuid 作留痕对象
+    // （范式与 memory_service::set 一致；提交后的 latest() 仍会回填完整字段）
+    out.uuid = uuid;
     if (inTx && !inTx()) {
         db_.rollback();
         if (err.empty()) err = "in-transaction step failed";
@@ -365,7 +368,11 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
         db_.rollback();
         return false;
     }
-    // 提交前的最后一步（调用方注入，例如审计留痕）：失败即整体回滚
+    // 提交前的最后一步（调用方注入，例如审计留痕）：失败即整体回滚。
+    // 先把 uuid 与新版本号填进 out 再执行该步：调用方（审计）需要两者作留痕
+    // （latest() 在提交后仍会回填完整字段）
+    out.uuid = uuid;
+    out.version = oldVersion + 1;
     if (inTx && !inTx()) {
         db_.rollback();
         if (err.empty()) err = "in-transaction step failed";

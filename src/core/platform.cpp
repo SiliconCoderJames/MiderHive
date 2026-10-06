@@ -648,11 +648,13 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
     if (provider.empty()) provider = embedder_->name();
     if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
     // 审计作为服务事务内的一步（InTxStep）：SQLite 无嵌套事务，不能在服务外面再包 BEGIN
+    // detail 必须在 lambda 内构造：审计执行时服务才刚把新版本号填进 out（在调用前拼串
+    // 拿到的是调用方传入的旧对象，version 恒为默认值——审计留痕就此失真）
     std::string auditErr;
-    const std::string versionDetail = nlohmann::json{{"version", out.version}}.dump();
     const bool ok = knowledge_.addVersion(
         author, uuid, newTitle, newContent, vec, provider, out, err, [&]() {
-            return auditStep(author, "knowledge.version.add", uuid, versionDetail, auditErr);
+            return auditStep(author, "knowledge.version.add", uuid,
+                             nlohmann::json{{"version", out.version}}.dump(), auditErr);
         });
     if (!ok && err.empty()) err = auditErr;
     return ok;
@@ -878,11 +880,13 @@ bool Platform::memorySet(const std::string& author, const std::string& section,
         return false;
     }
     // 审计作为服务事务内的一步：记忆写入与留痕同生同灭（SQLite 无嵌套事务）
+    // detail 必须在 lambda 内构造：服务在事务内最后一步之前才把 out.version 填好，
+    // 在调用前拼串拿到的是默认值 1（memory.remove 的 versions_removed 同理已如此）
     std::string auditErr;
-    const std::string memDetail =
-        nlohmann::json{{"version", out.version}, {"value", value}}.dump();
     const bool ok = memory_.set(author, section, key, value, baseVersion, out, err, [&]() {
-        return auditStep(author, "memory.set", section + "/" + key, memDetail, auditErr);
+        return auditStep(author, "memory.set", section + "/" + key,
+                         nlohmann::json{{"version", out.version}, {"value", value}}.dump(),
+                         auditErr);
     });
     if (!ok && err.empty()) err = auditErr;
     return ok;
