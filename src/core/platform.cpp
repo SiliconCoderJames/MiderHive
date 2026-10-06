@@ -600,8 +600,14 @@ bool Platform::knowledgeCreate(const std::string& author, const std::string& tit
         if (t.size() > 64) { err = "tag too long (<=64)"; return false; }
     bool provided = false;
     std::vector<float> vec = resolveEmbedding(content, &embedding, provided);
+    // 自带向量必须声明来源模型：空串一旦回落成内置标签，任何模型的向量都能顶着同一个
+    // 假登记混进对应维度表——"维度↔provider 绑定"防线被整体架空，之后如实声明的
+    // 合法写入反而被这条假登记拒绝。MCP 侧同规则：给了 embedding 就必须说清是谁算的。
+    if (provided && embeddingProvider.empty()) {
+        err = "embedder is required when embedding is provided";
+        return false;
+    }
     std::string provider = provided ? embeddingProvider : embedder_->name();
-    if (provider.empty()) provider = embedder_->name();
     if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
     std::string tagsJson = nlohmann::json(tags).dump();
     // 审计作为服务事务内的一步：知识条目与它的留痕要么都在、要么都不在。
@@ -644,8 +650,12 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
     if (newContent.empty()) { err = "new content is required"; return false; }
     bool provided = false;
     std::vector<float> vec = resolveEmbedding(newContent, &embedding, provided);
+    // 自带向量必须声明来源模型（理由同 knowledgeCreate：空串兜底会架空维度绑定）
+    if (provided && embeddingProvider.empty()) {
+        err = "embedder is required when embedding is provided";
+        return false;
+    }
     std::string provider = provided ? embeddingProvider : embedder_->name();
-    if (provider.empty()) provider = embedder_->name();
     if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
     // 审计作为服务事务内的一步（InTxStep）：SQLite 无嵌套事务，不能在服务外面再包 BEGIN
     // detail 必须在 lambda 内构造：审计执行时服务才刚把新版本号填进 out（在调用前拼串

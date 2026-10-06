@@ -277,9 +277,16 @@ void attachEmbedding(const json& args, json& body) {
                 throw std::runtime_error("embedding must be an array of numbers only");
         body["embedding"] = *emb;
     }
-    // provider 名参与"维度↔provider 绑定"：同维度换模型会被平台按 400 拒绝，
-    // 所以给了 embedding 就必须能说清是哪个模型算的（缺省 agent，与 CLI 一致）。
-    if (body.contains("embedding")) body["embedder"] = sopt(args, "embedder", "agent");
+    // provider 名参与"维度↔provider 绑定"：给了 embedding 就必须能说清是哪个模型算的。
+    // 此前缺省 "agent" 会让不同模型的向量顶着同一个假标签混进同一张维度表；
+    // 现在缺省为空、直接报错，逼调用方如实声明（平台侧同规则，双保险）。
+    if (body.contains("embedding")) {
+        const std::string embedder = sopt(args, "embedder");
+        if (embedder.empty())
+            throw std::runtime_error("embedder is required when embedding is provided "
+                                     "(name the model that produced the vector)");
+        body["embedder"] = embedder;
+    }
 }
 
 // ---------------- 工具表 ----------------
@@ -418,7 +425,7 @@ std::vector<ToolDef> buildTools() {
                             {"embedding", prop("array", "optional vector you computed (64..4096 "
                                                         "numbers); omit to use the built-in embedder")},
                             {"embedder", prop("string", "name of the model that produced "
-                                                        "`embedding` (default \"agent\")")}},
+                                                        "`embedding`; REQUIRED when embedding is given")}},
                            {"title", "content"}),
                  [](const json& a) {
                      json body = {{"title", sarg(a, "title")}, {"content", sarg(a, "content")}};
@@ -500,7 +507,7 @@ std::vector<ToolDef> buildTools() {
                             {"embedding", prop("array", "optional new vector (64..4096 numbers); "
                                                         "omit to re-embed with the built-in embedder")},
                             {"embedder", prop("string", "name of the model that produced "
-                                                        "`embedding` (default \"agent\")")}},
+                                                        "`embedding`; REQUIRED when embedding is given")}},
                            {"uuid", "content"}),
                  [](const json& a) {
                      json body = {{"content", sarg(a, "content")}, {"title", sopt(a, "title")}};

@@ -258,6 +258,7 @@ int usage() {
         "  memory history --section S --key K                        查看某条记忆的历史版本\n"
         "  knowledge add   --title T --content C [--tag A]... [--category C] [--embedding-file J]\n"
         "                  [--embed-url U [--embed-model M]] [--embedder NAME]\n"
+        "                  （提供 embedding 时必须以 --embedder 或 --embed-model 声明来源模型）\n"
         "  knowledge search --q Q [--mode keyword|semantic] [--tag A]\n"
         "                  [--embed-url U [--embed-model M]]   语义检索用同一模型算查询向量\n"
         "  knowledge get   --uuid U                    knowledge versions --uuid U\n"
@@ -453,10 +454,16 @@ int main(int argc, char** argv) {
                 }
                 body["embedding"] = json::parse(vecJson);
                 // provider 标签决定"维度↔provider"绑定的身份：优先显式 --embedder，
-                // 否则用模型名，最后才是泛化标签
-                body["embedder"] = a.opts.count("embedder")
-                                       ? a.opts["embedder"]
-                                       : (emodel.empty() ? std::string("agent") : emodel);
+                // 否则用模型名；两者都没有就报错——平台侧已拒绝无身份的向量，
+                // 与其落到一个泛化假标签上混表，不如在入口就要求说清
+                if (a.opts.count("embedder"))
+                    body["embedder"] = a.opts["embedder"];
+                else if (!emodel.empty())
+                    body["embedder"] = emodel;
+                else {
+                    std::cerr << "提供 embedding 时必须声明来源模型：--embedder NAME（或 --embed-model）\n";
+                    return 2;
+                }
             } else if (a.opts.count("embedding-file")) {
                 std::ifstream in(a.opts["embedding-file"]);
                 json emb;
@@ -469,9 +476,14 @@ int main(int argc, char** argv) {
                     return 2;
                 }
                 body["embedding"] = emb;
-                // 用 --embedder 给向量命名模型：同维度不同模型会被平台拒绝（防止混写污染）
-                body["embedder"] = a.opts.count("embedder") ? a.opts["embedder"]
-                                                            : std::string("agent");
+                // 用 --embedder 给向量命名模型：同维度不同模型会被平台拒绝（防止混写污染）；
+                // 无身份的向量平台侧已直接拒绝，这里提前报错给出可执行的下一步
+                if (a.opts.count("embedder")) {
+                    body["embedder"] = a.opts["embedder"];
+                } else {
+                    std::cerr << "提供 embedding 时必须用 --embedder NAME 声明来源模型\n";
+                    return 2;
+                }
             }
         } else if (sub == "search") {
             method = "POST"; path = "/api/knowledge/search";

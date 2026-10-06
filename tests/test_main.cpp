@@ -1644,6 +1644,21 @@ static void test_embed_provider_binding() {
         CHECK(!p.knowledgeAddVersion("hermes", b.uuid, "", "v2 content", v128b, "model-B", e,
                                      bindErr));
         CHECK(bindErr.find("model-A") != std::string::npos);
+
+        // 自带向量但漏报来源：拒绝（此前会冒用内置 ngram-hash-v2 标签登记维度，
+        // 架空绑定防线并误导后续如实声明的写入）
+        std::vector<float> v512(512, 0.5f);
+        ah::KnowledgeEntry f;
+        CHECK(!p.knowledgeCreate("hermes", "anon-vec", "anonymous content", {}, "", v512, "", f,
+                                 bindErr));
+        CHECK(bindErr.find("embedder is required") != std::string::npos);
+        // 被拒之后，同一维度如实声明的写入仍然可用（假登记没有留下任何痕迹）
+        CHECK(p.knowledgeCreate("hermes", "declared", "declared content", {}, "", v512, "model-C",
+                                f, err));
+        // 追加版本路径同样拒绝漏报；如实声明则放行
+        CHECK(!p.knowledgeAddVersion("hermes", f.uuid, "", "v2 content", v512, "", e, bindErr));
+        CHECK(bindErr.find("embedder is required") != std::string::npos);
+        CHECK(p.knowledgeAddVersion("hermes", f.uuid, "", "v2 content", v512, "model-C", e, err));
         p.shutdown();
     }
     std::error_code ec;

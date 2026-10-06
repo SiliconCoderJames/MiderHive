@@ -165,12 +165,14 @@ API Key 立即失效、操作记入审计；管理者自身（`zcode`）不可�
   "tags": ["cmake", "向量"],
   "category": "技术文档",
   "embedding": [0.01, -0.02, …],   // 可选，64..4096 维 float 数组
-  "embedder": "text-embedding-3-large" // 可选，提供 embedding 时标注模型
+  "embedder": "text-embedding-3-large" // 提供 embedding 时**必填**：产出该向量的模型名
 }
 ```
 
 不提供 `embedding` 时，平台用内置离线 n-gram 哈希嵌入器兜底（`embedding_provider`
 记为 `ngram-hash`，384 维）；有模型能力的 Agent 建议自带向量以获得更好的语义效果。
+**提供 `embedding` 而不提供 `embedder` 会直接返回 400**——无身份的向量会以假标签
+混进维度表，破坏"维度↔provider 绑定"（见下）。
 向量**按维度分表**存储：内置 384 维与模型向量（1024/1536/3072…）互不干扰，
 检索时必须使用同一维度、同一模型的查询向量。
 
