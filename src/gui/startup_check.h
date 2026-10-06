@@ -16,7 +16,7 @@ namespace ui::startup {
 
 struct Issue {
     QString code;  // 稳定标识（诊断/测试用）：home_not_writable / agents_json_unreadable /
-                   // port_occupied / db_file_missing / db_file_empty
+                   // port_occupied / db_file_missing / db_file_empty / db_restore_leftover
     QString text;  // 已按当前语言格式化的问题说明（含下一步建议）
 };
 
@@ -95,6 +95,23 @@ inline QVector<Issue> preflight(const QString& home, int port, const QString& db
                                         "restore from the latest backup if you need the old data.")
                                   .arg(dbPath)});
         }
+    }
+
+    // 5) 恢复留底但主库缺失：上次"恢复备份"在改名留底之后、拷入备份之前被打断。
+    //    bootstrap 会自动把留底改回去（自愈）；这里兜底覆盖自愈也失败的场景
+    //    （比如留底文件被占用），给用户指路而不是让他面对一个"空空如也"的蜂巢。
+    if (!dbPath.isEmpty() && !QFileInfo::exists(dbPath) &&
+        QFileInfo::exists(dbPath + ".before-restore")) {
+        issues.push_back({"db_restore_leftover",
+                          i18n::trs("检测到上次恢复备份被中断的现场：主库缺失，但恢复前的原始库"
+                                    "完好地保留在 %1.before-restore。\n下一步：重启工作台会自动把它恢复为当前数据库；"
+                                    "若仍失败，请关闭占用该文件的程序（如同步盘/杀毒软件）后再试。",
+                                    "The previous restore was interrupted: the main database is "
+                                    "missing, but the pre-restore original is intact at "
+                                    "%1.before-restore.\nNext: restarting the workbench restores it "
+                                    "automatically; if that still fails, close whatever locks the "
+                                    "file (sync tool/antivirus) and try again.")
+                              .arg(dbPath)});
     }
     return issues;
 }

@@ -1951,6 +1951,29 @@ static void test_backup_restore_failure_paths() {
                  1);
         CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(2));
     }
+
+    // ---- 5. 恢复中断自愈：主库缺失 + 留底还在 → 启动时自动改回，绝不静默新建空库 ----
+    // 真实故障形态：恢复流程在"关库 → 留底改名"与"拷入备份"之间被杀。此时磁盘上
+    // 没有 platform.db，SQLite 默认 CREATE 会静默新建空库照常运行——数据看似全丢，
+    // 留底却完好地躺在旁边。bootstrap 必须在开库前发现并把它改回去。
+    {
+        const fs::path leftover = tmp / "platform.db.before-restore";
+        // 制造中断现场：把当前库改名留底（正是恢复流程第二步之后、被杀瞬间的状态）
+        fs::rename(dbPath, leftover);
+        CHECK(fs::exists(leftover));
+        CHECK(!fs::exists(dbPath));
+        ah::Platform p(tmp.string());
+        std::string err;
+        CHECK(p.bootstrap(err));  // 自愈：留底改回原名后正常打开
+        // 恢复回来的就是留底那份库：第 4 节断言过的标记条目仍在（若被静默新建
+        // 空库顶替，这里会是 0）
+        CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE title='恢复前写入'"),
+                 1);
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(2));
+        // 留底已消费（改回原名），不再是悬空文件
+        CHECK(!fs::exists(leftover));
+        p.shutdown();
+    }
     std::error_code ec;
     fs::remove_all(tmp, ec);
 }

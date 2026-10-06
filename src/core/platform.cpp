@@ -171,13 +171,48 @@ bool Platform::bootstrap(std::string& err) {
 
     std::error_code ec;
     fs::create_directories(fs::path(home_dir_) / "config", ec);
+    if (ec) { err = "cannot create home dir: " + ec.message(); return false; }
+    ec.clear();
     fs::create_directories(fs::path(home_dir_) / "backup", ec);
     if (ec) { err = "cannot create home dir: " + ec.message(); return false; }
 
     std::string dbPath = (fs::path(home_dir_) / "platform.db").string();
+    // 上次"恢复备份"中途被打断的自愈：恢复流程会先把当前库改名留底
+    // （platform.db.before-restore）再拷入备份，进程若在这两步之间被杀，
+    // 磁盘上就没有 platform.db 了——SQLite 默认带 CREATE 标志，不处理就会
+    // 静默新建空库照常运行，用户数据看似"全没了"（留底其实完好地躺在旁边）。
+    // 开库前把留底改回原名：一次原子 rename，回到恢复开始前的状态。
+    bool recoveredRestore = false;
+    {
+        const fs::path livePath(dbPath);
+        const fs::path prePath(dbPath + ".before-restore");
+        if (!fs::exists(livePath) && fs::exists(prePath)) {
+            // 同名的陈旧 -wal/-shm 属于被打断前的旧库，与改回来的库不匹配
+            // （SQLite 对不匹配的 WAL 会拒绝打开），先一并清掉
+            std::error_code recEc;
+            fs::remove(dbPath + "-wal", recEc);
+            fs::remove(dbPath + "-shm", recEc);
+            recEc.clear();
+            fs::rename(prePath, livePath, recEc);
+            if (recEc) {
+                err = "interrupted restore leftover found (" + prePath.string() +
+                      ") but renaming it back failed: " + recEc.message();
+                return false;
+            }
+            recoveredRestore = true;
+        }
+    }
     if (!db_.open(dbPath, err)) return false;
     // 库初始化（版本门/schema/迁移/vec/FTS/默认设置）——与恢复备份路径共用同一套
     if (!initStoreLocked(err)) return false;
+    if (recoveredRestore) {
+        // IGNORE: 自愈留痕尽力而为——留痕写不进去时启动照常，库已回到恢复前状态。
+        std::string recAuditErr;
+        audit_.log("system", "system.restore_recovered", "platform.db",
+                   nlohmann::json{{"hint", "an interrupted restore was rolled back on startup"}}
+                       .dump(),
+                   recAuditErr);
+    }
 
     // 主密钥：环境变量优先，其次运行期生成的文件；绝不写入源码
     std::string masterKey;
@@ -193,6 +228,14 @@ bool Platform::bootstrap(std::string& err) {
             std::ofstream out(keyPath, std::ios::trunc);
             out << masterKey << "\n";
             out.close();
+            // 落盘必须成功：这份明钥只在内存里活这一次，写失败则重启后无人能取到
+            // （注册 Agent、管理端点全都要读这个文件），且每次重启都会静默换钥。
+            // 与 persistAgentKey 同一契约：如实失败，绝不静默。
+            if (!out) {
+                err = "cannot write master key file: " + keyPath +
+                      " (disk full, permissions, or antivirus lock?)";
+                return false;
+            }
         }
     }
     master_key_hash_ = sha256Hex(masterKey);
