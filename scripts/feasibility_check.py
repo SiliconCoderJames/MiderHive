@@ -272,7 +272,9 @@ def s11_token_budget(agents):
 
 
 def s12_audit(agents):
-    st, body = http("GET", "/api/audit?limit=500", agent="claude", key=agents["claude"]["key"])
+    # 全量视角属管理者：普通 Agent 只能看到自己作为主体的行（审计 detail 携带
+    # 点对点消息的收件人/主题，全量开放会绕过消息可见性——曾是一个越权读取面）
+    st, body = http("GET", "/api/audit?limit=500", agent="zcode", key=agents["zcode"]["key"])
     records = body.get("data") or []
     actors = {r["actor"] for r in records}
     actions = {r["action"] for r in records}
@@ -284,6 +286,12 @@ def s12_audit(agents):
     # 按 actor 过滤
     st, body = http("GET", "/api/audit?actor=codex&limit=500", agent="codex", key=agents["codex"]["key"])
     check("S12b 按身份过滤", all(r["actor"] == "codex" for r in (body.get("data") or [])))
+    # 可见性收敛：普通 Agent 不带 actor 过滤也只能看到自己的行
+    st, body = http("GET", "/api/audit?limit=500", agent="claude", key=agents["claude"]["key"])
+    own = body.get("data") or []
+    check("S12c 普通Agent只见自己的审计",
+          bool(own) and all(r["actor"] == "claude" for r in own),
+          "actors=%s" % ({r["actor"] for r in own} or "空"))
 
 
 def s13_broadcast(agents):
