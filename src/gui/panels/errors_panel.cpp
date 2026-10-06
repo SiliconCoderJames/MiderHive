@@ -95,25 +95,28 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
                            [this] { onManualReport(); });
     layout->addWidget(emptyState_);
 
-    connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) {
-        if (row < 0 || row >= static_cast<int>(errors_.size())) return;
-        const auto& e = errors_[static_cast<size_t>(row)];
-        infoLabel_->setText(i18n::trs("<b>%1</b> · 上报者: %2 · 来源: %3 · 状态: %4",
-                                      "<b>%1</b> · reporter: %2 · source: %3 · status: %4")
-                                .arg(QString::fromStdString(e.title).toHtmlEscaped())
-                                .arg(QString::fromStdString(e.reporter))
-                                .arg(QString::fromStdString(e.source))
-                                .arg(QString::fromStdString(e.status)));
-        QString text = QString::fromStdString(e.detail);
-        if (!e.stack_trace.empty())
-            text += i18n::trs("\n\n---- 堆栈 ----\n", "\n\n---- Stack trace ----\n") +
-                    QString::fromStdString(e.stack_trace);
-        if (!e.resolution_notes.empty())
-            text += i18n::trs("\n\n---- 解决记录（追加） ----\n",
-                              "\n\n---- Resolution notes (appended) ----\n") +
-                    QString::fromStdString(e.resolution_notes);
-        detail_->setPlainText(text);
-    });
+    connect(table_, &QTableWidget::cellClicked, this,
+            [this](int row, int) { showDetail(row); });
+}
+
+void ErrorsPanel::showDetail(int row) {
+    if (row < 0 || row >= static_cast<int>(errors_.size())) return;
+    const auto& e = errors_[static_cast<size_t>(row)];
+    infoLabel_->setText(i18n::trs("<b>%1</b> · 上报者: %2 · 来源: %3 · 状态: %4",
+                                  "<b>%1</b> · reporter: %2 · source: %3 · status: %4")
+                            .arg(QString::fromStdString(e.title).toHtmlEscaped())
+                            .arg(QString::fromStdString(e.reporter))
+                            .arg(QString::fromStdString(e.source))
+                            .arg(QString::fromStdString(e.status)));
+    QString text = QString::fromStdString(e.detail);
+    if (!e.stack_trace.empty())
+        text += i18n::trs("\n\n---- 堆栈 ----\n", "\n\n---- Stack trace ----\n") +
+                QString::fromStdString(e.stack_trace);
+    if (!e.resolution_notes.empty())
+        text += i18n::trs("\n\n---- 解决记录（追加） ----\n",
+                          "\n\n---- Resolution notes (appended) ----\n") +
+                QString::fromStdString(e.resolution_notes);
+    detail_->setPlainText(text);
 }
 
 void ErrorsPanel::refresh() {
@@ -123,8 +126,19 @@ void ErrorsPanel::refresh() {
     std::string severity = severityCombo_->currentIndex() > 0
                                ? severityCombo_->currentText().toStdString()
                                : "";
+    // 刷新前按 uuid 记住选中：行号在重建后不可靠——3 秒自动刷新 + 新错误插到
+    // 顶端会让同一行号指向另一条记录，"登记解决"此前会写到错误的条目上
+    QString prevUuid;
+    if (int row = table_->currentRow(); row >= 0 && row < static_cast<int>(errors_.size()))
+        prevUuid = QString::fromStdString(errors_[static_cast<size_t>(row)].uuid);
+
     std::string err;
-    platform_.errorList(status, severity, 200, errors_, err);
+    if (!platform_.errorList(status, severity, 200, errors_, err)) {
+        // 读失败必须如实提示：服务层失败前已把 errors_ 清空，不提示的话界面
+        // 会把读失败呈现成"暂无错误，一切正常 ✓"。保留上一轮表格不重建。
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+        return;
+    }
 
     table_->setRowCount(static_cast<int>(errors_.size()));
     for (size_t i = 0; i < errors_.size(); ++i) {
@@ -146,6 +160,19 @@ void ErrorsPanel::refresh() {
         }
     }
     fitTableColumns(table_, 1);  // 标题列吃剩余空间，避免窄列被截断 / 出现横向滚动条
+    // 恢复选中到同一条记录（范式与 skills_panel 一致），详情栏同步——程序化
+    // selectRow 不会触发 cellClicked
+    int restoreRow = -1;
+    if (!prevUuid.isEmpty())
+        for (size_t i = 0; i < errors_.size(); ++i)
+            if (QString::fromStdString(errors_[i].uuid) == prevUuid) {
+                restoreRow = static_cast<int>(i);
+                break;
+            }
+    if (restoreRow >= 0) {
+        table_->selectRow(restoreRow);
+        showDetail(restoreRow);
+    }
     emptyState_->setVisible(errors_.empty());
     splitter_->setVisible(!errors_.empty());
     applyTableFilter(table_, filterEdit_->text());  // 行已重建，重放即时过滤态
@@ -219,7 +246,9 @@ void ErrorsPanel::onManualReport() {
     auto* form = new QFormLayout(&dlg);
     auto* sev = new QComboBox(&dlg);
     sev->addItem(i18n::trs("提示 info", "info"), QString("info"));
-    sev->addItem(i18n::trs("警告 warn", "warn"), QString("warn"));
+    // data 必须是后端契约枚举 warning：此前写成 "warn"，platform 层归一化后
+    // 该错误入库为 error——在"警告"筛选下永远看不到自己刚上报的条目
+    sev->addItem(i18n::trs("警告 warning", "warning"), QString("warning"));
     sev->addItem(i18n::trs("严重 critical", "critical"), QString("critical"));
     auto* title = new QLineEdit(&dlg);
     title->setPlaceholderText(i18n::trs("一句话概括问题", "One-line summary"));

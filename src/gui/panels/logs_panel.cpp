@@ -92,7 +92,9 @@ void LogsPanel::refresh() {
     // 身份下拉（含全部身份 + user + 各 Agent）
     std::vector<ah::AgentInfo> agents;
     std::string err;
-    platform_.listAgents(agents, err);
+    // 身份下拉尽力而为：失败时下拉留空（审计列表照常刷新，失败由下方 auditList
+    // 统一提示），不额外弹 toast 刷屏
+    if (!platform_.listAgents(agents, err)) agents.clear();
     QString cur = agentCombo_->currentText();
     agentCombo_->blockSignals(true);
     agentCombo_->clear();
@@ -104,8 +106,19 @@ void LogsPanel::refresh() {
 
     std::string actor;
     if (agentCombo_->currentIndex() > 0) actor = agentCombo_->currentText().toStdString();
-    std::string since = sinceEdit_->date().toString("yyyy-MM-dd").toStdString() + "T00:00:00Z";
-    platform_.auditList(actor, "", since, 2000, records_, err);
+    // 起始日期的语义是"本地日界"（与下方按本地时区分组展示一致）：必须把本地
+    // 午夜换算成对应的 UTC 时刻——此前把本地午夜硬拼成 UTC 午夜，东八区下起始
+    // 日凌晨 8 小时的日志会被漏掉
+    const std::string since = QDateTime(sinceEdit_->date(), QTime(0, 0), Qt::LocalTime)
+                                  .toUTC()
+                                  .toString(Qt::ISODate)
+                                  .toStdString();
+    if (!platform_.auditList(actor, "", since, 2000, records_, err)) {
+        // 读失败如实提示：服务层失败前已清空 records_，不提示会把读失败呈现成
+        // "时间线为空"。保留上一轮时间线不重建。
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+        return;
+    }
 
     // 时间线分组
     tree_->clear();

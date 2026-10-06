@@ -69,7 +69,12 @@ MemoryPanel::MemoryPanel(ah::Platform& platform, QWidget* parent)
 
 void MemoryPanel::refresh() {
     std::string err;
-    platform_.memoryList("", entries_, err);
+    if (!platform_.memoryList("", entries_, err)) {
+        // 读失败如实提示：服务层失败前已清空 entries_，不提示会把读失败呈现
+        // 成"记忆条目 0"。保留上一轮内容不重建。
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+        return;
+    }
 
     // 头部：条目总数 + 最后更新时间（相对时间；文案接入双语）
     QString lastRaw;
@@ -173,7 +178,17 @@ void MemoryPanel::onEdit() {
     int baseVersion = 0;
     std::vector<ah::MemoryEntry> existing;
     std::string probeErr;
-    if (!keyName.empty() && platform_.memoryList(sectionName, existing, probeErr)) {
+    if (!keyName.empty()) {
+        // 探测失败不能静默降级成 baseVersion=0：那会整体跳过乐观并发校验，
+        // Agent 刚写的版本被静默顶替。如实失败让用户重试。
+        if (!platform_.memoryList(sectionName, existing, probeErr)) {
+            ui::Toast::show(this,
+                            i18n::trs("读取当前版本失败，未保存：",
+                                      "Couldn't read the current version; not saved: ") +
+                                ui::humanError(QString::fromStdString(probeErr)),
+                            false);
+            return;
+        }
         for (const auto& m : existing)
             if (m.key == keyName) baseVersion = m.version;
     }
@@ -183,7 +198,7 @@ void MemoryPanel::onEdit() {
     if (!platform_.memorySet("user", sectionName, keyName, value->toPlainText().toStdString(),
                              baseVersion, out, err)) {
         ui::Toast::show(this, i18n::trs("保存失败: %1", "Save failed: %1")
-                                  .arg(QString::fromStdString(err)),
+                                  .arg(ui::humanError(QString::fromStdString(err))),
                         false);
         return;
     }

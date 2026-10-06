@@ -128,7 +128,11 @@ void MessagesPanel::refresh() {
     if (statusCombo_->currentIndex() > 0) status = statusCombo_->currentText().toStdString();
 
     std::string err;
-    platform_.messageList("", kind, status, "", 200, messages_, err);
+    if (!platform_.messageList("", kind, status, "", 200, messages_, err)) {
+        // 读失败如实提示：失败前 messages_ 已被清空，不提示会呈现成"没有消息"
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+        return;
+    }
     renderChat();
 }
 

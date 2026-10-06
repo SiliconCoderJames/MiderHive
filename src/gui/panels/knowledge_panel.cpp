@@ -143,7 +143,11 @@ void KnowledgePanel::onSearch() {
     } else {
         ah::SearchMode mode =
             semanticCheck_->isChecked() ? ah::SearchMode::Semantic : ah::SearchMode::Keyword;
-        platform_.knowledgeSearch(query, mode, 50, tag, hits_, err);
+        if (!platform_.knowledgeSearch(query, mode, 50, tag, hits_, err)) {
+            // 读失败如实提示：失败前 hits_ 已被清空，不提示会呈现成"无结果"
+            ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+            return;
+        }
     }
 
     table_->setRowCount(static_cast<int>(hits_.size()));

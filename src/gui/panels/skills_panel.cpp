@@ -131,7 +131,8 @@ void SkillsPanel::refresh() {
     // 填充筛选下拉（保留当前选择）
     std::string err;
     std::vector<ah::SkillInfo> all;
-    platform_.skillList("", "", all, err);
+    // 筛选下拉尽力而为：失败时下拉留空（主列表失败由下方统一提示），不重复弹 toast
+    if (!platform_.skillList("", "", all, err)) all.clear();
     std::set<std::string> categories, owners;
     for (const auto& s : all) {
         if (!s.category.empty()) categories.insert(s.category);
@@ -157,11 +158,17 @@ void SkillsPanel::refresh() {
 
     std::string cat = categoryCombo_->currentText() == allItem ? "" : categoryCombo_->currentText().toStdString();
     std::string owner = ownerCombo_->currentText() == allItem ? "" : ownerCombo_->currentText().toStdString();
-    platform_.skillList(cat, owner, skills_, err);
+    if (!platform_.skillList(cat, owner, skills_, err)) {
+        // 读失败如实提示：失败前 skills_ 已被清空，不提示会呈现成"暂无技能"。
+        // 保留上一轮表格不重建。
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+        return;
+    }
 
     // 使用热度：统计每个技能的调用次数
     std::vector<ah::SkillInvocation> allInv;
-    platform_.skillInvocations("", 10000, allInv, err);
+    // 热度统计尽力而为：失败时置零展示（列表照常），但不再静默
+    if (!platform_.skillInvocations("", 10000, allInv, err)) allInv.clear();
     std::map<std::string, int> heat;
     for (const auto& i : allInv) ++heat[i.skill_name];
 

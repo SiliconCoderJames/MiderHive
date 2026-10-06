@@ -518,11 +518,13 @@ void MainWindow::checkOnboarding() {
             const auto* tool = ui::integrations::toolById(toolId);
             const QString toolName = tool ? i18n::trs(tool->nameZh, tool->nameEn) : toolId;
             // 欢迎记忆（作者=该 Agent，写入「项目档案」区）：先移除登记再弹窗，
-            // 避免模态框期间 3s 轮询重入造成重复弹窗/重复写入
+            // 避免模态框期间 3s 轮询重入造成重复弹窗/重复写入。
+            // 写失败必须如实上报：此前 (void) 吞掉返回值、登记照删、弹窗硬称
+            // "已写入"——一次瞬时的写锁冲突就让欢迎记忆永久丢失且无人知情。
             std::string merr;
             ah::MemoryEntry mout;
             const QString stamp = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm");
-            (void)platform_.memorySet(
+            const bool wrote = platform_.memorySet(
                 name.toStdString(), "project", ("welcome/" + toolId).toStdString(),
                 i18n::trs("%1 于 %2 首次接入 MiderHive",
                           "%1 joined MiderHive for the first time at %2")
@@ -536,6 +538,13 @@ void MainWindow::checkOnboarding() {
                           "%1 has joined MiderHive as \"%2\". A welcome memory entry was written "
                           "to User Memory → Project.")
                     .arg(toolName, name));
+            if (!wrote) {
+                // 登记已消费（不重试，避免无限弹窗），但失败要留痕
+                ui::Toast::show(this,
+                                i18n::trs("欢迎记忆写入失败：", "Failed to write the welcome memory: ") +
+                                    ui::humanError(QString::fromStdString(merr)),
+                                false);
+            }
             break;
         }
     }

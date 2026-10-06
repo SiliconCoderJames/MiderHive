@@ -26,6 +26,8 @@ private slots:
     void onManualReport();  // 手动上报一条错误（用户侧补录，与 Agent 上报同一条管道）
 
 private:
+    void showDetail(int row);  // 按行渲染右侧详情（点击与刷新恢复选中共用）
+
     QComboBox* statusCombo_ = nullptr;
     QComboBox* severityCombo_ = nullptr;
     QLabel* statusLabel_ = nullptr;     // 「状态:」工具条标签（语言切换需重译）
