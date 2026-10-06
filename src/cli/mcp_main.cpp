@@ -38,6 +38,7 @@
 #endif
 
 #include "core/types.h"
+#include "core/util.h"
 
 namespace fs = std::filesystem;
 using nlohmann::json;
@@ -46,9 +47,11 @@ namespace {
 
 // ---------------- 环境与身份 ----------------
 
+// Windows 下必须走 ah::envOr 的宽字符路径：std::getenv 拿到的是 ANSI 代码页
+// （中文系统为 GBK）字节，而平台全程 UTF-8——中文身份名会永远 401 或经主密钥
+// 自注册出乱码重复身份（详见 core/util.h 的说明）。这里只是单名包装。
 std::string envOr(const char* k, const std::string& dflt = "") {
-    const char* v = std::getenv(k);
-    return (v && *v) ? std::string(v) : dflt;
+    return ah::envOr({k}, dflt);
 }
 
 struct Identity {

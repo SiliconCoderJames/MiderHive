@@ -176,6 +176,28 @@ std::string readMasterKeyFromDisk() {
     return k;
 }
 
+// 连接端口：命令行 --port N 优先，其次环境变量链，最后 8787。
+// 此前帮助文本一直宣告 --port，代码却从未读取——多实例场景（第二实例必须换端口）
+// 下按帮助传参会被静默忽略、连到错误实例。端口非法立即退出 2，绝不静默忽略。
+std::string resolvePort(const Args& a) {
+    std::string port = a.gopts.count("port")
+                           ? a.gopts.at("port")
+                           : ah::envOr({"MIDERHIVE_PORT", "AGENTHIVE_PORT", "ZCODE_PLATFORM_PORT"},
+                                       "8787");
+    bool ok = !port.empty();
+    for (char c : port)
+        if (c < '0' || c > '9') ok = false;
+    if (ok) {
+        const long v = std::strtol(port.c_str(), nullptr, 10);
+        if (v < 1 || v > 65535) ok = false;
+    }
+    if (!ok) {
+        std::cerr << "invalid port: " << port << " (expected 1..65535, from --port or MIDERHIVE_PORT)\n";
+        std::exit(2);
+    }
+    return port;
+}
+
 struct Client {
     httplib::Client http;
     std::string name;
@@ -183,8 +205,7 @@ struct Client {
     std::string masterKey;
 
     explicit Client(const Args& a)
-        : http("http://127.0.0.1:" +
-               ah::envOr({"MIDERHIVE_PORT", "AGENTHIVE_PORT", "ZCODE_PLATFORM_PORT"}, "8787")),
+        : http("http://127.0.0.1:" + resolvePort(a)),
           name(a.gopts.count("name")
                    ? a.gopts.at("name")
                    : ah::envOr({"MIDERHIVE_AGENT_NAME", "AGENTHIVE_AGENT_NAME",
@@ -275,7 +296,10 @@ int usage() {
         "  usage daily    [--days N]                usage models（按模型累计）\n"
         "  usage summary                budget get / budget set --value N(主密钥)\n"
         "  audit          [--actor A] [--action A] [--limit N]\n";
-    return 0;
+    // 帮助文本经由"未知命令 / 未知子命令 / 缺必选参数"路径返回时，退出码必须是
+    // 非零（2，与 connect-snippet 的参数错误一致）——否则自动化脚本按 $?==0 把
+    // 打错的命令当成执行成功。无参数显式要帮助的路径单独 return 0。
+    return 2;
 }
 
 }  // namespace
@@ -319,7 +343,10 @@ int main(int argc, char** argv) {
     const std::string argv0 = argc > 0 ? (argv[0] ? argv[0] : "") : "";
     Args a = parseArgs(argc, argv);
 #endif
-    if (a.pos.empty()) return usage();
+    if (a.pos.empty()) {
+        usage();
+        return 0;  // 无参数 = 显式要帮助，不算错误
+    }
 
     const std::string cmd = a.pos[0];
 
