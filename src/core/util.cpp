@@ -141,6 +141,116 @@ std::string randomHex(int bytes) {
     return s;
 }
 
+namespace {
+// 标准 base64 解码（忽略空白）；非法输入返回空串。仅服务 rsaVerifySha256Pkcs1。
+std::string base64Decode(const std::string& in) {
+    auto val = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::string out;
+    out.reserve(in.size() / 4 * 3);
+    int acc = 0, bits = 0;
+    for (char c : in) {
+        if (c == '=' || c == '\r' || c == '\n' || c == ' ' || c == '\t') continue;
+        const int v = val(c);
+        if (v < 0) return {};
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out += static_cast<char>((acc >> bits) & 0xff);
+        }
+    }
+    return out;
+}
+}  // namespace
+
+bool rsaVerifySha256Pkcs1(const std::string& modulusHex, const std::string& exponentHex,
+                          const std::string& message, const std::string& signatureBase64) {
+#ifdef _WIN32
+    auto hexDecode = [](const std::string& hex) {
+        auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        std::string out;
+        if (hex.empty() || hex.size() % 2 != 0) return out;
+        for (size_t i = 0; i < hex.size(); i += 2) {
+            const int hi = nibble(hex[i]), lo = nibble(hex[i + 1]);
+            if (hi < 0 || lo < 0) return std::string();
+            out += static_cast<char>((hi << 4) | lo);
+        }
+        return out;
+    };
+    const std::string modulus = hexDecode(modulusHex);
+    const std::string exponent = hexDecode(exponentHex);
+    const std::string sig = base64Decode(signatureBase64);
+    if (modulus.empty() || exponent.empty() || sig.empty()) return false;
+
+    // BCRYPT_RSAKEY_BLOB（公钥）：Magic + BitLength + 三段长度，随后大端指数、大端模数
+    std::string blob(sizeof(BCRYPT_RSAKEY_BLOB), '\0');
+    auto putU32 = [&blob](size_t off, uint32_t v) {
+        blob[off] = static_cast<char>(v & 0xff);
+        blob[off + 1] = static_cast<char>((v >> 8) & 0xff);
+        blob[off + 2] = static_cast<char>((v >> 16) & 0xff);
+        blob[off + 3] = static_cast<char>((v >> 24) & 0xff);
+    };
+    putU32(0, BCRYPT_RSAPUBLIC_MAGIC);
+    putU32(4, static_cast<uint32_t>(modulus.size() * 8));
+    putU32(8, static_cast<uint32_t>(exponent.size()));
+    putU32(12, static_cast<uint32_t>(modulus.size()));
+    putU32(16, 0);  // 公钥无素数段
+    putU32(20, 0);
+    blob += exponent;
+    blob += modulus;
+
+    BCRYPT_ALG_HANDLE keyAlg = nullptr, hashAlg = nullptr;
+    BCRYPT_KEY_HANDLE key = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    uint8_t sha[32];
+    bool ok = false;
+    do {
+        if (BCryptOpenAlgorithmProvider(&keyAlg, BCRYPT_RSA_ALGORITHM, nullptr, 0) != 0) break;
+        if (BCryptImportKeyPair(keyAlg, nullptr, BCRYPT_RSAPUBLIC_BLOB, &key,
+                                reinterpret_cast<PUCHAR>(blob.data()),
+                                static_cast<ULONG>(blob.size()), 0) != 0) break;
+        if (BCryptOpenAlgorithmProvider(&hashAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) break;
+        if (BCryptCreateHash(hashAlg, &hash, nullptr, 0, nullptr, 0, 0) != 0) break;
+        if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(message.data())),
+                           static_cast<ULONG>(message.size()), 0) != 0) break;
+        if (BCryptFinishHash(hash, sha, sizeof(sha), 0) != 0) break;
+        // RSA 的签名验签必须显式声明 PKCS1 填充与哈希算法（dwFlags=0 仅对 ECDSA
+        // 合法，RSA 下返回 STATUS_INVALID_PARAMETER）；与 .NET SignData Pkcs1、
+        // openssl dgst -sign 产出的 PKCS1 v1.5/SHA256 同口径
+        BCRYPT_PKCS1_PADDING_INFO info;
+        info.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+        const NTSTATUS st = BCryptVerifySignature(
+            key, reinterpret_cast<PUCHAR>(&info), sha, sizeof(sha),
+            reinterpret_cast<PUCHAR>(const_cast<char*>(sig.data())),
+            static_cast<ULONG>(sig.size()), BCRYPT_PAD_PKCS1);
+        ok = st == 0;
+    } while (false);
+    if (hash) BCryptDestroyHash(hash);
+    if (hashAlg) BCryptCloseAlgorithmProvider(hashAlg, 0);
+    if (key) BCryptDestroyKey(key);
+    if (keyAlg) BCryptCloseAlgorithmProvider(keyAlg, 0);
+    return ok;
+#else
+    (void)modulusHex;
+    (void)exponentHex;
+    (void)message;
+    (void)signatureBase64;
+    return false;  // 非 Windows 构建无更新器，此原语不应被调用
+#endif
+}
+
 std::string uuid4() {
     std::string h = randomHex(16);
     h[12] = '4';

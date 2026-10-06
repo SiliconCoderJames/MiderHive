@@ -18,9 +18,14 @@
 #include "core/http/url_guard.h"
 #include "core/integrations.hpp"
 #include "core/platform.h"
+#include "core/update_sign.h"
 #include "core/util.h"
 #include "core/version_util.h"
 #include "sqlite-vec.h"  // 生成头：第二个连接查 knowledge_vec 前需注册 vec0
+
+#ifdef _WIN32
+#include <bcrypt.h>  // test_rsa_verify 动态段：CNG 生成密钥对并签名（windows.h 经 core/util.h 已就位）
+#endif
 
 namespace fs = std::filesystem;
 using nlohmann::json;
@@ -2248,6 +2253,107 @@ static void test_like_wildcard_escaping() {
     fs::remove_all(tmp, ec);
 }
 
+// RSA-2048 PKCS1v15/SHA256 验签原语（更新清单签名校验的底层）。
+// 两层覆盖：固定已知向量（一次性测试密钥签发，私钥已销毁；篡改任意一端必须
+// 失败）+ CNG 生成密钥对自签自验（确认与 .NET/openssl 签名口径互通）。
+static void test_rsa_verify() {
+    // ---- a) 固定向量 ----
+    const char* kMod =
+        "856F1A21ADFB2982A09B7449850572B5BE5DA4C67668446A6F0D22F3B75658B1BBB7CDC41558417EF858A3F7E6AE4B3D871C"
+        "6EDE6ABF85DF249EA6927BA2F9DD5405B0FCAECFF674987ACD8EB681BE63C9C4027C9A40498FDE04B1517460F36CB2E17599"
+        "C73E87E0962B1404197F1AFFB0AA9E7758E59E027BEF91335D035E8DEB110F1EA31AC646AB6BC9B098D7FF1E63B3F56DBBEC"
+        "2E07F483922F02FC95C5A600181AED50FF04F2662DDE21F193BC4471651D9151F0EB36694D9B6B7C77B0CA5239FE755BAC99"
+        "4A8657A733D93576F2E5F1E538AA816F7C95905BDF1E53AD86FBA4DF9437B737C3E40FDF38B0433D0640DC018374857764DD"
+        "96B96DEAF06D";
+    const char* kMsg = "miderhive-update-manifest-test-vector";
+    const char* kSig =
+        "WGiuVVo+9AUuIc6p0PZD0tkinqK0KM2b+xWIAf1NeDZV2zHGfRSR2yTB1jlyfFqfIBZ31RDGNcoYOw7etFRdkn+3PdA12Aj4dEPU"
+        "Wk1HlN1LDwxDMD5hN/sk5U2MO6TEol/20Aem/+jq17UI6j3f5Sx3FKDEflF6IWWJR9jvo9K+QdjGWGeo3eKR2mGdYbMxGqIKj8n1"
+        "bqZqJcmUpfSh07srWs7Z+BwurBo4BvW9tyRa74OHBK3QUoHv6oWklPbGSw24JAcQJtLPLottiDDNNx56usxrSFl/v73d1IkNgkqH"
+        "AzYiupWrSQl7luE0m7IaAeJj0aVpG6efn8jvwHjWiQ==";
+    CHECK(ah::rsaVerifySha256Pkcs1(kMod, "010001", kMsg, kSig));
+    CHECK(!ah::rsaVerifySha256Pkcs1(kMod, "010001", "tampered payload", kSig));
+    CHECK(!ah::rsaVerifySha256Pkcs1(kMod, "010001", kMsg, "AAAA"));   // 长度不足的坏签名
+    CHECK(!ah::rsaVerifySha256Pkcs1("ZZ", "010001", kMsg, kSig));     // 非法 hex
+    CHECK(!ah::rsaVerifySha256Pkcs1(kMod, "010001", kMsg, "!!!!"));   // 非法 base64
+
+#ifdef _WIN32
+    // ---- b) 动态：CNG 生成 RSA-2048 → 签 SHA256（PKCS1v15）→ 用待测函数验 ----
+    BCRYPT_ALG_HANDLE keyAlg = nullptr, hashAlg = nullptr;
+    BCRYPT_KEY_HANDLE key = nullptr;
+    do {
+        if (BCryptOpenAlgorithmProvider(&keyAlg, BCRYPT_RSA_ALGORITHM, nullptr, 0) != 0) { std::fprintf(stderr, "[dyn-debug] open key alg\n"); break; }
+        if (BCryptGenerateKeyPair(keyAlg, &key, 2048, 0) != 0) { std::fprintf(stderr, "[dyn-debug] generate\n"); break; }
+        if (BCryptFinalizeKeyPair(key, 0) != 0) { std::fprintf(stderr, "[dyn-debug] finalize\n"); break; }
+        // 导出公钥 blob，取模数/指数转 hex
+        ULONG blobLen = 0;
+        if (BCryptExportKey(key, nullptr, BCRYPT_RSAPUBLIC_BLOB, nullptr, 0, &blobLen, 0) != 0) { std::fprintf(stderr, "[dyn-debug] export size\n"); break; }
+        std::string blob(blobLen, '\0');
+        if (BCryptExportKey(key, nullptr, BCRYPT_RSAPUBLIC_BLOB,
+                            reinterpret_cast<PUCHAR>(blob.data()), blobLen, &blobLen, 0) != 0)
+            { std::fprintf(stderr, "[dyn-debug] export\n"); break; }
+        auto rdU32 = [&blob](size_t off) {
+            return static_cast<uint32_t>(static_cast<uint8_t>(blob[off])) |
+                   (static_cast<uint32_t>(static_cast<uint8_t>(blob[off + 1])) << 8) |
+                   (static_cast<uint32_t>(static_cast<uint8_t>(blob[off + 2])) << 16) |
+                   (static_cast<uint32_t>(static_cast<uint8_t>(blob[off + 3])) << 24);
+        };
+        const uint32_t cbExp = rdU32(8), cbMod = rdU32(12);
+        std::string expHex, modHex;
+        for (uint32_t i = 0; i < cbExp; ++i) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%02X",
+                          static_cast<uint8_t>(blob[24 + i]));
+            expHex += buf;
+        }
+        for (uint32_t i = 0; i < cbMod; ++i) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%02X",
+                          static_cast<uint8_t>(blob[24 + cbExp + i]));
+            modHex += buf;
+        }
+        // 签名固定消息（PKCS1v15：BCryptSignHash 无 padding flags）
+        const std::string msg = "dynamic round-trip vector";
+        if (BCryptOpenAlgorithmProvider(&hashAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) { std::fprintf(stderr, "[dyn-debug] open hash alg\n"); break; }
+        BCRYPT_HASH_HANDLE hash = nullptr;
+        uint8_t sha[32];
+        if (BCryptCreateHash(hashAlg, &hash, nullptr, 0, nullptr, 0, 0) != 0) { std::fprintf(stderr, "[dyn-debug] create hash\n"); break; }
+        if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(msg.data())),
+                           static_cast<ULONG>(msg.size()), 0) != 0)
+            { std::fprintf(stderr, "[dyn-debug] hash data\n"); break; }
+        if (BCryptFinishHash(hash, sha, sizeof(sha), 0) != 0) { std::fprintf(stderr, "[dyn-debug] finish hash\n"); break; }
+        ULONG sigLen = 0;
+        BCRYPT_PKCS1_PADDING_INFO padInfo;
+        padInfo.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+        if (BCryptSignHash(key, reinterpret_cast<PUCHAR>(&padInfo), sha, sizeof(sha), nullptr, 0,
+                           &sigLen, BCRYPT_PAD_PKCS1) != 0) { std::fprintf(stderr, "[dyn-debug] sign size\n"); break; }
+        std::string sig(sigLen, '\0');
+        if (BCryptSignHash(key, reinterpret_cast<PUCHAR>(&padInfo), sha, sizeof(sha),
+                           reinterpret_cast<PUCHAR>(sig.data()), sigLen, &sigLen,
+                           BCRYPT_PAD_PKCS1) != 0)
+            { std::fprintf(stderr, "[dyn-debug] sign\n"); break; }
+        // base64 编码（测试内联，签名侧交付格式）
+        static const char* kB64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string sigB64;
+        for (size_t i = 0; i < sig.size(); i += 3) {
+            const uint32_t n = (static_cast<uint8_t>(sig[i]) << 16) |
+                               (i + 1 < sig.size() ? static_cast<uint8_t>(sig[i + 1]) << 8 : 0) |
+                               (i + 2 < sig.size() ? static_cast<uint8_t>(sig[i + 2]) : 0);
+            sigB64 += kB64[(n >> 18) & 63];
+            sigB64 += kB64[(n >> 12) & 63];
+            sigB64 += i + 1 < sig.size() ? kB64[(n >> 6) & 63] : '=';
+            sigB64 += i + 2 < sig.size() ? kB64[n & 63] : '=';
+        }
+        CHECK(ah::rsaVerifySha256Pkcs1(modHex, expHex, msg, sigB64));
+        CHECK(!ah::rsaVerifySha256Pkcs1(modHex, expHex, msg + "!", sigB64));
+        BCryptDestroyHash(hash);
+    } while (false);
+    if (hashAlg) BCryptCloseAlgorithmProvider(hashAlg, 0);
+    if (key) BCryptDestroyKey(key);
+    if (keyAlg) BCryptCloseAlgorithmProvider(keyAlg, 0);
+#endif
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -2255,6 +2361,7 @@ int main() {
         fn();
     };
     run("sha256", test_sha256);
+    run("rsa_verify", test_rsa_verify);
     run("week_start", test_week_start);
     run("embedder", test_embedder);
     run("url_guard", test_url_guard);

@@ -70,6 +70,13 @@ std::string sha256Hex(const std::string& data);
 bool constantTimeEquals(const std::string& a, const std::string& b);
 std::string randomHex(int bytes);
 std::string uuid4();                      // 8-4-4-4-12 形式
+// RSA-2048 PKCS1v15/SHA256 验签（更新清单签名校验的底层原语）。modulus /
+// exponent 为大端 hex（openssl rsa -modulus 输出口径，指数 65537 即 "010001"），
+// signature 为 base64。任何输入非法（坏 hex / 坏 base64 / 长度不符）或验签不
+// 通过都返回 false；成功与否的处置（拒绝/放行）是调用方的策略。
+// 非 Windows 构建恒返回 false（更新器仅存在于 Windows GUI）。
+bool rsaVerifySha256Pkcs1(const std::string& modulusHex, const std::string& exponentHex,
+                          const std::string& message, const std::string& signatureBase64);
 std::string nowIso();                     // UTC ISO8601，如 2026-09-07T05:00:00Z
 std::string weekStartIso();               // 本周一（UTC 00:00）
 bool parseIso(const std::string& iso, std::time_t& out);  // 解析本平台生成的 ISO 时间
