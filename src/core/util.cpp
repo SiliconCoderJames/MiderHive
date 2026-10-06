@@ -7,6 +7,13 @@
 #include <random>
 #include <sstream>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#endif
+
 namespace ah {
 
 namespace {
@@ -75,14 +82,21 @@ std::string hexEncode(const uint8_t* data, size_t n) {
     return s;
 }
 
-uint64_t rng64() {
-    static std::mt19937_64 rng([] {
-        std::random_device rd;
-        return std::mt19937_64((static_cast<uint64_t>(rd()) << 32) ^ rd() ^
-                               static_cast<uint64_t>(std::chrono::high_resolution_clock::now()
-                                                         .time_since_epoch().count()));
-    }());
-    return rng();
+// 密码学安全的随机字节：master.key / Agent 密钥 / 盐 / uuid 全部出自这里。
+// 此前是仅 64 位种子的 mt19937_64——在声明的威胁模型（本机互信）内不构成可利用
+// 缺口，但凭据生成不该依赖可预测源，纵深防御几乎零成本。
+void secureRandomBytes(uint8_t* out, size_t n) {
+#ifdef _WIN32
+    // CNG 的系统首选 RNG；NTSTATUS 为 0 即成功。失败意味着熵源不可用——
+    // 与其返回可预测的"密钥"不如显式中止（"绝不静默失败"的极限情形）
+    if (BCryptGenRandom(nullptr, out, static_cast<ULONG>(n),
+                        BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        std::abort();
+    }
+#else
+    static std::random_device rd;
+    for (size_t i = 0; i < n; ++i) out[i] = static_cast<uint8_t>(rd());
+#endif
 }
 
 std::tm utcTm(std::time_t t) {
@@ -118,10 +132,11 @@ bool constantTimeEquals(const std::string& a, const std::string& b) {
 
 std::string randomHex(int bytes) {
     std::string s(bytes * 2, '0');
+    std::vector<uint8_t> buf(static_cast<size_t>(bytes));
+    secureRandomBytes(buf.data(), buf.size());
     for (int i = 0; i < bytes; ++i) {
-        uint8_t b = static_cast<uint8_t>(rng64() & 0xff);
-        s[2 * i] = kHex[b >> 4];
-        s[2 * i + 1] = kHex[b & 0x0f];
+        s[2 * i] = kHex[buf[i] >> 4];
+        s[2 * i + 1] = kHex[buf[i] & 0x0f];
     }
     return s;
 }
@@ -129,7 +144,9 @@ std::string randomHex(int bytes) {
 std::string uuid4() {
     std::string h = randomHex(16);
     h[12] = '4';
-    h[16] = kHex[(rng64() & 0x3) | 0x8];
+    uint8_t variant = 0;
+    secureRandomBytes(&variant, 1);
+    h[16] = kHex[(variant & 0x3) | 0x8];
     return h.substr(0, 8) + "-" + h.substr(8, 4) + "-" + h.substr(12, 4) + "-" +
            h.substr(16, 4) + "-" + h.substr(20, 12);
 }

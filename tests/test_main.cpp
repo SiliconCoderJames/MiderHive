@@ -134,6 +134,15 @@ static void test_url_guard() {
     CHECK(!isSafeOutboundUrl("http://0177.0.0.1/"));
     CHECK(!isSafeOutboundUrl("http://0x7f.0.0.1/"));
     CHECK(!isSafeOutboundUrl("http://2130706433/"));
+    // 百分号编码的 host：解码后就是环回地址，不能让编码形态骗过字面量检查
+    CHECK(!isSafeOutboundUrl("http://%31%32%37.0.0.1/"));
+    CHECK(!isSafeOutboundUrl("http://local%68ost/"));
+    // 尾点 FQDN 写法："localhost." 与 "localhost" 解析到同一处（Windows 实测环回）
+    CHECK(!isSafeOutboundUrl("http://localhost./"));
+    CHECK(!isSafeOutboundUrl("http://127.0.0.1./"));
+    // 非法 % 序列：解码失败一律拒绝
+    CHECK(!isSafeOutboundUrl("http://example.com%ZZ/"));
+    CHECK(!isSafeOutboundUrl("http://ex%2mple.com/"));
     // 正常域名不能误伤（含数字但含非十六进制字符）
     CHECK(isSafeOutboundUrl("https://api.github.com/x"));
     CHECK(isSafeOutboundUrl("http://abc.de/x"));

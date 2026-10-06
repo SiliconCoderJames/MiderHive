@@ -1,6 +1,7 @@
 #pragma once
 // 出站 URL 安全校验（防 SSRF）：
-//   仅允许 http/https；解析 host 后拒绝 localhost、环回、私有、保留地址。
+//   仅允许 http/https；host 先做百分号解码与尾点归一（编码/全限定名形态不能
+//   骗过字面量检查），再拒绝 localhost、环回、私有、保留地址。
 // 平台本体只监听 127.0.0.1、不发外部请求；未来任何「代为抓取 URL」
 // 类的能力必须先经过本校验。纯头文件，可独立单测。
 #include <cstdint>
@@ -66,6 +67,35 @@ inline bool isPrivateIpv6(const std::string& host) {
     return false;
 }
 
+// host 规范化：百分号解码（%31%32%37.0.0.1 会被解码方还原成 127.0.0.1，不能
+// 让编码形态骗过字面量检查）+ 去一个尾点（"localhost." 是指向同一处
+// 的全限定名写法，Windows 解析器实测解析到环回）。失败（非法 % 序列）返回 false。
+inline bool normalizeHost(const std::string& in, std::string& out) {
+    out.clear();
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        char ch = in[i];
+        if (ch == '%') {
+            if (i + 2 >= in.size()) return false;
+            auto hexVal = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int hi = hexVal(in[i + 1]), lo = hexVal(in[i + 2]);
+            if (hi < 0 || lo < 0) return false;
+            ch = static_cast<char>((hi << 4) | lo);
+            i += 2;
+        }
+        out += ch;
+    }
+    if (out.empty()) return false;
+    if (out.back() == '.') out.pop_back();  // 只去一个尾点；"a..b" 属怪异形态走后面默认拒绝
+    if (out.empty()) return false;
+    return true;
+}
+
 // 返回 true 表示允许访问；否则拒绝。
 inline bool isSafeOutboundUrl(const std::string& url) {
     size_t schemeEnd = url.find("://");
@@ -92,6 +122,10 @@ inline bool isSafeOutboundUrl(const std::string& url) {
     if (host.empty()) return false;
     // 用户名信息 user@host —— 拒绝含 @ 的歧义形式
     if (host.find('@') != std::string::npos) return false;
+    // 百分号解码 + 去尾点：先还原成解析方真正会看到的形态再做字面量检查
+    std::string normalized;
+    if (!normalizeHost(host, normalized)) return false;
+    host = normalized;
 
     uint32_t v4 = 0;
     if (parseIpv4(host, v4)) return !isPrivateIpv4(v4);
