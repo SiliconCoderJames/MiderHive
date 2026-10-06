@@ -31,6 +31,13 @@ bool UsageService::reportInTx(const std::string& agent, int64_t tokensIn, int64_
                               bool& duplicate, std::string& err) {
     duplicate = false;
     if (tokensIn < 0 || tokensOut < 0) { err = "token counts must be >= 0"; return false; }
+    // 单次上报上限：真实单次模型调用远低于此，防手滑/畸形客户端把周用量统计
+    // 一次性打爆（与周预算默认值同量级；HTTP 层已先行拒掉非整数与负数）
+    constexpr int64_t kMaxTokensPerReport = 10'000'000;
+    if (tokensIn > kMaxTokensPerReport || tokensOut > kMaxTokensPerReport) {
+        err = "token counts too large (max 10000000 per report)";
+        return false;
+    }
     if (idempotencyKey.size() > 200) { err = "idempotency_key too long (max 200)"; return false; }
     if (model.size() > 100) { err = "model too long (max 100)"; return false; }
 

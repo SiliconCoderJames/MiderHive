@@ -340,6 +340,9 @@ static void test_platform_end_to_end() {
         CHECK_EQ(sum.total_tokens, static_cast<int64_t>(5000));
         CHECK_EQ(sum.alert_level, "none");
         bool dup = false;
+        // 单次上报上限：防手滑/畸形客户端把周用量一次性打爆（上限=周预算默认值）
+        CHECK(!p.usageReport("hermes", 10'000'001, 0, "llm", "", "", "", dup, err));
+        CHECK(err.find("too large") != std::string::npos);
         CHECK(p.usageReport("hermes", 500, 400, "skill", "", "x", "", dup, err));  // 5.9%
         CHECK(p.usageSummary(sum, err));
         CHECK_EQ(sum.alert_level, "none");
@@ -663,6 +666,22 @@ static void test_platform_end_to_end() {
                                                 {"model", 42}}.dump(),
                                  "application/json");
         CHECK(badModel && badModel->status == 400);
+        // token 数值必须如实校验：此前按 int 推导——5e9 静默回绕、浮点静默截断小数
+        auto badTokensHuge = cli.Post("/api/usage/report",
+                                      {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}},
+                                      nlohmann::json{{"tokens_in", 5000000000}}.dump(),
+                                      "application/json");
+        CHECK(badTokensHuge && badTokensHuge->status == 400);  // 超单次上限
+        auto badTokensType = cli.Post("/api/usage/report",
+                                      {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}},
+                                      nlohmann::json{{"tokens_in", 1}, {"tokens_out", "x"}}.dump(),
+                                      "application/json");
+        CHECK(badTokensType && badTokensType->status == 400);  // 字符串 → 400 而非全局兜底
+        auto badTokensFloat = cli.Post("/api/usage/report",
+                                       {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}},
+                                       nlohmann::json{{"tokens_in", 1.5}}.dump(),
+                                       "application/json");
+        CHECK(badTokensFloat && badTokensFloat->status == 400);  // 浮点 → 400 而非静默截断
         auto httpModels = cli.Get("/api/usage/models",
                                   {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}});
         CHECK(httpModels && httpModels->status == 200);

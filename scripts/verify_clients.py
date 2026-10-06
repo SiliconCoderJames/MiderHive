@@ -105,7 +105,9 @@ def droid_available():
 
 
 def dsh_available():
-    return bool(shutil.which("dsh")) or os.path.isdir(os.path.expanduser("~/.dsh"))
+    # 只认 PATH 上的可执行文件：~/.dsh 目录存在不代表装了 dsh（曾把
+    # "有目录无二进制"误判成已安装，跑 dsh --dump-config 直接 FAIL）
+    return bool(shutil.which("dsh"))
 
 
 def hermes_available():

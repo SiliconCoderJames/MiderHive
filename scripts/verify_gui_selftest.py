@@ -67,6 +67,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", default="", help="CMake 构建目录（默认自动探测 build/e2e）")
     ap.add_argument("--keep", action="store_true", help="保留临时数据目录以便排查")
+    ap.add_argument("--no-build", action="store_true",
+                    help="即使 gui_selftest.exe 过期也不自动重建（CI 已先行构建）")
     args = ap.parse_args()
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,6 +79,39 @@ def main() -> int:
                 build_dir = os.path.join(root, cand)
                 break
     exe = find_exe(build_dir) if build_dir else ""
+
+    # 过期自检：gui_selftest.exe 比任一 GUI 源文件旧（或不存在）时自动重建。
+    # 此前脚本只找 exe 不构建——改了 GUI 代码后直接跑会拿到旧产物，绿灯不可信
+    #（CI 无此问题，ci.yml 先行构建；本开关主要护住本地快速循环）。
+    # mtime 只覆盖 src/gui/**：core 层变更不触发重建，GUI 自测主要盯 GUI 层。
+    if not args.no_build:
+        def gui_sources_stale(exe_path):
+            if not exe_path or not os.path.exists(exe_path):
+                return True
+            exe_mtime = os.path.getmtime(exe_path)
+            gui_src = os.path.join(root, "src", "gui")
+            for dirpath, _dirnames, filenames in os.walk(gui_src):
+                for name in filenames:
+                    if name.endswith((".cpp", ".h")):
+                        if os.path.getmtime(os.path.join(dirpath, name)) > exe_mtime:
+                            return True
+            return False
+
+        if gui_sources_stale(exe):
+            if not build_dir:
+                print("FAIL: gui_selftest 过期但未找到构建目录，请用 --build 指定")
+                return 1
+            print("[runner] gui_selftest.exe 过期（源码有改动），正在重新构建……")
+            build_cmd = ["cmake", "--build", build_dir, "--config", "Release",
+                         "--target", "gui_selftest"]
+            try:
+                subprocess.run(build_cmd, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                print(f"FAIL: 自动构建失败（{e}）—— 请手动执行：")
+                print(f"  cmake --build {build_dir} --config Release --target gui_selftest")
+                return 1
+            exe = find_exe(build_dir) if build_dir else ""
+
     if not exe:
         # 最后再全盘找一次（用户自定义构建树）
         for base in (root,):

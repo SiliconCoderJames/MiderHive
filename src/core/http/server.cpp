@@ -776,8 +776,17 @@ void HttpServer::setupRoutes() {
         if (!checkAgent(req, p, actor, res)) return;
         auto body = json::parse(req.body, nullptr, false);
         if (body.is_discarded() || !body.is_object()) { send(res, fail(400, "invalid JSON body")); return; }
-        int64_t tin = body.value("tokens_in", 0);
-        int64_t tout = body.value("tokens_out", 0);
+        // 数值必须整数：此前 value(key, 0) 按 int 推导——超大数静默回绕成 32 位
+        // 垃圾、浮点静默截断小数，全都进了用量统计。浮点/字符串在这里如实 400
+        //（对照下方 model 字段的检查先例）。
+        for (const char* field : {"tokens_in", "tokens_out"}) {
+            if (body.contains(field) && !body[field].is_number_integer()) {
+                send(res, fail(400, std::string(field) + " must be a non-negative integer"));
+                return;
+            }
+        }
+        int64_t tin = body.value("tokens_in", int64_t{0});
+        int64_t tout = body.value("tokens_out", int64_t{0});
         std::string type = body.value("call_type", "");
         std::string ref = body.value("reference_id", "");
         std::string idem = body.value("idempotency_key", "");
