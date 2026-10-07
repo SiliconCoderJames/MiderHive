@@ -107,14 +107,20 @@ SHA256** (and deletes the file on mismatch), strips the "downloaded from the int
 upgrades silently and restarts. The portable build is never auto-installed — that would add a
 second copy to the system — so it just points you at the download page.
 
+The update **manifest itself is signed**: CI signs `latest.json` with an RSA-2048 key (the private
+key lives only in GitHub Secrets; the public key is compiled into the app) and publishes it as
+`latest.json.sig`. The updater verifies that signature before trusting the manifest — a tampered
+channel cannot redirect you to a hostile installer. Manifests published before 1.2.3 carry no
+signature and are accepted with a hash-only check.
+
 Update metadata comes from `latest.json`, published as a release asset at a stable URL:
 `https://github.com/SiliconCoderJames/MiderHive/releases/latest/download/latest.json`. It never
 touches the GitHub API, so no token is needed and there is no rate limit. Override it with
 `MIDERHIVE_UPDATE_URL` for mirrors, forks or local testing.
 
-> The hash comes from the same distribution channel (HTTPS + GitHub). That protects against
-> corrupted downloads and tampered mirrors, but it is **not a signature**. Once the binaries are
-> signed, the updater should verify the signature instead.
+> The manifest signature protects against channel tampering; the SHA256 still guards each
+> download against corruption. The installer **binary itself remains unsigned**, so SmartScreen
+> may warn on first launch — see the roadmap's code-signing item.
 
 ### Connect any agent (three steps)
 

@@ -66,6 +66,31 @@ jobs:
             -QtPrefix "$env:QT_ROOT_DIR" `
             -Generator "$gen"
 
+      - name: Sign update manifest (RSA-2048 PKCS1v15/SHA256)
+        shell: pwsh
+        env:
+          # 私钥只在 GitHub Secrets（与仓库 core/update_sign.h 内置公钥配对）；
+          # 应用对 latest.json 验签，渠道上的清单被篡改时更新器直接拒绝
+          MIDERHIVE_UPDATE_SIGNING_KEY: ${{ secrets.MIDERHIVE_UPDATE_SIGNING_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MIDERHIVE_UPDATE_SIGNING_KEY)) {
+            throw 'MIDERHIVE_UPDATE_SIGNING_KEY secret is not set'
+          }
+          $manifest = 'release/latest.json'
+          if (-not (Test-Path $manifest)) { throw "missing artifact: $manifest (package step must run first)" }
+          $rsa = [System.Security.Cryptography.RSA]::Create()
+          try {
+            $rsa.ImportFromPem($env:MIDERHIVE_UPDATE_SIGNING_KEY)
+            $sig = $rsa.SignData([System.IO.File]::ReadAllBytes($manifest),
+                                 [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                                 [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            [System.IO.File]::WriteAllBytes("$manifest.sig",
+              [System.Text.Encoding]::ASCII.GetBytes([Convert]::ToBase64String($sig)))
+            Write-Host "signed $manifest -> $manifest.sig (signature $($sig.Length) bytes)"
+          } finally {
+            $rsa.Dispose()
+          }
+
       - name: Unit tests
         shell: pwsh
         run: |
@@ -85,6 +110,7 @@ jobs:
             release/*.zip
             release/SHA256SUMS.txt
             release/latest.json
+            release/latest.json.sig
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -106,7 +132,9 @@ jobs:
           # (https://github.com/<repo>/releases/latest/download/latest.json) - it must be
           # published with every release or auto-update stops working.
           $manifest = "release/latest.json"
-          foreach ($f in @($msi, $zip, $sums, $manifest)) {
+          # 清单签名（Sign update manifest 步骤产出）；应用内置公钥验签
+          $sig = "release/latest.json.sig"
+          foreach ($f in @($msi, $zip, $sums, $manifest, $sig)) {
             if (-not (Test-Path $f)) { throw "missing artifact: $f" }
           }
           # Release notes live in the repo so a manual release and a CI release show the same
@@ -141,14 +169,14 @@ jobs:
           # 抖动）时步骤照样绿，应用内更新器会拿着陈旧的 latest.json 让用户错过更新。
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $msi $zip $sums $manifest --clobber
+            gh release upload $tag $msi $zip $sums $manifest $sig --clobber
             if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
             gh release edit $tag --notes $notes @pre
             if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
           } else {
             # --target 让新建的标签指向本次实际构建的 commit（workflow_dispatch 手动触发时
             # 标签还不存在，不加会把标签打到默认分支头上，产物与 commit 对不上）
-            gh release create $tag $msi $zip $sums $manifest `
+            gh release create $tag $msi $zip $sums $manifest $sig `
               --title "MiderHive $ver" --notes $notes --target $env:GITHUB_SHA @pre
             if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
           }

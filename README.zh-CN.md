@@ -103,12 +103,16 @@
 **校验 SHA256**（不匹配则删除并报错）、剥离"网络来源标记"后静默升级并重启。
 便携版不会自动安装（否则系统里会多出一份），只提示到下载页手动替换。
 
+更新**清单本身有 RSA-2048 签名**：CI 用维护者私钥（只存在于 GitHub Secrets，公钥编译进应用）
+签发 `latest.json.sig`，更新器在信任清单前先验签——渠道上的清单被篡改也无法把你引向恶意
+安装包。1.2.3 之前发布的清单没有签名，更新器会放行并退回仅哈希校验。
+
 更新信息取自 release 资产中的 `latest.json`（固定地址
 `https://github.com/SiliconCoderJames/MiderHive/releases/latest/download/latest.json`），
 不经过 GitHub API，因此不需要 token、也不受限流影响。开发/镜像环境可用 `MIDERHIVE_UPDATE_URL` 覆盖。
 
-> 哈希来自同一分发渠道（HTTPS + GitHub），能防传输损坏与镜像篡改，但**不等于代码签名**；
-> 产物签名后应改为校验签名。
+> 清单签名防"渠道篡改"，SHA256 继续防单次下载损坏；安装包**本体仍未代码签名**，
+> SmartScreen 首启提示依旧（见 Roadmap 的代码签名项）。
 
 ### 接入任意 Agent（三步）
 
