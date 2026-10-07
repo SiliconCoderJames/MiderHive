@@ -19,6 +19,7 @@
 #include <QTimer>
 
 #include "core/types.h"   // ah::kPlatformVersion
+#include "core/update_sign.h"
 #include "core/util.h"
 #include "core/version_util.h"
 #include "i18n.h"
@@ -88,6 +89,11 @@ QUrl manifestUrl() {
     if (!override.empty()) return QUrl(QString::fromStdString(override));
     return QUrl(QString("https://github.com/%1/releases/latest/download/latest.json")
                     .arg(QString::fromLatin1(kRepoSlug)));
+}
+
+// 签名侧车与清单同路径派生（官方固定 URL 与本地联调覆盖 URL 都成立）
+QUrl manifestSigUrl() {
+    return QUrl(manifestUrl().toString() + QStringLiteral(".sig"));
 }
 
 QNetworkRequest makeRequest(const QUrl& url, int timeoutMs) {
@@ -234,39 +240,102 @@ void UpdateChecker::fetchManifest(int attempt) {
             emit failed(i18n::trs("更新清单格式无法解析", "malformed update manifest"));
             return;
         }
-        const QJsonObject o = doc.object();
-        UpdateInfo info;
-        info.version = o.value("version").toString();
-        info.tag = o.value("tag").toString();
-        info.notesUrl = o.value("notes_url").toString(kReleasesPage);
-        const QJsonObject msi = o.value("msi").toObject();
-        info.msiUrl = QUrl(msi.value("url").toString());
-        info.msiSha256 = msi.value("sha256").toString().toLower();
-        info.msiSize = static_cast<qint64>(msi.value("size").toDouble());
-        const QJsonObject portable = o.value("portable").toObject();
-        info.portableUrl = QUrl(portable.value("url").toString());
-        info.portableSha256 = portable.value("sha256").toString().toLower();
+        // 清单字节留待签名校验（fetchManifestSig → processManifest）
+        manifestBytes_ = raw;
+        fetchManifestSig(1);
+    });
+}
 
-        const QString current = QString::fromLatin1(ah::kPlatformVersion);
-        trace(QString("manifest bytes=%1 version='%2' msi='%3' sha=%4chars current='%5' valid=%6 newer=%7")
-                  .arg(raw.size())
-                  .arg(info.version, info.msiUrl.toString())
-                  .arg(info.msiSha256.size())
-                  .arg(current)
-                  .arg(info.valid() ? 1 : 0)
-                  .arg(ah::isNewerVersion(info.version.toStdString(), current.toStdString()) ? 1 : 0));
-        if (!info.valid()) {
-            // 坏清单不算"检查过"：markChecked 提前会把自动检查抑制 24 小时
-            //（发布侧 latest.json 打错字段，用户就一天收不到任何提示）
-            emit failed(i18n::trs("更新清单缺少必要字段", "manifest is missing required fields"));
+// 清单签名侧车（latest.json.sig）拉取与校验：签名对不上 = 渠道被篡改，硬拒；
+// 侧车缺失（404）= 1.2.2 及更早的清单（过渡窗口），软放行并留痕，仍走 SHA256
+// 对安装包本体的既有校验。侧车与清单一样直连 GitHub，不过镜像。
+void UpdateChecker::fetchManifestSig(int attempt) {
+    if (!net_) net_ = new QNetworkAccessManager(this);
+    QNetworkReply* reply = net_->get(makeRequest(manifestSigUrl(), kManifestTimeoutMs));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, attempt] {
+        reply->deleteLater();
+        if (reply->error() == QNetworkReply::ContentNotFoundError) {
+            trace("manifest signature not found (pre-1.2.3 manifest?) - proceeding hash-only");
+            processManifest();
             return;
         }
-        markChecked();  // 只有清单有效才算检查过（网络失败路径同样不记，语义一致）
-        if (ah::isNewerVersion(info.version.toStdString(), current.toStdString()))
-            emit updateAvailable(info);
-        else
-            emit upToDate(current);
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString why = reply->errorString();
+            trace(QString("manifest sig attempt %1/%2 failed: %3")
+                      .arg(attempt)
+                      .arg(kManifestAttempts)
+                      .arg(why));
+            if (attempt < kManifestAttempts) {
+                QTimer::singleShot(backoffMs(attempt), this,
+                                   [this, attempt] { fetchManifestSig(attempt + 1); });
+                return;
+            }
+            emit failed(i18n::trs("无法获取更新清单的签名（连接 GitHub 失败，已重试 %1 次）：%2",
+                                  "Could not reach GitHub for the manifest signature (retried %1x): %2")
+                            .arg(kManifestAttempts)
+                            .arg(why));
+            return;
+        }
+        const QByteArray sig = reply->readAll();
+        const bool trusted = ah::verifyUpdateManifest(
+            std::string(manifestBytes_.constData(), static_cast<size_t>(manifestBytes_.size())),
+            std::string(sig.constData(), static_cast<size_t>(sig.size())));
+        if (!trusted) {
+            // 渠道篡改或传输层被劫持：这不是"重试能好"的问题，直接拒绝。
+            //（哈希仍会被校验，但签名失配意味着清单本身已不可信。）
+            trace("manifest signature MISMATCH - refusing this manifest");
+            emit failed(i18n::trs("更新清单签名校验失败（清单可能被篡改），已拒绝本次检查。\n"
+                                  "若反复出现，请到发布页手动下载并核对 SHA256。",
+                                  "Update manifest signature check failed (possible tampering); "
+                                  "this check was refused.\nIf it repeats, download manually from "
+                                  "the releases page and verify SHA256."));
+            return;
+        }
+        trace("manifest signature verified");
+        processManifest();
     });
+}
+
+// 解析已通过签名校验（或过渡窗口软放行）的清单字节并比对版本
+void UpdateChecker::processManifest() {
+    const QByteArray raw = manifestBytes_;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw);
+    if (!doc.isObject()) {
+        emit failed(i18n::trs("更新清单格式无法解析", "malformed update manifest"));
+        return;
+    }
+    const QJsonObject o = doc.object();
+    UpdateInfo info;
+    info.version = o.value("version").toString();
+    info.tag = o.value("tag").toString();
+    info.notesUrl = o.value("notes_url").toString(kReleasesPage);
+    const QJsonObject msi = o.value("msi").toObject();
+    info.msiUrl = QUrl(msi.value("url").toString());
+    info.msiSha256 = msi.value("sha256").toString().toLower();
+    info.msiSize = static_cast<qint64>(msi.value("size").toDouble());
+    const QJsonObject portable = o.value("portable").toObject();
+    info.portableUrl = QUrl(portable.value("url").toString());
+    info.portableSha256 = portable.value("sha256").toString().toLower();
+
+    const QString current = QString::fromLatin1(ah::kPlatformVersion);
+    trace(QString("manifest bytes=%1 version='%2' msi='%3' sha=%4chars current='%5' valid=%6 newer=%7")
+              .arg(raw.size())
+              .arg(info.version, info.msiUrl.toString())
+              .arg(info.msiSha256.size())
+              .arg(current)
+              .arg(info.valid() ? 1 : 0)
+              .arg(ah::isNewerVersion(info.version.toStdString(), current.toStdString()) ? 1 : 0));
+    if (!info.valid()) {
+        // 坏清单不算"检查过"：markChecked 提前会把自动检查抑制 24 小时
+        //（发布侧 latest.json 打错字段，用户就一天收不到任何提示）
+        emit failed(i18n::trs("更新清单缺少必要字段", "manifest is missing required fields"));
+        return;
+    }
+    markChecked();  // 只有清单有效才算检查过（网络失败路径同样不记，语义一致）
+    if (ah::isNewerVersion(info.version.toStdString(), current.toStdString()))
+        emit updateAvailable(info);
+    else
+        emit upToDate(current);
 }
 
 // GitHub 的 release 下载 URL 对 tag 大小写敏感（实测 v1.0.4 404、V1.0.4 206），

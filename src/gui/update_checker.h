@@ -12,9 +12,13 @@
 //     静默替换可执行文件的风险远大于收益；这里做的是"自动检查 + 一键升级"。
 //   * 下载后**必须校验 SHA256** 才安装，且安装前剥掉下载文件的"网络来源标记"(MOTW)，
 //     否则会二次弹 SmartScreen 警告。
+//   * **更新清单有 RSA-2048 签名**（latest.json.sig，私钥只在 CI Secrets 与维护者
+//     本机，公钥编译进应用，见 core/update_sign.h）：签名对不上直接拒绝本次检查
+//     ——渠道上的清单被篡改也无法把用户引向恶意安装包。侧车缺失（1.2.3 之前的
+//     清单）软放行，仍走哈希校验。
 //   * 便携版不走 MSI 安装（否则会装出第二份），只提示去下载页。
-//   * 诚实说明：哈希来自同一分发渠道（HTTPS + GitHub），能防传输损坏与镜像篡改，
-//     但不等于代码签名；签名后应改成校验签名。
+//   * 诚实说明：清单签名防"渠道篡改"，安装包本体仍未代码签名——SmartScreen
+//     提示依旧（见 Roadmap 的代码签名项）。
 //
 // 网络韧性（GitHub 在国内经常超时、断流）：
 //   * 清单拉取失败按退避重试若干次，不因一次抖动就报错；
@@ -85,10 +89,13 @@ signals:
 
 private:
     void fetchManifest(int attempt);   // 清单拉取（带退避重试）
+    void fetchManifestSig(int attempt); // 清单签名侧车拉取与验签（同款退避；404 软放行）
+    void processManifest();            // 解析已校验的清单字节并比对版本
     void startAttempt();               // 单次下载尝试（带 Range 续传）
     void verifyAndInstall(const UpdateInfo& info, const QString& filePath);
 
     QNetworkAccessManager* net_ = nullptr;
+    QByteArray manifestBytes_;  // 已下载、待验签/待解析的清单原始字节
     // 韧性下载状态：候选地址（直连 → 自定义镜像 → 公共镜像）、当前地址与尝试次数、已收字节
     UpdateInfo dlInfo_;
     QString dlPath_;
