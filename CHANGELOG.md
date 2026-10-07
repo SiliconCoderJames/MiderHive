@@ -24,6 +24,36 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-07
+
+### Added
+- **The update manifest is signed and verified**: CI signs `latest.json` with an RSA-2048 key
+  (PKCS1 v1.5 / SHA256) and publishes the signature as a `latest.json.sig` release asset. The
+  private key exists only in GitHub Secrets and on the maintainer's machine; the public key is
+  compiled into the app. The updater downloads the sidecar, verifies the signature **before
+  trusting the manifest**, and refuses the whole check on mismatch — a tampered distribution
+  channel can no longer redirect users to a hostile installer. SHA256 verification of the
+  installer binary stays in place (a second, orthogonal gate). Manifests published before 1.2.3
+  carry no signature and are accepted with a hash-only check during the transition window.
+  Verification is built on Windows CNG (`BCryptVerifySignature` with explicit
+  `BCRYPT_PAD_PKCS1` — RSA signature primitives reject the ECDSA-style `dwFlags=0`); no new
+  third-party dependencies.
+- **`release-audit` workflow** (`.zcode/workflows/release-audit.dwf.ts`): the full-tree audit
+  that produced the 1.2.2 fix batch is now a saved, re-runnable project workflow — nine areas
+  read in parallel, every candidate finding independently confirmed or refuted, a report with
+  path:line evidence and a fix roadmap. Referenced from CONTRIBUTING as a pre-release step.
+
+### Fixed
+- **Usage report rejects malformed token counts instead of silently mangling them**: the HTTP
+  layer derived `tokens_in` / `tokens_out` as 32-bit ints — values above 2^31 wrapped into
+  garbage, floats were truncated, and everything landed in the usage statistics. Non-integers
+  now return 400 and the service layer enforces a per-report cap of 10,000,000 (same order as
+  the default weekly budget).
+- `verify_clients.py` no longer treats a `~/.dsh` directory without the `dsh` executable as an
+  installed client (false FAILs on machines with leftover state), and `verify_gui_selftest.py`
+  rebuilds `gui_selftest` automatically when the binary is older than any `src/gui/**` source —
+  running it locally after a code change no longer reports stale results.
+
 ## [1.2.2] - 2026-10-06
 
 ### Fixed
@@ -520,7 +550,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.1.1...v1.2.0
