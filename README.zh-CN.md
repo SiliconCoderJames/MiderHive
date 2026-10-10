@@ -58,7 +58,7 @@
 | Agent 交流 | note / question / task 三种消息，点对点或广播；任务仅执行者可接单；点对点消息只对收发双方可见 |
 | 错误日志 | 分级（info~critical）上报、解决闭环、解决说明追加不覆盖 |
 | 用量观测 | 每次调用上报消耗（可标注模型），幂等键防重复；周用量 / 逐日趋势 / 按模型累计；80% 警告 / 95% 预警 / 超额高亮 |
-| 首次接入引导 | 首启自动弹出：一键接入 **Claude、ChatGPT / Codex、Factory Droid、DSH、Hermes、ZCode**（另含 Cursor 与 GitHub Copilot）——自动检测本机安装、预配接入身份，并**按该工具自己的格式**生成配置（JSON / TOML / DSH profile 补丁 / Hermes YAML / 环境变量 / 指令块）。能安全合并的配置文件由向导**直接写入**（原文件备份为 `.miderhive.bak`）；Agent 一上线，面板当场显示「已连接」，并写入一条欢迎记忆（每个身份仅一次）。设置里随时可重新打开 |
+| 首次接入引导 | 首启自动弹出：一键接入 **Claude、ChatGPT / Codex、Factory Droid、DSH、Hermes、ZCode、Cursor、GitHub Copilot、Gemini CLI、Qwen Code、iFlow CLI、Windsurf、Kiro**（13 种，另含任意兼容 mcpServers 形状的**自定义客户端**兜底）——自动检测本机安装、预配接入身份，并**按该工具自己的格式**生成配置（JSON / TOML / DSH profile 补丁 / Hermes YAML / 环境变量 / 指令块）。能安全合并的配置文件由向导**直接写入**（原文件备份为 `.miderhive.bak`）；Agent 一上线，面板当场显示「已连接」，并写入一条欢迎记忆（每个身份仅一次）。**自动连接**：接入向导「接入全部已检测」一键批量签发+写入（已在线的不动）；总览页检测到新装未接入的工具会出提示条；脚本场景用 `agent-cli auto-connect`。设置里随时可重新打开 |
 | MCP 接入 | 自带 `miderhive-mcp` stdio 服务器，把记忆 / 知识（检索、新增、版本迭代）/ 消息 / 错误 / 技能市场 / 用量（汇总、上报、逐日、多维切片）暴露为 **27 个 MCP 工具**；`hive_status` 一次调用回答"我到底连上没有"。Claude Code、Claude Desktop、Cursor、Codex/ChatGPT、Droid、DSH、Hermes 即插即用，身份体系与 HTTP API 完全相同（[配置](docs/mcp.md)） |
 | 防呆设计 | 启动自检（数据目录可写 / 配置可读 / 端口占用 / 数据库异常——可关闭、双语、附下一步）；总览页健康横幅只在异常时出现；离线 Agent 先给排查原因再给修复入口；明文密钥丢失一键轮换修复；技术报错统一翻译成中英"人话"+ 下一步动作，绝不静默失败 |
 | 操作审计 | 所有写操作记录身份、时间、动作、对象与内容摘要（轮转保留 30 天 / 10 万条）；可见性与消息一致——工作台与管理者看全量，HTTP 侧普通 Agent 只能读到自己的行 |

@@ -24,6 +24,25 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+### Added
+- **Five more first-class clients + a custom-client fallback**: Gemini CLI, Qwen Code, iFlow CLI,
+  Windsurf and Kiro join the onboarding registry — all speak the standard `mcpServers` JSON
+  shape, so the wizard writes their settings files directly while preserving every unrelated
+  setting (theme, model, ...). Anything else that understands the Claude-shaped config is covered
+  by a **custom client** fallback: pick any config file path and the wizard merges a standard
+  `miderhive` entry with the same safety net (backup, atomic write, shape refusal).
+- **Auto-connect, three ways**: a "Connect all detected" button in the onboarding wizard that
+  provisions and wires every installed-not-yet-connected tool in one go; a dashboard banner that
+  appears when installed-but-unconnected tools are found (click to batch-connect — nothing is
+  written silently); and `agent-cli auto-connect` for headless setups (idempotent: re-runs skip
+  everything already wired). All three deliberately skip tools that are online or already
+  connected — provisioning rotates keys, and re-issuing would invalidate keys you already pasted.
+- Install detection moved into the core (PATH scan + candidate install/config paths, shared by
+  the GUI and the CLI), fixing a latent Windows bug along the way: file operations in the config
+  writer used narrow paths, which the OS interprets in the legacy ANSI code page — user profiles
+  with non-ASCII names (Chinese, Cyrillic, ...) would fail detection and writes. Everything now
+  goes through proper UTF-8 conversion.
+
 ## [1.3.0] - 2026-10-07
 
 ### Added
