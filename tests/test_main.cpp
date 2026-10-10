@@ -976,7 +976,7 @@ static void test_integrations_generate() {
     CHECK(generateConfig("copilot", winExe, "p1", "k1").find("X-Agent-Name: p1") !=
           std::string::npos);
     // 注册表完整性：8 个 id、格式与默认名一致；hasWritableConfig 与格式匹配
-    CHECK_EQ(toolRegistry().size(), static_cast<size_t>(8));
+    CHECK_EQ(toolRegistry().size(), static_cast<size_t>(13));
     for (const auto& t : toolRegistry()) {
         CHECK(toolById(t.id) != nullptr);
         CHECK(hasWritableConfig(t.id) ==
@@ -1050,6 +1050,30 @@ static void test_integrations_write() {
         txt.clear();
         CHECK(readFileUtf8(tomlPath, txt));
         CHECK(txt == nonCanonical);
+    }
+
+    // Gemini（settings.json）：mcpServers 合并必须保留用户的非 MCP 设置
+    // （theme/model 等顶层键）——settings.json 是通用设置文件而不是专用 MCP 配置
+    {
+        const std::string geminiPath = (tmp / ".gemini/settings.json").string();
+        writeFileUtf8(geminiPath,
+                      "{\"theme\":\"dark\",\"model\":\"gemini-2.5-pro\",\"mcpServers\":{}}");
+        r = writeConfigUnderRoot(tmp.string(), "gemini", exe, "g1", "k1");
+        CHECK(r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(geminiPath, txt));
+        j = nlohmann::json::parse(txt, nullptr, false);
+        CHECK(!j.is_discarded());
+        CHECK_EQ(j["theme"], "dark");
+        CHECK_EQ(j["model"], "gemini-2.5-pro");
+        CHECK(j["mcpServers"]["miderhive"]["env"]["MIDERHIVE_AGENT_NAME"] == "g1");
+        // 重复写入是替换而不是追加
+        CHECK(writeConfigUnderRoot(tmp.string(), "gemini", exe, "g2", "k2").ok);
+        txt.clear();
+        CHECK(readFileUtf8(geminiPath, txt));
+        j = nlohmann::json::parse(txt, nullptr, false);
+        CHECK_EQ(j["mcpServers"]["miderhive"]["env"]["MIDERHIVE_AGENT_NAME"].get<std::string>(), "g2");
+        CHECK_EQ(j["theme"], "dark");
     }
 
     // Hermes 父键带 flow 值（mcp_servers: {}）：缩进块插在 flow 值后面是结构性
@@ -2385,7 +2409,7 @@ static void test_install_detection() {
 
     for (const auto& t : ah::integrations::toolRegistry()) {
         CHECK(t.exeName != nullptr);
-        CHECK(*t.exeName != '\0');
+        CHECK(!ah::integrations::candidatePaths(t.id).empty() || (t.exeName && *t.exeName));
         CHECK(!ah::integrations::candidatePaths(t.id).empty());
     }
     CHECK(ah::integrations::candidatePaths("no-such-tool").empty());

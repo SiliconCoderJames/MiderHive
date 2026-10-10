@@ -170,6 +170,50 @@ mcp_servers:
 若该文件里**已经有** `mcp_servers:` 段，请把 `miderhive:` 这一项手工加到那段下面
 （向导检测到这种情况会拒绝自动写入，以免弄坏你的配置）。
 
+### Gemini CLI / Qwen Code / iFlow CLI / Windsurf / Kiro（settings.json 系）
+
+五个客户端共用同一种形状（Claude 发明的 `mcpServers` JSON，仅文件路径不同），
+向导会合并写入、**原样保留你的其他设置**（theme、model 等）：
+
+| 客户端 | 配置文件 |
+|---|---|
+| Gemini CLI | `%USERPROFILE%\.gemini\settings.json` |
+| Qwen Code | `%USERPROFILE%\.qwen\settings.json` |
+| iFlow CLI | `%USERPROFILE%\.iflow\settings.json` |
+| Windsurf | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` |
+| Kiro | `%USERPROFILE%\.kiro\settings\mcp.json` |
+
+写入后的 `mcpServers` 段长得都一样：
+
+```json
+{
+  "mcpServers": {
+    "miderhive": {
+      "command": "C:\Program Files\MiderHive\miderhive-mcp.exe",
+      "env": {
+        "MIDERHIVE_AGENT_NAME": "gemini",
+        "MIDERHIVE_AGENT_KEY": "<粘贴 key>"
+      }
+    }
+  }
+}
+```
+
+手动接入时把这一段加进对应文件的 `mcpServers` 键即可（文件里已有其他 server
+条目的照抄形状）。Gemini CLI 重启后自动发现；Windsurf 检测到文件变化会自动
+刷新；Kiro/Qwen/iFlow 重启后生效。
+
+### 自定义 MCP 客户端（任何兼容 mcpServers 形状的工具）
+
+不在上表里的工具——只要它支持 Claude 形状的 MCP 配置（市面上绝大多数）——
+用「自定义 MCP 客户端」兜底：在接入向导的工具列表最底部选「自定义 MCP 客户端」，
+选定它的配置文件路径，向导按标准 `mcpServers` 形状合并写入（同样留 `.bak`
+备份、保留已有条目）。CLI 等价形式：
+
+```bash
+agent-cli apply-config --tool custom --path "C:\path	o\config.json" --name <身份名> --key <key>
+```
+
 ### ZCode
 
 ZCode 的执行器不走 MCP，通过环境变量接入（`agent-cli` / `platformd` 已内置支持）：

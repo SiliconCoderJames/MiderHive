@@ -114,6 +114,39 @@ def hermes_available():
     local = os.environ.get("LOCALAPPDATA", "")
     return os.path.isdir(os.path.join(local, "hermes")) if local else False
 
+def _config_dir_available(rel_dirs):
+    local = os.environ.get("LOCALAPPDATA", "")
+    for d in rel_dirs:
+        full = os.path.expanduser(d.replace("/", os.sep))
+        if os.path.isdir(full):
+            return True
+        if local and d.startswith("~/"):
+            alt = os.path.join(local, d[2:].replace("/", os.sep))
+            if os.path.isdir(alt):
+                return True
+    return False
+
+
+def gemini_available():
+    return bool(shutil.which("gemini")) or _config_dir_available(["~/.gemini"])
+
+
+def qwen_available():
+    return bool(shutil.which("qwen")) or _config_dir_available(["~/.qwen"])
+
+
+def iflow_available():
+    return bool(shutil.which("iflow")) or _config_dir_available(["~/.iflow"])
+
+
+def windsurf_available():
+    return _config_dir_available(["~/AppData/Local/Programs/Windsurf",
+                                  "~/AppData/Local/Windsurf", "~/.codeium/windsurf"])
+
+
+def kiro_available():
+    return _config_dir_available(["~/AppData/Local/Programs/Kiro", "~/.kiro"])
+
 
 # ---------------- 各客户端验证 ----------------
 
@@ -173,6 +206,58 @@ def verify_dsh(cli, work):
         add("dsh", "FAIL", "合成后的 profile 树不含 mcp-miderhive/dsh-mcp-client")
         return
     add("dsh", "PASS", "DSH profile 加载器成功合成补丁（工具将以 mcp__miderhive__* 出现）")
+
+
+def verify_settings_json_client(cli, tool_id, work):
+    """mcpServers JSON 形状的新客户端（settings.json / mcp_config.json 系）：
+    写入后解析断言 miderhive 条目完整。验证是纯文件操作，不需要客户端本体。"""
+    root = new_work_dir("mh-%s-" % tool_id)
+    rc, out = run([cli, "apply-config", "--tool", tool_id, "--dir", root,
+                   "--name", tool_id + "-probe", "--key", "probe-key"])
+    if rc != 0:
+        add(tool_id, "FAIL", "agent-cli apply-config 失败: " + out.strip()[:160])
+        return
+    rel = {"gemini": (".gemini", "settings.json"),
+           "qwen": (".qwen", "settings.json"),
+           "iflow": (".iflow", "settings.json"),
+           "windsurf": (".codeium/windsurf", "mcp_config.json"),
+           "kiro": (".kiro/settings", "mcp.json")}[tool_id]
+    cfg = os.path.join(root, rel[0].replace("/", os.sep), rel[1])
+    if not os.path.exists(cfg):
+        add(tool_id, "FAIL", "配置未生成: " + cfg)
+        return
+    with open(cfg, encoding="utf-8") as f:
+        data = json.load(f)
+    srv = data.get("mcpServers", {}).get("miderhive") or {}
+    if "miderhive-mcp" not in srv.get("command", ""):
+        add(tool_id, "FAIL", "miderhive 条目异常: %s" % cfg)
+        return
+    add(tool_id, "PASS", "JSON 解析成功（miderhive 条目完整）")
+
+
+def verify_gemini_merge_preserves(cli, work):
+    """settings.json 是通用设置文件：已有 theme/model 等顶层键时，合并必须
+    原样保留（只动 mcpServers 子树）——这是 Gemini 系接入的关键场景。"""
+    root = new_work_dir("mh-gemini-merge-")
+    cfg_dir = os.path.join(root, ".gemini")
+    os.makedirs(cfg_dir, exist_ok=True)
+    cfg = os.path.join(cfg_dir, "settings.json")
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write('{"theme":"dark","model":"gemini-2.5-pro"}')
+    rc, out = run([cli, "apply-config", "--tool", "gemini", "--dir", root,
+                   "--name", "gemini-probe", "--key", "probe-key"])
+    if rc != 0:
+        add("gemini", "FAIL", "合并已有 settings.json 失败: " + out.strip()[:160])
+        return
+    with open(cfg, encoding="utf-8") as f:
+        data = json.load(f)
+    if data.get("theme") != "dark" or data.get("model") != "gemini-2.5-pro":
+        add("gemini", "FAIL", "用户设置被破坏: %s" % data)
+        return
+    if "miderhive" not in data.get("mcpServers", {}):
+        add("gemini", "FAIL", "合并后缺少 miderhive 条目")
+        return
+    add("gemini", "PASS", "已有设置合并保留（theme/model 原样 + miderhive 写入）")
 
 
 def verify_codex(cli, work):
@@ -284,6 +369,18 @@ def main():
         verify_droid(cli, None)
     else:
         add("droid", "SKIP", "本机未安装 Factory Droid")
+
+    # Gemini 系（settings.json / mcp_config.json 形状）：验证是纯文件操作，
+    # 不需要客户端本体；未安装照矩阵惯例 SKIP
+    for tool_id, avail in (("gemini", gemini_available), ("qwen", qwen_available),
+                           ("iflow", iflow_available), ("windsurf", windsurf_available),
+                           ("kiro", kiro_available)):
+        if avail():
+            verify_settings_json_client(cli, tool_id, None)
+        else:
+            add(tool_id, "SKIP", "本机未安装（配置目录与 CLI 均未检出）")
+    if gemini_available():
+        verify_gemini_merge_preserves(cli, None)
 
     add("zcode", "COVERED", "环境变量接入，由 scripts/feasibility_check.py 覆盖")
 

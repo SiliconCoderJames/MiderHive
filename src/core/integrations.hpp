@@ -40,7 +40,7 @@ struct ToolMeta {
     const char* exeName;           // PATH 探测名（空串 = 无 CLI，只靠候选路径检测）
 };
 
-// 八工具注册表（GUI 的展示名/安装指引在 gui/integrations.h，这里只放行为元数据）
+// 客户端注册表（GUI 的展示名/安装指引在 gui/integrations.h，这里只放行为元数据）
 inline const std::vector<ToolMeta>& toolRegistry() {
     static const std::vector<ToolMeta> kTools = {
         {"claude-code", Format::JsonMcpServers, "claude",      "claude"},
@@ -50,6 +50,11 @@ inline const std::vector<ToolMeta>& toolRegistry() {
         {"hermes",      Format::HermesYaml,     "hermes",      "hermes"},
         {"zcode",       Format::EnvVars,        "zcode-agent", "zcode"},
         {"cursor",      Format::JsonMcpServers, "cursor",      "cursor"},
+        {"gemini",      Format::JsonMcpServers, "gemini",      "gemini"},
+        {"qwen",        Format::JsonMcpServers, "qwen",        "qwen"},
+        {"iflow",       Format::JsonMcpServers, "iflow",       "iflow"},
+        {"windsurf",    Format::JsonMcpServers, "windsurf",    ""},
+        {"kiro",        Format::JsonMcpServers, "kiro",        ""},
         {"copilot",     Format::InstructionsMd, "copilot",     "code"},
     };
     return kTools;
@@ -82,6 +87,11 @@ inline std::string relativeConfigPath(const std::string& id) {
     if (id == "dsh") return ".dsh/profiles/web/cordis.patch.yml";
     if (id == "hermes") return "hermes/config.yaml";
     if (id == "cursor") return ".cursor/mcp.json";
+    if (id == "gemini") return ".gemini/settings.json";
+    if (id == "qwen") return ".qwen/settings.json";
+    if (id == "iflow") return ".iflow/settings.json";
+    if (id == "windsurf") return ".codeium/windsurf/mcp_config.json";
+    if (id == "kiro") return ".kiro/settings/mcp.json";
     return "";  // zcode / copilot：无固定配置文件
 }
 
@@ -159,6 +169,16 @@ inline std::vector<std::string> candidatePaths(const std::string& id) {
                 home + "/.cursor"};
     if (id == "copilot")
         return {home + "/.vscode/extensions", local + "/Programs/Microsoft VS Code"};
+    if (id == "gemini")
+        return {home + "/.gemini", appdata + "/npm/gemini.cmd", appdata + "/npm/gemini"};
+    if (id == "qwen")
+        return {home + "/.qwen", appdata + "/npm/qwen.cmd", appdata + "/npm/qwen"};
+    if (id == "iflow")
+        return {home + "/.iflow", appdata + "/npm/iflow.cmd", appdata + "/npm/iflow"};
+    if (id == "windsurf")
+        return {local + "/Programs/Windsurf", home + "/.codeium/windsurf"};
+    if (id == "kiro")
+        return {local + "/Programs/Kiro", home + "/.kiro"};
     return {};
 }
 

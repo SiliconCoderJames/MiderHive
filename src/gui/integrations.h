@@ -50,7 +50,7 @@ struct Tool {
     QString noteZh, noteEn;    // 该工具特有的坑（空串 = 不走 MCP）
 };
 
-// 八工具注册表。顺序 = 界面展示顺序（把用户最常用的放前面）。
+// 客户端注册表。顺序 = 界面展示顺序（把用户最常用的放前面）。
 // format / defaultAgentName 以 core 注册表为准（行为元数据单一来源），此处不重复写。
 inline QVector<Tool> tools() {
     QVector<Tool> out = {
@@ -136,6 +136,62 @@ inline QVector<Tool> tools() {
          Format::JsonMcpServers, "cursor",
          "Cursor 采用 mcpServers 结构（含 args 数组）；改动后需重启 Cursor。",
          "Cursor uses the mcpServers shape (with an args array); restart Cursor after editing."},
+
+        {"gemini", "Gemini CLI", "Gemini CLI", "gemini",
+         "%USERPROFILE%\.gemini\settings.json",
+         "%USERPROFILE%\.gemini\settings.json",
+         "未检测到 Gemini CLI。可用 npm install -g @google/gemini-cli 安装后点「重新检测」。",
+         "Gemini CLI not detected. Install with `npm install -g @google/gemini-cli`, then click "
+         "Re-check.",
+         Format::JsonMcpServers, "gemini",
+         "写入 settings.json 的 mcpServers 键，theme/model 等其他设置原样保留；"
+         "Gemini CLI 重启后自动发现工具。",
+         "Writes the mcpServers key of settings.json (theme/model and other settings are "
+         "preserved); Gemini CLI discovers the tools after a restart."},
+
+        {"qwen", "Qwen Code", "Qwen Code", "qwen",
+         "%USERPROFILE%\.qwen\settings.json",
+         "%USERPROFILE%\.qwen\settings.json",
+         "未检测到 Qwen Code。可用 npm install -g @qwen-code/qwen-code 安装后点「重新检测」。",
+         "Qwen Code not detected. Install with `npm install -g @qwen-code/qwen-code`, then "
+         "click Re-check.",
+         Format::JsonMcpServers, "qwen",
+         "与 Gemini CLI 同形状：settings.json 的 mcpServers 键，其他设置原样保留；"
+         "重启后生效。",
+         "Same shape as Gemini CLI: the mcpServers key of settings.json, other settings "
+         "preserved; takes effect after a restart."},
+
+        {"iflow", "iFlow CLI", "iFlow CLI", "iflow",
+         "%USERPROFILE%\.iflow\settings.json",
+         "%USERPROFILE%\.iflow\settings.json",
+         "未检测到 iFlow CLI。装好后点「重新检测」。",
+         "iFlow CLI not detected. Install it and click Re-check.",
+         Format::JsonMcpServers, "iflow",
+         "与 Gemini CLI 同形状：settings.json 的 mcpServers 键，其他设置原样保留；"
+         "重启后生效。",
+         "Same shape as Gemini CLI: the mcpServers key of settings.json, other settings "
+         "preserved; takes effect after a restart."},
+
+        {"windsurf", "Windsurf", "Windsurf", "",
+         "%USERPROFILE%\.codeium\windsurf\mcp_config.json",
+         "%USERPROFILE%\.codeium\windsurf\mcp_config.json",
+         "未检测到 Windsurf。装好后点「重新检测」。",
+         "Windsurf not detected. Install it and click Re-check.",
+         Format::JsonMcpServers, "windsurf",
+         "写入 mcp_config.json 的 mcpServers 键；Windsurf 检测到文件变化后自动刷新"
+         "（必要时重启）。",
+         "Writes the mcpServers key of mcp_config.json; Windsurf refreshes automatically on "
+         "file change (restart if needed)."},
+
+        {"kiro", "Kiro", "Kiro", "",
+         "%USERPROFILE%\.kiro\settings\mcp.json",
+         "%USERPROFILE%\.kiro\settings\mcp.json",
+         "未检测到 Kiro（AWS）。装好后点「重新检测」。",
+         "Kiro (AWS) not detected. Install it and click Re-check.",
+         Format::JsonMcpServers, "kiro",
+         "写入 .kiro/settings/mcp.json 的 mcpServers 键；重启 Kiro 后生效。",
+         "Writes the mcpServers key of .kiro/settings/mcp.json; takes effect after Kiro "
+         "restarts."},
 
         {"copilot", "GitHub Copilot", "GitHub Copilot", "code",
          ".github/copilot-instructions.md（仓库内）",

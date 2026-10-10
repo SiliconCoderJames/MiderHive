@@ -276,12 +276,14 @@ int main(int argc, char** argv) {
             "integrations: copilot 生成 HTTP 指令块");
 
         // 八工具注册表：六个用户点名接入的 Agent 都必须在册
-        const QStringList ids = {"claude-code", "codex",     "droid", "dsh",
-                                 "hermes",      "zcode",     "cursor", "copilot"};
+        const QStringList ids = {"claude-code", "codex",   "droid",    "dsh",
+                                 "hermes",      "zcode",   "cursor",   "gemini",
+                                 "qwen",        "iflow",   "windsurf", "kiro",
+                                 "copilot"};
         bool allPresent = ui::integrations::tools().size() == ids.size();
         for (const QString& id : ids)
             if (!ui::integrations::toolById(id)) allPresent = false;
-        chk(allPresent, "integrations: 八工具注册表完整（含 Claude/ChatGPT/Droid/DSH/Hermes/ZCode）");
+        chk(allPresent, "integrations: 客户端注册表完整（Claude/ChatGPT/Droid/DSH/Hermes/ZCode/Gemini/Qwen/iFlow/Windsurf/Kiro）");
 
         // 落点解析：无配置文件的工具必须返回空串，其余必须给绝对路径
         chk(ui::integrations::configPath("zcode").isEmpty() &&
