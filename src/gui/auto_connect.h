@@ -29,14 +29,9 @@ struct Outcome {
     QString detail;  // 已按当前语言格式化的说明（含下一步）
 };
 
-// 配置文件里是否已有 miderhive 条目（文本近似判定：JSON/TOML/YAML 的条目
-// 名都含 "miderhive" 子串；误判方向是"多跳过一次"，安全）
+// 配置是否已接入：实现在 gui/integrations.h（connectedState 的判定基础）
 inline bool configHasMiderhive(const QString& id) {
-    const QString path = ui::integrations::configPath(id);
-    if (path.isEmpty()) return false;
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly)) return false;
-    return f.readAll().contains("miderhive");
+    return ui::integrations::configHasMiderhive(id);
 }
 
 inline QVector<Outcome> connectAllDetected(ah::Platform& platform) {

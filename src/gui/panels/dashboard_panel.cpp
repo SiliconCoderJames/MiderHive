@@ -1,5 +1,6 @@
 #include "dashboard_panel.h"
 
+#include "../auto_connect.h"
 #include "../integrations.h"
 
 #include <algorithm>
@@ -32,6 +33,15 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     healthLay_->setSpacing(6);
     healthBox_->setVisible(false);
     root->addWidget(healthBox_);
+
+    // ---- 接入提示条：检测到"已装未接入"的工具时出现（一键批量接入）----
+    onboardBox_ = new QWidget(this);
+    onboardBox_->setStyleSheet("background:transparent;");
+    onboardLay_ = new QVBoxLayout(onboardBox_);
+    onboardLay_->setContentsMargins(0, 0, 0, 0);
+    onboardLay_->setSpacing(6);
+    onboardBox_->setVisible(false);
+    root->addWidget(onboardBox_);
 
     // ---- 第一行：KPI 磁贴（趋势小图 + 环比胶囊，先给结论再看图表）----
     auto* kpiRow = new QHBoxLayout();
@@ -262,6 +272,71 @@ QString DashboardPanel::kindOfEvent(const QString& action, const QString& target
     return "audit";
 }
 
+// 接入提示条增量重建：检测到"已安装但配置里没有 miderhive"的工具时出现，
+// 一键走批量接入（connectAllDetected 与接入对话框共用；已在线/已接入的不动）。
+// 内容签名不变时不重建（3s 轮询不闪屏）。
+void DashboardPanel::refreshOnboardBanner() {
+    QStringList pending;
+    for (const auto& t : ui::integrations::tools()) {
+        if (!ah::integrations::hasWritableConfig(t.id.toStdString())) continue;
+        if (ui::integrations::connectedState(t.id) ==
+            ui::integrations::ConnectedState::NotConnected)
+            pending << i18n::trs(t.nameZh, t.nameEn);
+    }
+    const QString sig = pending.join(",");
+    if (sig == lastOnboardSig_) return;
+    lastOnboardSig_ = sig;
+
+    while (onboardLay_->count() > 0) {  // 清旧横幅行
+        QLayoutItem* it = onboardLay_->takeAt(0);
+        if (it->widget()) it->widget()->deleteLater();
+        delete it;
+    }
+    if (pending.isEmpty()) {
+        onboardBox_->setVisible(false);
+        return;
+    }
+
+    auto* row = new QWidget(onboardBox_);
+    row->setStyleSheet(
+        ui::th("QWidget { background:@warnbg@; border:1px solid @warn@; border-radius:8px; }"));
+    auto* rl = new QHBoxLayout(row);
+    rl->setContentsMargins(12, 8, 12, 8);
+    auto* text = new QLabel(
+        i18n::trs("检测到 %1 个未接入的 Agent 工具：%2。一键签发身份并写入配置"
+                  "（已在线的不动）。",
+                  "%1 agent tool(s) detected but not connected: %2. One click provisions and "
+                  "wires them (online ones are left untouched).")
+            .arg(pending.size())
+            .arg(pending.join(i18n::trs("、", ", "))));
+    text->setWordWrap(true);
+    rl->addWidget(text, 1);
+    auto* go = new QPushButton(i18n::trs("一键接入", "Connect all"), row);
+    go->setObjectName("primary");
+    go->setCursor(Qt::PointingHandCursor);
+    rl->addWidget(go);
+    onboardLay_->addWidget(row);
+    onboardBox_->setVisible(true);
+
+    connect(go, &QPushButton::clicked, this, [this] {
+        const auto results = ui::autoconnect::connectAllDetected(platform_);
+        int ok = 0, failed = 0;
+        for (const auto& o : results) {
+            if (o.state == "ok") ++ok;
+            else if (o.state == "failed") ++failed;
+        }
+        ui::Toast::show(this,
+                        i18n::trs("批量接入完成：%1 个成功%2。", "Batch connect done: %1 "
+                                  "succeeded%2.")
+                            .arg(ok)
+                            .arg(failed > 0 ? i18n::trs("，%1 个失败", ", %1 failed").arg(failed)
+                                            : QString()),
+                        failed == 0);
+        lastOnboardSig_.clear();  // 强制下一轮重建（清单已变）
+        refreshOnboardBanner();
+    });
+}
+
 void DashboardPanel::refreshHealth() {
     const ah::Diagnostics d = platform_.diagnostics();
     struct Row {
@@ -473,6 +548,7 @@ void DashboardPanel::refresh() {
 
     // 健康横幅先行：问题（端口/目录/库/密钥）在用户看数据前就摆上桌面
     refreshHealth();
+    refreshOnboardBanner();
 
     // 逐日序列先取：KPI 的趋势小图与预算卡的迷你走势都用它（一次查询，两处复用）
     std::vector<ah::UsageDailyPoint> dailyPts;

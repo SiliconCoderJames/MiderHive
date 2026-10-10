@@ -286,6 +286,23 @@ inline QString configDir(const QString& id) {
     return p.isEmpty() ? QString() : QFileInfo(p).absolutePath();
 }
 
+// 配置文件里是否已有 miderhive 条目（文本近似判定：JSON/TOML/YAML 的条目名
+// 都含 "miderhive" 子串；误判方向是"多认为已接入一次"，安全）
+inline bool configHasMiderhive(const QString& id) {
+    const QString path = configPath(id);
+    if (path.isEmpty()) return false;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    return f.readAll().contains("miderhive");
+}
+
+// 接入状态（总览页"检测到未接入工具"提示条用）
+enum class ConnectedState { NotInstalled, NotConnected, Connected };
+inline ConnectedState connectedState(const QString& id) {
+    if (!installed(id)) return ConnectedState::NotInstalled;
+    return configHasMiderhive(id) ? ConnectedState::Connected : ConnectedState::NotConnected;
+}
+
 // 本机 miderhive-mcp 可执行文件路径（配置片段与"复制接入命令"共用）。
 // 非 Windows 构建没有 .exe 后缀——此前 welcome/dashboard 硬编码 .exe，会把
 // 不存在的路径写进用户配置，工具重启后拉不起 MCP（connect_dialog 有正确先例）。

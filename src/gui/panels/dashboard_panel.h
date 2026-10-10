@@ -64,6 +64,11 @@ private:
     QString lastHealthSig_;
     bool healthDirty_ = false;  // 修复动作后强制下一轮重建（健康签名恰为空串，光 clear 会撞相等短路）
     void refreshHealth();               // 轮询诊断 → 增量重建横幅
+    // ---- 接入提示条：检测到"已装未接入"的工具时出现，一键批量接入 ----
+    QWidget* onboardBox_ = nullptr;
+    QVBoxLayout* onboardLay_ = nullptr;
+    QString lastOnboardSig_;
+    void refreshOnboardBanner();        // 轮询接入状态 → 增量重建提示条
     void fixKeyfile(const QString& name);  // 密钥丢失的修复动作：轮换密钥并展示新钥
 
     std::vector<ui::AgentCard*> agentCards_;
