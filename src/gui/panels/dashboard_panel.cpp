@@ -865,6 +865,9 @@ void DashboardPanel::rebuildEventStream(const std::vector<ah::AuditRecord>& reco
 
 void DashboardPanel::retranslate() {
     PanelBase::retranslate();
+    // 提示条按签名增量重建，语言切换不改变签名——立即重建，不等下一轮轮询
+    lastOnboardSig_.clear();
+    refreshOnboardBanner();
     budgetCard_->setTitle(i18n::trs("本周 Token 预算", "Weekly Token Budget"));
     editBudgetBtn_->setText(i18n::trs("调整预算", "Adjust budget"));
     usageCard_->setTitle(i18n::trs("各 Agent 本周用量", "Per-Agent Usage This Week"));
