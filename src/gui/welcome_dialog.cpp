@@ -272,7 +272,7 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
         return;
     }
     std::string err, apiKey;
-    if (!platform_.agentProvision("zcode", agentName.toStdString(), apiKey, err)) {
+    if (!platform_.agentProvision(ah::kManagerName, agentName.toStdString(), apiKey, err)) {
         QMessageBox::warning(this, i18n::trs("接入失败", "Connect failed"),
                              ui::humanError(QString::fromStdString(err)));
         return;

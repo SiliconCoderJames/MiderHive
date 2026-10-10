@@ -1,5 +1,7 @@
 #include "connect_dialog.h"
 
+#include "auto_connect.h"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
@@ -136,6 +138,15 @@ ConnectDialog::ConnectDialog(ah::Platform& platform, QWidget* parent)
     provisionBtn_->setCursor(Qt::PointingHandCursor);
     nameRow->addWidget(provisionBtn_);
 
+    batchBtn_ = new QPushButton(i18n::trs("接入全部已检测", "Connect all detected"), this);
+    batchBtn_->setToolTip(i18n::trs(
+        "对所有已安装、还没接入的工具一次完成签发与写入（已在线的不动，"
+        "防止作废正在使用的密钥）。",
+        "Provision and wire every installed-not-yet-connected tool in one go "
+        "(online ones are left untouched so their keys stay valid)."));
+    batchBtn_->setCursor(Qt::PointingHandCursor);
+    nameRow->addWidget(batchBtn_);
+
     auto* recheckBtn = new QPushButton(i18n::trs("重新检测", "Re-check"), this);
     nameRow->addWidget(recheckBtn);
     nameRow->addStretch(1);
@@ -210,6 +221,31 @@ ConnectDialog::ConnectDialog(ah::Platform& platform, QWidget* parent)
     connect(list_, &QListWidget::currentRowChanged, this, [this](int row) { selectRow(row); });
     connect(recheckBtn, &QPushButton::clicked, this, [this] { recheck(); });
     connect(provisionBtn_, &QPushButton::clicked, this, [this] { provision(); });
+    connect(batchBtn_, &QPushButton::clicked, this, [this] {
+        const auto results = ui::autoconnect::connectAllDetected(platform_);
+        int ok = 0, failed = 0;
+        QString report;
+        for (const auto& o : results) {
+            if (o.state == "ok") {
+                ++ok;
+                report += i18n::trs("✓ %1 → 身份 %2", "✓ %1 → agent %2")
+                              .arg(o.toolName, o.agentName) +
+                          "\n";
+            } else if (o.state == "failed") {
+                ++failed;
+                report += "✗ " + o.toolName + "：" + o.detail + "\n";
+            }
+        }
+        status_->setText(
+            i18n::trs("批量接入完成：%1 个成功，%2 个失败（其余已在线/跳过）。",
+                      "Batch connect done: %1 succeeded, %2 failed (others online/skipped).")
+                .arg(ok)
+                .arg(failed) +
+            (report.isEmpty() ? QString() : "\n" + report.trimmed()));
+        ui::Toast::show(this, i18n::trs("批量接入完成 ✓", "Batch connect done ✓"), failed == 0);
+        recheck();
+        tick();
+    });
     connect(writeBtn_, &QPushButton::clicked, this, [this] { writeToConfig(); });
     connect(writeProjectBtn_, &QPushButton::clicked, this, [this] { writeProjectConfig(); });
     connect(copyBtn_, &QPushButton::clicked, this, [this] { copySnippet(); });
