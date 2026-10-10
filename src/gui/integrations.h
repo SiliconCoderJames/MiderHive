@@ -333,6 +333,15 @@ inline ApplyResult applyConfig(const QString& id, const QString& command, const 
         agentName.toStdString(), agentKey.toStdString()));
 }
 
+// 自定义 MCP 客户端兜底：用户给出任意配置文件路径，按标准 mcpServers 形状
+// 合并写入（安全网与注册表路径同一套：备份/原子写/形状拒绝）。
+inline ApplyResult applyCustomConfig(const QString& path, const QString& command,
+                                     const QString& agentName, const QString& agentKey) {
+    return toResult(ah::integrations::writeCustomMcpConfig(
+        path.toStdString(), command.toStdString(), agentName.toStdString(),
+        agentKey.toStdString()));
+}
+
 // Claude Code 的项目级写入：<项目根>/.mcp.json（向导让用户挑一次项目文件夹）。
 inline ApplyResult applyProjectConfig(const QString& projectDir, const QString& command,
                                       const QString& agentName, const QString& agentKey) {

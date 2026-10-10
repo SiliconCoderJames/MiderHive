@@ -687,6 +687,36 @@ inline std::string replaceFirst(std::string text, const std::string& from, const
 }
 
 // 把某工具的配置写到**显式给定**的路径（格式由 id 决定）。GUI / CLI 共用。
+// 写入收尾（备份 → CRLF 保真 → 原子写 → 结果文案）。writeConfigFile 与
+// writeCustomMcpConfig 共用同一套安全网：备份失败中止、绝不部分写入。
+inline WriteResult finishConfigWrite(const std::string& path, std::string out,
+                                     const bool wasCrlf, const bool hasFile) {
+    // 备份失败必须中止：不能在安全网缺失时覆盖用户配置（成功文案宣称的
+    // ".miderhive.bak" 必须是真的）
+    if (hasFile && !backupFile(path)) {
+        return makeResult(false,
+                          "备份原文件失败（.miderhive.bak 无法写入），为避免丢失原内容没有写入：" +
+                              path,
+                          "Backing up the original failed (.miderhive.bak is not writable); "
+                          "nothing was written, to avoid losing it: " +
+                              path);
+    }
+    // 原文件是 CRLF 就写回 CRLF：整份被改成 LF 会产生满屏 diff（配置常进版本库）
+    if (wasCrlf) out = toCrlf(out);
+    if (!writeFileUtf8(path, out)) {
+        return makeResult(false,
+                          "写入失败：" + path + "（可能有权限或文件被占用）。原文件未被改动，副本在 .miderhive.bak。",
+                          "Write failed: " + path +
+                              " (permissions, or the file is locked). The original is untouched; "
+                              "a copy is at .miderhive.bak.");
+    }
+    const char* zh = hasFile ? "已写入 %1（原文件备份为 .miderhive.bak）。" : "已创建 %1。";
+    const char* en = hasFile ? "Written to %1 (original backed up as .miderhive.bak)."
+                             : "Created %1.";
+    // 路径在返回前就地替换：调用方拿到的就是完整句子，不用再关心占位符
+    return makeResult(true, replaceFirst(zh, "%1", path), replaceFirst(en, "%1", path));
+}
+
 inline WriteResult writeConfigFile(const std::string& id, const std::string& path,
                                    const std::string& command, const std::string& agentName,
                                    const std::string& agentKey) {
@@ -795,30 +825,33 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
                           "This tool has no config file that can be written automatically.");
     }
 
-    // 备份失败必须中止：不能在安全网缺失时覆盖用户配置（成功文案宣称的
-    // ".miderhive.bak" 必须是真的）
-    if (hasFile && !backupFile(path)) {
-        return makeResult(false,
-                          "备份原文件失败（.miderhive.bak 无法写入），为避免丢失原内容没有写入：" +
-                              path,
-                          "Backing up the original failed (.miderhive.bak is not writable); "
-                          "nothing was written, to avoid losing it: " +
-                              path);
+    return finishConfigWrite(path, std::move(out), wasCrlf, hasFile);
+}
+
+// 自定义 MCP 客户端兜底：任意路径写标准 mcpServers JSON（合并保留既有条目）。
+// 覆盖注册表之外但兼容 Claude 形状的工具（市面上绝大多数）；备份/原子写/形状
+// 拒绝的安全网与注册表路径完全同一套。
+inline WriteResult writeCustomMcpConfig(const std::string& path, const std::string& command,
+                                        const std::string& agentName, const std::string& agentKey) {
+    if (path.empty()) {
+        return makeResult(false, "请先选择配置文件路径。",
+                          "Pick the config file path first.");
     }
-    // 原文件是 CRLF 就写回 CRLF：整份被改成 LF 会产生满屏 diff（配置常进版本库）
-    if (wasCrlf) out = toCrlf(out);
-    if (!writeFileUtf8(path, out)) {
+    const std::string snippet = generateConfig("custom", command, agentName, agentKey);
+    std::string existing;
+    const bool hasFile = std::filesystem::exists(fsPath(path));
+    if (hasFile && !readFileUtf8(path, existing)) {
         return makeResult(false,
-                          "写入失败：" + path + "（可能有权限或文件被占用）。原文件未被改动，副本在 .miderhive.bak。",
-                          "Write failed: " + path +
-                              " (permissions, or the file is locked). The original is untouched; "
-                              "a copy is at .miderhive.bak.");
+                          "配置文件存在但读不出来（权限不足？）：" + path,
+                          "The config file exists but cannot be read (permissions?): " + path);
     }
-    const char* zh = hasFile ? "已写入 %1（原文件备份为 .miderhive.bak）。" : "已创建 %1。";
-    const char* en = hasFile ? "Written to %1 (original backed up as .miderhive.bak)."
-                             : "Created %1.";
-    // 路径在返回前就地替换：调用方拿到的就是完整句子，不用再关心占位符
-    return makeResult(true, replaceFirst(zh, "%1", path), replaceFirst(en, "%1", path));
+    const bool wasCrlf = existing.find("\r\n") != std::string::npos;
+    std::string out;
+    std::string whyZh, whyEn;
+    if (!mergeMcpServersJson(hasFile ? existing : "", snippet, out, whyZh, whyEn)) {
+        return makeResult(false, whyZh, whyEn);
+    }
+    return finishConfigWrite(path, std::move(out), wasCrlf, hasFile);
 }
 
 // 写到 rootDir 下该工具的约定相对路径（CLI / 测试 / MIDERHIVE_CONNECT_ROOT 重定向共用）。

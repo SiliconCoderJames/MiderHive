@@ -497,8 +497,8 @@ int main(int argc, char** argv) {
         auto* edit = dlg.findChild<QLineEdit*>();
         chk(view != nullptr && list != nullptr && edit != nullptr,
             "接入向导含工具列表 / 身份名输入 / 片段视图");
-        chk(list && list->count() == ui::integrations::tools().size(),
-            "接入向导列出注册表里的全部工具");
+        chk(list && list->count() == ui::integrations::tools().size() + 1,
+            "接入向导列出注册表里的全部工具 + 自定义兜底行");
         // 第 1 行是 Codex（工具表顺序：claude-code, codex, droid, dsh, hermes, zcode, cursor, copilot）
         if (list) list->setCurrentRow(1);
         if (edit) edit->setText("codex-wizard-test");

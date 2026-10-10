@@ -74,6 +74,9 @@ private:
     QPushButton* openBtn_ = nullptr;
     QPushButton* copyCmdBtn_ = nullptr;
     QLabel* cmdHint_ = nullptr;
+    QPushButton* customPathBtn_ = nullptr;  // 仅自定义行可见：选配置文件
+    QLabel* customPathLabel_ = nullptr;     // 已选路径回显
+    QString customPath_;                    // 自定义客户端的配置文件路径
     QLabel* status_ = nullptr;
     QTimer* timer_ = nullptr;
 };

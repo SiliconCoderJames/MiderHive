@@ -1076,6 +1076,30 @@ static void test_integrations_write() {
         CHECK_EQ(j["theme"], "dark");
     }
 
+    // 自定义兜底：任意路径写标准 mcpServers JSON——用户已有条目与其他顶层键
+    // 保留；坏 JSON 拒绝且原文件不动（与注册表路径同一套安全网）
+    {
+        const std::string customPath = (tmp / "whatever-client" / "mcp.json").string();
+        writeFileUtf8(customPath,
+                      "{\"mcpServers\":{\"mine\":{\"command\":\"x\"}},\"other\":1}");
+        r = writeCustomMcpConfig(customPath, exe, "cu1", "k1");
+        CHECK(r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(customPath, txt));
+        j = nlohmann::json::parse(txt, nullptr, false);
+        CHECK(!j.is_discarded());
+        CHECK(j["mcpServers"].contains("mine"));  // 用户条目保留
+        CHECK_EQ(j["other"], 1);                  // 其他顶层键保留
+        CHECK_EQ(j["mcpServers"]["miderhive"]["env"]["MIDERHIVE_AGENT_NAME"].get<std::string>(),
+                 "cu1");
+        writeFileUtf8(customPath, "not json at all");
+        r = writeCustomMcpConfig(customPath, exe, "cu2", "k2");
+        CHECK(!r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(customPath, txt));
+        CHECK(txt == "not json at all");
+    }
+
     // Hermes 父键带 flow 值（mcp_servers: {}）：缩进块插在 flow 值后面是结构性
     // 非法 YAML（宽容与严格解析器都拒载）。形状没把握就拒绝，原文件不动。
     {

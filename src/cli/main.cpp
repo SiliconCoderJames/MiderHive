@@ -356,10 +356,49 @@ int main(int argc, char** argv) {
     if (cmd == "connect-snippet" || cmd == "apply-config") {
         std::string tool =
             a.opts.count("tool") ? a.opts.at("tool") : (a.pos.size() > 1 ? a.pos[1] : "");
+        // 自定义兜底：不进注册表的工具，用户给出配置文件路径，按标准 mcpServers
+        // 形状合并写入（与 GUI 的"自定义 MCP 客户端"同一实现）
+        if (tool == "custom") {
+            std::string command = a.opts.count("command") ? a.opts.at("command") : "";
+            if (command.empty()) {
+                namespace fs = std::filesystem;
+#ifdef _WIN32
+                const char* mcpName = "miderhive-mcp.exe";
+#else
+                const char* mcpName = "miderhive-mcp";
+#endif
+                fs::path base = fs::path(argv0).parent_path();
+                if (base.empty()) base = fs::path(selfDir());
+                if (base.empty()) {
+                    std::cerr << "无法定位 miderhive-mcp，请用 --command 显式指定完整路径\n";
+                    return 2;
+                }
+                command = (base / mcpName).string();
+            }
+            if (cmd == "connect-snippet") {
+                std::cout << ah::integrations::generateConfig("custom", command,
+                                                              a.opts.count("name")
+                                                                  ? a.opts.at("name")
+                                                                  : "custom",
+                                                              a.opts.count("key") ? a.opts.at("key")
+                                                                                  : "");
+                return 0;
+            }
+            if (!a.opts.count("path")) {
+                std::cerr << "tool=custom 需要 --path 指定配置文件路径\n";
+                return 2;
+            }
+            const ah::integrations::WriteResult r = ah::integrations::writeCustomMcpConfig(
+                a.opts.at("path"), command,
+                a.opts.count("name") ? a.opts.at("name") : "custom",
+                a.opts.count("key") ? a.opts.at("key") : "");
+            std::cout << (r.ok ? "OK: " : "FAIL: ") << r.detailZh << "\n";
+            return r.ok ? 0 : 1;
+        }
         if (!ah::integrations::toolById(tool)) {
             std::cerr << "unknown tool: " << tool << "\navailable:";
             for (const auto& t : ah::integrations::toolRegistry()) std::cerr << " " << t.id;
-            std::cerr << "\n";
+            std::cerr << " custom\n";
             return 2;
         }
         std::string command = a.opts.count("command") ? a.opts.at("command") : "";

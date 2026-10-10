@@ -79,6 +79,30 @@ ConnectDialog::ConnectDialog(ah::Platform& platform, QWidget* parent)
         list_->addItem(item);
         rows_.push_back(row);
     }
+
+    // 自定义 MCP 客户端兜底：不在注册表里的工具，用户给出它的配置文件路径，
+    // 按标准 mcpServers 形状合并写入（安全网与注册表路径同一套）
+    {
+        Row row;
+        row.tool.id = "custom";
+        row.tool.nameZh = "自定义 MCP 客户端…";
+        row.tool.nameEn = "Custom MCP client…";
+        row.tool.format = ah::integrations::Format::JsonMcpServers;
+        row.tool.defaultAgentName = "custom";
+        row.tool.noteZh =
+            "任何支持 Claude 形状 mcpServers 配置的工具都能接入：点「写入配置文件」"
+            "前先选它的配置文件路径，向导按标准形状合并 miderhive 条目"
+            "（已有内容保留并先备份）。";
+        row.tool.noteEn =
+            "Any tool that supports the Claude-shaped mcpServers config can join: pick its "
+            "config file path before writing, and the wizard merges a standard miderhive "
+            "entry (existing content is kept and backed up first).";
+        row.detected = false;
+        auto* item = new QListWidgetItem(i18n::trs(row.tool.nameZh, row.tool.nameEn));
+        item->setForeground(ui::muted());
+        list_->addItem(item);
+        rows_.push_back(row);
+    }
     list_->setCurrentRow(0);
     body->addWidget(list_);
 
@@ -116,6 +140,19 @@ ConnectDialog::ConnectDialog(ah::Platform& platform, QWidget* parent)
     nameRow->addWidget(recheckBtn);
     nameRow->addStretch(1);
     right->addLayout(nameRow);
+
+    // 自定义行专属：选配置文件路径（该行选中时才可见）
+    auto* customRow = new QHBoxLayout();
+    customPathBtn_ = new QPushButton(i18n::trs("选择配置文件…", "Pick config file…"), this);
+    customPathBtn_->setCursor(Qt::PointingHandCursor);
+    customPathBtn_->setVisible(false);
+    customRow->addWidget(customPathBtn_);
+    customPathLabel_ = new QLabel(this);
+    customPathLabel_->setWordWrap(true);
+    customPathLabel_->setStyleSheet(ui::th("color:@muted@; font-size:11px;"));
+    customPathLabel_->setVisible(false);
+    customRow->addWidget(customPathLabel_, 1);
+    right->addLayout(customRow);
 
     cmdHint_ = new QLabel(this);
     cmdHint_->setWordWrap(true);
@@ -178,6 +215,18 @@ ConnectDialog::ConnectDialog(ah::Platform& platform, QWidget* parent)
     connect(copyBtn_, &QPushButton::clicked, this, [this] { copySnippet(); });
     connect(copyCmdBtn_, &QPushButton::clicked, this, [this] { copyCommand(); });
     connect(openBtn_, &QPushButton::clicked, this, [this] { openConfigFolder(); });
+    connect(customPathBtn_, &QPushButton::clicked, this, [this] {
+        const QString path = QFileDialog::getSaveFileName(
+            this, i18n::trs("选择该工具的 MCP 配置文件", "Pick the tool's MCP config file"),
+            customPath_.isEmpty() ? QDir::homePath() : customPath_,
+            i18n::trs("MCP 配置 (*.json)", "MCP config (*.json)"));
+        if (path.isEmpty()) return;
+        customPath_ = path;
+        customPathLabel_->setText(path);
+        // 路径就绪后，若已签发则写入按钮立即可用
+        if (!issuedKey_.isEmpty()) writeBtn_->setEnabled(true);
+        provision();  // 用新路径刷新右侧片段与状态
+    });
 
     // 上线观察：每 2s 问一次平台，让"接没接上"当场可见（无需手动刷新）
     timer_ = new QTimer(this);
@@ -213,11 +262,16 @@ void ConnectDialog::selectRow(int index) {
     cmdHint_->setVisible(false);
     cmdHint_->clear();
 
-    // 主写入按钮二选一：有固定配置文件 → "写入配置文件"；
-    // 没有固定落点（Claude Code）→ "写入项目 .mcp.json…"（用户挑一次项目文件夹）
+    // 主写入按钮三选一：有固定配置文件 → "写入配置文件"；Claude Code →
+    // "写入项目 .mcp.json…"；自定义 → "写入配置文件"（写进用户选的路径）；
+    // copilot/zcode（无 MCP 配置）→ 两个都不显示，只给片段
+    const bool isCustom = t.id == QLatin1String("custom");
+    const bool isClaudeCode = t.id == QLatin1String("claude-code");
     const bool fixedTarget = hasFixedConfigTarget();
-    writeBtn_->setVisible(fixedTarget);
-    writeProjectBtn_->setVisible(!fixedTarget);
+    writeBtn_->setVisible(fixedTarget || isCustom);
+    writeProjectBtn_->setVisible(!fixedTarget && isClaudeCode);
+    customPathBtn_->setVisible(isCustom);
+    customPathLabel_->setVisible(isCustom);
 
     // 说明 = 该工具特有的注意点 + 配置落点
     QString desc = i18n::trs(t.noteZh, t.noteEn);
@@ -296,7 +350,9 @@ void ConnectDialog::provision() {
         copyCmdBtn_->setEnabled(true);
     }
 
-    const bool hasFile = !ui::integrations::configPath(t.id).isEmpty();
+    const bool isCustom = t.id == QLatin1String("custom");
+    const bool hasFile = isCustom ? !customPath_.isEmpty()
+                                  : !ui::integrations::configPath(t.id).isEmpty();
     writeBtn_->setEnabled(hasFile);
     // Claude Code：没有固定落点，等用户挑项目文件夹后写入 .mcp.json
     writeProjectBtn_->setEnabled(!hasFile && issuedKey_ != QString());
@@ -329,8 +385,10 @@ void ConnectDialog::writeToConfig() {
     const ui::integrations::Tool& t = rows_[current_].tool;
     // 用签发时的名字，不是输入框的当前文本：密钥是按签发名的哈希存的，
     // 改名后写入 (新名, 旧钥) 会让该工具永远鉴权失败
-    const ui::integrations::ApplyResult r = ui::integrations::applyConfig(
-        t.id, mcpExePath(), issuedName_, issuedKey_);
+    const ui::integrations::ApplyResult r = t.id == QLatin1String("custom")
+        ? ui::integrations::applyCustomConfig(customPath_, mcpExePath(), issuedName_,
+                                              issuedKey_)
+        : ui::integrations::applyConfig(t.id, mcpExePath(), issuedName_, issuedKey_);
     actionNotice_ = i18n::trs(r.detailZh, r.detailEn);
     if (r.ok) actionNotice_ += "\n" + i18n::trs("下一步：完全退出并重启该工具。",
                                                 "Next: fully quit and restart that tool.");
