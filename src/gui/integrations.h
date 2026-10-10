@@ -165,42 +165,17 @@ inline const Tool* toolById(const QString& id) {
     return nullptr;
 }
 
-// 常见安装路径（含 npm 全局与用户目录配置目录）。存在目录本身也算已安装的信号。
+// 安装检测已下沉 core（agent-cli 的 auto-connect 与 GUI 共用同一份实现）：
+// PATH 可执行 + 常见安装/配置路径候选，两级判定，"误报可接受、漏报不可接受"。
 inline QStringList candidatePaths(const QString& id) {
-    const QString local = qEnvironmentVariable("LOCALAPPDATA");
-    const QString appdata = qEnvironmentVariable("APPDATA");
-    const QString home = QDir::homePath();
-    if (id == "claude-code")
-        return {local + "/Programs/claude/claude.exe", home + "/.claude/local/claude.exe",
-                appdata + "/npm/claude.cmd", appdata + "/npm/claude", appdata + "/Claude",
-                home + "/.claude"};
-    if (id == "codex")
-        return {appdata + "/npm/codex.cmd", appdata + "/npm/codex", appdata + "/npm/codex.ps1",
-                home + "/.codex", local + "/Programs/ChatGPT", local + "/ChatGPT"};
-    if (id == "droid")
-        return {home + "/.factory", local + "/Programs/droid", appdata + "/npm/droid.cmd"};
-    if (id == "dsh")
-        return {home + "/.dsh", appdata + "/npm/dsh.cmd", appdata + "/npm/dsh"};
-    if (id == "hermes")
-        return {local + "/hermes", local + "/Programs/hermes", appdata + "/npm/hermes.cmd"};
-    if (id == "zcode")
-        return {appdata + "/npm/zcode.cmd", local + "/Programs/zcode", home + "/.zcode"};
-    if (id == "cursor")
-        return {local + "/Programs/cursor/Cursor.exe", local + "/Programs/cursor/cursor.exe",
-                home + "/.cursor"};
-    if (id == "copilot")
-        return {home + "/.vscode/extensions", local + "/Programs/Microsoft VS Code"};
-    return {};
+    QStringList out;
+    for (const auto& p : ah::integrations::candidatePaths(id.toStdString()))
+        out << QString::fromStdString(p);
+    return out;
 }
 
 inline bool installed(const QString& id) {
-    if (const Tool* t = toolById(id)) {
-        if (!t->exeName.isEmpty() && !QStandardPaths::findExecutable(t->exeName).isEmpty())
-            return true;
-    }
-    for (const QString& p : candidatePaths(id))
-        if (QFileInfo::exists(p)) return true;
-    return false;
+    return ah::integrations::installedById(id.toStdString());
 }
 
 // ---------------- 配置落点：解析成这台机器上的真实绝对路径 ----------------

@@ -11,6 +11,8 @@
 //   * 重复写入是**替换**而不是追加（不产生第二份 [mcp_servers.x] / 第二个 insert 块）。
 #include <nlohmann/json.hpp>
 
+#include "core/util.h"  // envOr：环境变量走宽字符读取（getenv 的 GBK 错位见 util.h 注释）
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -35,19 +37,20 @@ struct ToolMeta {
     const char* id;
     Format format;
     const char* defaultAgentName;  // 一键接入预填的身份名（zcode 是保留名，故 ZCode 用 zcode-agent）
+    const char* exeName;           // PATH 探测名（空串 = 无 CLI，只靠候选路径检测）
 };
 
 // 八工具注册表（GUI 的展示名/安装指引在 gui/integrations.h，这里只放行为元数据）
 inline const std::vector<ToolMeta>& toolRegistry() {
     static const std::vector<ToolMeta> kTools = {
-        {"claude-code", Format::JsonMcpServers, "claude"},
-        {"codex",       Format::TomlCodex,      "codex"},
-        {"droid",       Format::JsonMcpServers, "droid"},
-        {"dsh",         Format::DshPatchYaml,   "dsh"},
-        {"hermes",      Format::HermesYaml,     "hermes"},
-        {"zcode",       Format::EnvVars,        "zcode-agent"},
-        {"cursor",      Format::JsonMcpServers, "cursor"},
-        {"copilot",     Format::InstructionsMd, "copilot"},
+        {"claude-code", Format::JsonMcpServers, "claude",      "claude"},
+        {"codex",       Format::TomlCodex,      "codex",       "codex"},
+        {"droid",       Format::JsonMcpServers, "droid",       "droid"},
+        {"dsh",         Format::DshPatchYaml,   "dsh",         "dsh"},
+        {"hermes",      Format::HermesYaml,     "hermes",      "hermes"},
+        {"zcode",       Format::EnvVars,        "zcode-agent", "zcode"},
+        {"cursor",      Format::JsonMcpServers, "cursor",      "cursor"},
+        {"copilot",     Format::InstructionsMd, "copilot",     "code"},
     };
     return kTools;
 }
@@ -80,6 +83,94 @@ inline std::string relativeConfigPath(const std::string& id) {
     if (id == "hermes") return "hermes/config.yaml";
     if (id == "cursor") return ".cursor/mcp.json";
     return "";  // zcode / copilot：无固定配置文件
+}
+
+// ---------------- 本机安装检测（Qt-free；GUI 与 CLI 共用）----------------
+
+// UTF-8 路径 → std::filesystem。窄字符串构造在 Windows 上按 ANSI 代码页解释：
+// 中文用户的 %USERPROFILE%（UTF-8，经 ah::envOr 宽字符读取）直接传给窄构造会
+// exists()/读写全部错位。char8_t 构造才是真正的 UTF-8 → 宽字符转换。
+// 本头文件的所有文件系统操作一律经此函数。
+inline std::filesystem::path fsPath(const std::string& p) {
+#ifdef _WIN32
+    return std::filesystem::path(reinterpret_cast<const char8_t*>(p.data()),
+                                 reinterpret_cast<const char8_t*>(p.data() + p.size()));
+#else
+    return std::filesystem::path(p);
+#endif
+}
+
+// 在 PATH 上查找可执行文件（Windows 依次补 .exe/.cmd/.bat 后缀；POSIX 原样）。
+// 只回答"在不在"——路径值不出这个函数，因此不涉及宽窄转换的返回问题。
+inline bool exeOnPath(const std::string& exeName) {
+    if (exeName.empty()) return false;
+    const std::string pathEnv = ah::envOr({"PATH"});
+    if (pathEnv.empty()) return false;
+#ifdef _WIN32
+    const char sep = ';';
+    const char* suffixes[] = {"", ".exe", ".cmd", ".bat"};
+#else
+    const char sep = ':';
+    const char* suffixes[] = {""};
+#endif
+    size_t start = 0;
+    while (start <= pathEnv.size()) {
+        const size_t end = pathEnv.find(sep, start);
+        std::string dir =
+            pathEnv.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        start = end == std::string::npos ? pathEnv.size() + 1 : end + 1;
+        // 去引号与空白（PATH 项偶尔带引号）
+        if (!dir.empty() && dir.front() == '"') dir = dir.substr(1);
+        while (!dir.empty() && (dir.back() == '"' || dir.back() == ' ')) dir.pop_back();
+        if (dir.empty()) continue;
+        for (const char* suf : suffixes) {
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(fsPath(dir) / fsPath(exeName + suf), ec))
+                return true;
+        }
+    }
+    return false;
+}
+
+// 常见安装/配置路径候选（含 npm 全局与用户目录配置目录）。目录本身存在也算
+// 已安装的信号——语义是"误报可接受、漏报不可接受"（检测不到只影响提示文案，
+// 不拦任何操作）。
+inline std::vector<std::string> candidatePaths(const std::string& id) {
+    const std::string local = ah::envOr({"LOCALAPPDATA"});
+    const std::string appdata = ah::envOr({"APPDATA"});
+    const std::string home = ah::envOr({"USERPROFILE"});
+    if (id == "claude-code")
+        return {local + "/Programs/claude/claude.exe", home + "/.claude/local/claude.exe",
+                appdata + "/npm/claude.cmd", appdata + "/npm/claude", appdata + "/Claude",
+                home + "/.claude"};
+    if (id == "codex")
+        return {appdata + "/npm/codex.cmd", appdata + "/npm/codex", appdata + "/npm/codex.ps1",
+                home + "/.codex", local + "/Programs/ChatGPT", local + "/ChatGPT"};
+    if (id == "droid")
+        return {home + "/.factory", local + "/Programs/droid", appdata + "/npm/droid.cmd"};
+    if (id == "dsh")
+        return {home + "/.dsh", appdata + "/npm/dsh.cmd", appdata + "/npm/dsh"};
+    if (id == "hermes")
+        return {local + "/hermes", local + "/Programs/hermes", appdata + "/npm/hermes.cmd"};
+    if (id == "zcode")
+        return {appdata + "/npm/zcode.cmd", local + "/Programs/zcode", home + "/.zcode"};
+    if (id == "cursor")
+        return {local + "/Programs/cursor/Cursor.exe", local + "/Programs/cursor/cursor.exe",
+                home + "/.cursor"};
+    if (id == "copilot")
+        return {home + "/.vscode/extensions", local + "/Programs/Microsoft VS Code"};
+    return {};
+}
+
+// 两级安装检测：PATH 可执行 + 候选路径存在其一
+inline bool installedById(const std::string& id) {
+    if (const ToolMeta* t = toolById(id))
+        if (t->exeName && *t->exeName && exeOnPath(t->exeName)) return true;
+    for (const auto& p : candidatePaths(id)) {
+        std::error_code ec;
+        if (std::filesystem::exists(fsPath(p), ec)) return true;
+    }
+    return false;
 }
 
 // ---------------- 片段生成 ----------------
@@ -483,7 +574,7 @@ inline bool upsertYamlMapEntry(std::string& text, const std::string& parentKey,
 // ---------------- 文件读写 ----------------
 
 inline bool readFileUtf8(const std::string& path, std::string& out) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(fsPath(path), std::ios::binary);
     if (!in) return false;
     std::ostringstream ss;
     ss << in.rdbuf();
@@ -514,11 +605,11 @@ inline std::string toCrlf(const std::string& text) {
 inline bool writeFileUtf8(const std::string& path, const std::string& text) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    const fs::path p = fs::path(path);
+    const fs::path p = fsPath(path);
     if (!p.parent_path().empty()) fs::create_directories(p.parent_path(), ec);
     const std::string tmp = path + ".miderhive.tmp";
     {
-        std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+        std::ofstream o(fsPath(tmp), std::ios::binary | std::ios::trunc);
         if (!o) return false;
         o << text;
         o.flush();
@@ -528,7 +619,7 @@ inline bool writeFileUtf8(const std::string& path, const std::string& text) {
             return false;
         }
     }
-    fs::rename(tmp, path, ec);
+    fs::rename(fsPath(tmp), fsPath(path), ec);
     if (ec) {
         fs::remove(tmp, ec);
         return false;
@@ -544,11 +635,11 @@ inline bool writeFileUtf8(const std::string& path, const std::string& text) {
 inline bool backupFile(const std::string& path) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    if (!fs::exists(path)) return true;  // 没有原文件就不存在"覆盖丢内容"
+    if (!fs::exists(fsPath(path))) return true;  // 没有原文件就不存在"覆盖丢内容"
     const std::string bak = path + ".miderhive.bak";
-    fs::remove(bak, ec);
+    fs::remove(fsPath(bak), ec);
     ec.clear();
-    fs::copy_file(path, bak, fs::copy_options::overwrite_existing, ec);
+    fs::copy_file(fsPath(path), fsPath(bak), fs::copy_options::overwrite_existing, ec);
     return !ec;
 }
 
@@ -587,7 +678,7 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
     const std::string snippet = generateConfig(id, command, agentName, agentKey);
 
     std::string existing;
-    const bool hasFile = std::filesystem::exists(std::filesystem::path(path));
+    const bool hasFile = std::filesystem::exists(fsPath(path));
     if (hasFile && !readFileUtf8(path, existing)) {
         return makeResult(false,
                           "配置文件存在但读不出来（权限不足？）：" + path,

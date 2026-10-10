@@ -2354,6 +2354,63 @@ static void test_rsa_verify() {
 #endif
 }
 
+// 安装检测下沉 core 的原语：PATH 查找（含 Windows 后缀补全与 PATH 注入/撤除）、
+// 注册表 exeName 完整性、UTF-8（中文）路径的读/写/备份回环（fsPath 宽转换）。
+static void test_install_detection() {
+    namespace fs = std::filesystem;
+    const fs::path tmp = fs::temp_directory_path() / ("MiderHive_test_probe_" + ah::randomHex(8));
+    fs::create_directories(tmp);
+#ifdef _WIN32
+    const std::string probe = "mhtestprobe";
+    const std::string probeFile = (tmp / "mhtestprobe.cmd").string();
+#else
+    const std::string probe = "mhtestprobe";
+    const std::string probeFile = (tmp / "mhtestprobe").string();
+#endif
+    { std::ofstream o(probeFile, std::ios::binary); o << "probe"; }
+    const std::string oldPath = ah::envOr({"PATH"});
+#ifdef _WIN32
+    _putenv_s("PATH", (tmp.string() + ";" + oldPath).c_str());
+#else
+    setenv("PATH", (tmp.string() + ":" + oldPath).c_str(), 1);
+#endif
+    CHECK(ah::integrations::exeOnPath(probe));
+    CHECK(!ah::integrations::exeOnPath("mhtestprobe-definitely-missing"));
+#ifdef _WIN32
+    _putenv_s("PATH", oldPath.c_str());
+#else
+    setenv("PATH", oldPath.c_str(), 1);
+#endif
+    CHECK(!ah::integrations::exeOnPath(probe));  // 注入撤除后不再命中
+
+    for (const auto& t : ah::integrations::toolRegistry()) {
+        CHECK(t.exeName != nullptr);
+        CHECK(*t.exeName != '\0');
+        CHECK(!ah::integrations::candidatePaths(t.id).empty());
+    }
+    CHECK(ah::integrations::candidatePaths("no-such-tool").empty());
+
+    // UTF-8（中文）路径：写/读/备份回环——窄字符串路径在 Windows 按 ACP 解释，
+    // 中文用户名下会全部错位（fsPath 的 char8_t 宽转换是修法）
+    const fs::path cdir = fs::temp_directory_path() / "MiderHive_test_中文路径";
+    fs::create_directories(cdir);
+    auto u8str = [](const fs::path& q) {
+        auto u8 = q.u8string();  // UTF-8 字节串（char8_t -> char 保真拷贝）
+        return std::string(u8.begin(), u8.end());
+    };
+    const std::string cfile = u8str(cdir / "cfg.json");  // .string() 会转 ACP，中文目录名错位
+    const std::string payload = "{\"mcpServers\":{}}";
+    CHECK(ah::integrations::writeFileUtf8(cfile, payload));
+    std::string got;
+    CHECK(ah::integrations::readFileUtf8(cfile, got));
+    CHECK_EQ(got, payload);
+    CHECK(ah::integrations::backupFile(cfile));
+    CHECK(fs::exists(cdir / "cfg.json.miderhive.bak"));
+    std::error_code ec;
+    fs::remove_all(cdir, ec);
+    fs::remove_all(tmp, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -2362,6 +2419,7 @@ int main() {
     };
     run("sha256", test_sha256);
     run("rsa_verify", test_rsa_verify);
+    run("install_detection", test_install_detection);
     run("week_start", test_week_start);
     run("embedder", test_embedder);
     run("url_guard", test_url_guard);
