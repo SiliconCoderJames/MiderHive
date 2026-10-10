@@ -266,6 +266,7 @@ int usage() {
         "  connect-snippet --tool T [--command C] [--name N] [--key K]\n"
         "                                 生成该工具的接入配置片段（stdout；不连平台）\n"
         "  apply-config  --tool T (--path P | --dir D) [--command C] [--name N] [--key K]\n"
+        "  auto-connect  [--master-key M] [--dir D] [--dry-run]        批量接入所有已安装未接入的工具\n"
         "                                 把配置写进指定文件 / 指定根目录下的约定位置\n"
         "                                 （--dir 时 claude-code 写 <dir>/.mcp.json；不连平台）\n"
         "  embed         --url U --text T [--model M]\n"
@@ -444,6 +445,96 @@ int main(int argc, char** argv) {
                                                                     name, key));
         std::cout << (r.ok ? "OK: " : "FAIL: ") << r.detailZh << "\n";
         return r.ok ? 0 : 1;
+    }
+
+    // 批量自动接入（无头）：对所有"已安装、有可写配置、还没接入"的注册表工具
+    // 一次完成 检测 → 注册签发（幂等的 HTTP register，重复注册会被服务端拒绝）
+    // → 写入配置。保守规则与 GUI 批量一致：已在线/已接入的跳过，防止作废在用密钥。
+    if (cmd == "auto-connect") {
+        const bool dryRun = a.opts.count("dry-run") != 0;
+        const std::string rootOverride = a.opts.count("dir") ? a.opts.at("dir") : "";
+        const std::string root =
+            rootOverride.empty() ? ah::envOr({"USERPROFILE"}) : rootOverride;
+        // 命令解析与 connect-snippet 同款：默认指向同目录的 miderhive-mcp
+        std::string command = a.opts.count("command") ? a.opts.at("command") : "";
+        if (command.empty()) {
+            namespace fs = std::filesystem;
+#ifdef _WIN32
+            const char* mcpName = "miderhive-mcp.exe";
+#else
+            const char* mcpName = "miderhive-mcp";
+#endif
+            fs::path base = fs::path(argv0).parent_path();
+            if (base.empty()) base = fs::path(selfDir());
+            if (base.empty()) {
+                std::cerr << "无法定位 miderhive-mcp，请用 --command 显式指定完整路径\n";
+                return 2;
+            }
+            command = (base / mcpName).string();
+        }
+
+        Client c(a);
+        // --master-key 也允许写在命令后
+        if (a.opts.count("master-key")) c.masterKey = a.opts.at("master-key");
+        int ok = 0, failed = 0;
+        if (!dryRun && c.masterKey.empty()) {
+            std::cerr << "需要主密钥：--master-key 或环境变量 MIDERHIVE_MASTER_KEY"
+                         "（注册需要管理者权限）\n";
+            return 2;
+        }
+
+        for (const auto& t : ah::integrations::toolRegistry()) {
+            if (!ah::integrations::hasWritableConfig(t.id)) continue;  // zcode/copilot 走手工
+            const std::string rel = ah::integrations::relativeConfigPath(t.id);
+            const std::string cfgPath = root + "/" + rel;
+            const std::string agentName = t.defaultAgentName;
+            auto skip = [&](const std::string& why) {
+                std::cout << "SKIP: " << t.id << " — " << why << "\n";
+            };
+            // 已接入：配置里有 miderhive 条目（文本近似判定）→ 不动它
+            {
+                std::string existing;
+                std::error_code ec;
+                if (std::filesystem::exists(ah::integrations::fsPath(cfgPath), ec) &&
+                    ah::integrations::readFileUtf8(cfgPath, existing) &&
+                    existing.find("miderhive") != std::string::npos) {
+                    skip("配置里已有 miderhive 条目，不动它");
+                    continue;
+                }
+            }
+            // 未安装（--dir 重定向的测试/便携场景视为全装）
+            if (rootOverride.empty() && !ah::integrations::installedById(t.id)) {
+                skip("未检测到本机安装");
+                continue;
+            }
+            if (dryRun) {
+                std::cout << "DRY: " << t.id << " → " << cfgPath << "\n";
+                continue;
+            }
+            // 注册签发（密钥明文只在响应里出现一次，紧接着写进配置）
+            const json regBody = {{"name", agentName}, {"role", "member"}};
+            const json reg = c.call("POST", "/api/agents/register", &regBody, false);
+            if (reg.value("code", -1) != 0) {
+                ++failed;
+                std::cout << "FAIL: " << t.id << " — 注册失败: "
+                          << reg.value("message", "") << "\n";
+                continue;
+            }
+            const std::string key = reg["data"].value("api_key", "");
+            const ah::integrations::WriteResult r =
+                ah::integrations::writeConfigUnderRoot(root, t.id, command, agentName, key);
+            if (r.ok) {
+                ++ok;
+                std::cout << "OK: " << t.id << " → " << cfgPath << "\n";
+            } else {
+                ++failed;
+                // 注册成功但写入失败：密钥已签发，如实告知重试方式
+                std::cout << "FAIL: " << t.id << " — " << r.detailZh
+                          << "（身份已签发；重试会因重复注册被拒，请改用 rotate 或向导）\n";
+            }
+        }
+        std::cout << "auto-connect: " << ok << " 接入，" << failed << " 失败\n";
+        return failed == 0 ? 0 : 1;
     }
 
     if (cmd == "embed") {
