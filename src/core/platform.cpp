@@ -53,33 +53,41 @@ std::string defaultHomeDir() {
     if (auto env = envOr({"MIDERHIVE_HOME", "AGENTHIVE_HOME", "ZCODE_PLATFORM_HOME"}); !env.empty())
         return env;
 #ifdef _WIN32
-    if (const char* up = std::getenv("USERPROFILE"); up && *up) {
-        std::string home = std::string(up) + "\\.miderhive";
-        // 旧品牌数据目录平滑迁移：一次性改名，保留全部数据
-        // （.agenthive 为上一代品牌，.zcode-platform 为更早的内部代号）
+    // 用户主目录必须走 envOr（宽字符读环境块转 UTF-8）：std::getenv 返回 ANSI
+    // 代码页字节（中文系统是 GBK），而 sqlite3_open 按 UTF-8 契约解释路径——
+    // GBK 字节会被解成不存在的乱码路径，中文用户名下 GUI/platformd 启动即失败
+    //（审计 core-platform-2；fs 侧消费见下方 fsPath）。
+    const std::string userProfile = envOr({"USERPROFILE"});
+    if (!userProfile.empty()) {
+        std::string home = userProfile + "\\.miderhive";
         std::error_code ec;
-        if (!fs::exists(home)) {
+        if (!fs::exists(fsPath(home))) {
+            // 旧品牌数据目录平滑迁移：一次性改名，保留全部数据
+            // （.agenthive 为上一代品牌，.zcode-platform 为更早的内部代号）
             for (const char* legacyName : {".agenthive", ".zcode-platform"}) {
-                std::string legacy = std::string(up) + "\\" + legacyName;
-                if (fs::exists(legacy)) {
-                    fs::rename(legacy, home, ec);
-                    return home;
-                }
+                std::string legacy = userProfile + "\\" + legacyName;
+                if (!fs::exists(fsPath(legacy))) continue;
+                // rename 失败（目录被杀软/同步盘占用、权限异常）绝不能静默返回
+                // home——那会新建空目录照常运行，用户视角是"全部数据凭空消失"
+                // （审计 core-platform-3）。退回 legacy 目录：数据原样可用，
+                // 下次启动再试改名。
+                fs::rename(fsPath(legacy), fsPath(home), ec);
+                return ec ? legacy : home;
             }
         }
         return home;
     }
 #endif
-    if (const char* home = std::getenv("HOME"); home && *home) {
-        std::string homeDir = std::string(home) + "/.miderhive";
+    const std::string homeEnv = envOr({"HOME"});
+    if (!homeEnv.empty()) {
+        std::string homeDir = homeEnv + "/.miderhive";
         std::error_code ec;
-        if (!fs::exists(homeDir)) {
+        if (!fs::exists(fsPath(homeDir))) {
             for (const char* legacyName : {".agenthive", ".zcode-platform"}) {
-                std::string legacy = std::string(home) + "/" + legacyName;
-                if (fs::exists(legacy)) {
-                    fs::rename(legacy, homeDir, ec);
-                    return homeDir;
-                }
+                std::string legacy = homeEnv + "/" + legacyName;
+                if (!fs::exists(fsPath(legacy))) continue;
+                fs::rename(fsPath(legacy), fsPath(homeDir), ec);
+                return ec ? legacy : homeDir;  // 同上：rename 失败退回有数据的 legacy
             }
         }
         return homeDir;
@@ -170,13 +178,16 @@ bool Platform::bootstrap(std::string& err) {
     if (bootstrapped_) return true;
 
     std::error_code ec;
-    fs::create_directories(fs::path(home_dir_) / "config", ec);
+    fs::create_directories(fsPath(home_dir_ + "/config"), ec);
     if (ec) { err = "cannot create home dir: " + ec.message(); return false; }
     ec.clear();
-    fs::create_directories(fs::path(home_dir_) / "backup", ec);
+    fs::create_directories(fsPath(home_dir_ + "/backup"), ec);
     if (ec) { err = "cannot create home dir: " + ec.message(); return false; }
 
-    std::string dbPath = (fs::path(home_dir_) / "platform.db").string();
+    // 路径全程保持 UTF-8 字符串拼接，绝不经 fs::path::string() 往返——那会按
+    // ANSI 代码页转宽→窄，中文目录名错位（fs 侧消费用 fsPath，sqlite 侧直接
+    // 收 UTF-8 字节，两个世界才不会分叉）。
+    std::string dbPath = home_dir_ + "/platform.db";
     // 上次"恢复备份"中途被打断的自愈：恢复流程会先把当前库改名留底
     // （platform.db.before-restore）再拷入备份，进程若在这两步之间被杀，
     // 磁盘上就没有 platform.db 了——SQLite 默认带 CREATE 标志，不处理就会
@@ -184,18 +195,18 @@ bool Platform::bootstrap(std::string& err) {
     // 开库前把留底改回原名：一次原子 rename，回到恢复开始前的状态。
     bool recoveredRestore = false;
     {
-        const fs::path livePath(dbPath);
-        const fs::path prePath(dbPath + ".before-restore");
-        if (!fs::exists(livePath) && fs::exists(prePath)) {
+        const std::string livePath = dbPath;
+        const std::string prePath = dbPath + ".before-restore";
+        if (!fs::exists(fsPath(livePath)) && fs::exists(fsPath(prePath))) {
             // 同名的陈旧 -wal/-shm 属于被打断前的旧库，与改回来的库不匹配
             // （SQLite 对不匹配的 WAL 会拒绝打开），先一并清掉
             std::error_code recEc;
-            fs::remove(dbPath + "-wal", recEc);
-            fs::remove(dbPath + "-shm", recEc);
+            fs::remove(fsPath(dbPath + "-wal"), recEc);
+            fs::remove(fsPath(dbPath + "-shm"), recEc);
             recEc.clear();
-            fs::rename(prePath, livePath, recEc);
+            fs::rename(fsPath(prePath), fsPath(livePath), recEc);
             if (recEc) {
-                err = "interrupted restore leftover found (" + prePath.string() +
+                err = "interrupted restore leftover found (" + prePath +
                       ") but renaming it back failed: " + recEc.message();
                 return false;
             }
@@ -220,12 +231,12 @@ bool Platform::bootstrap(std::string& err) {
                           "ZCODE_PLATFORM_MASTER_KEY"}); !env.empty()) {
         masterKey = env;
     } else {
-        std::string keyPath = (fs::path(home_dir_) / "config" / "master.key").string();
-        std::ifstream in(keyPath);
+        std::string keyPath = home_dir_ + "/config/master.key";
+        std::ifstream in(fsPath(keyPath));
         if (in) { std::getline(in, masterKey); in.close(); }
         if (masterKey.empty()) {
             masterKey = randomHex(32);
-            std::ofstream out(keyPath, std::ios::trunc);
+            std::ofstream out(fsPath(keyPath), std::ios::trunc);
             out << masterKey << "\n";
             out.close();
             // 落盘必须成功：这份明钥只在内存里活这一次，写失败则重启后无人能取到
@@ -260,10 +271,10 @@ bool Platform::bootstrap(std::string& err) {
     // 不可恢复（库中只有加盐哈希）。必须显式记入审计——否则用户只看到"Agent 一直离线"
     // 却没有任何线索。恢复途径：重新生成密钥（/api/agents/rotate 或界面上的"重新生成密钥"）。
     {
-        std::string keyPath = (fs::path(home_dir_) / "config" / "agents.json").string();
+        std::string keyPath = home_dir_ + "/config/agents.json";
         bool managerKeyCached = false;
         {
-            std::ifstream in(keyPath);
+            std::ifstream in(fsPath(keyPath));
             if (in) {
                 nlohmann::json j;
                 in >> j;
@@ -317,12 +328,12 @@ bool Platform::persistAgentKey(const std::string& name, const std::string& apiKe
     // 密钥明文只存于此文件（数据库仅有加盐哈希，明文不可恢复），供 Agent 侧命令行取用。
     // 因此这里必须如实返回失败：此前结尾是 `return out.good() || true`——恒为 true，
     // 目录缺失/磁盘错误被静默吞掉，现场表现就是"注册过却永远离线"且毫无线索。
-    std::string path = (fs::path(home_dir_) / "config" / "agents.json").string();
+    std::string path = home_dir_ + "/config/agents.json";
     std::error_code ec;
-    fs::create_directories(fs::path(home_dir_) / "config", ec);
+    fs::create_directories(fsPath(home_dir_ + "/config"), ec);
     nlohmann::json j;
     {
-        std::ifstream in(path);
+        std::ifstream in(fsPath(path));
         if (in) {
             // 非抛出解析：文件损坏（半截/空/垃圾）时 operator>> 会抛异常，
             // 下面那道 fail 检查根本轮不到执行。这里转成如实的失败返回，
@@ -340,18 +351,18 @@ bool Platform::persistAgentKey(const std::string& name, const std::string& apiKe
     // 先写临时文件再原子替换：中途失败不会留下半截文件（那等于再次丢失明文）
     const std::string tmp = path + ".tmp";
     {
-        std::ofstream out(tmp, std::ios::trunc);
+        std::ofstream out(fsPath(tmp), std::ios::trunc);
         if (!out) { err = "cannot write " + tmp; return false; }
         out << j.dump(2) << "\n";
         out.flush();
         if (!out.good()) { err = "write failed: " + tmp; out.close(); return false; }
         out.close();
     }
-    fs::rename(tmp, path, ec);
+    fs::rename(fsPath(tmp), fsPath(path), ec);
     if (ec) {
         // Windows 的 rename 不覆盖既有文件：退化为先删再改名
         std::error_code ec2;
-        fs::remove(path, ec2);
+        fs::remove(fsPath(path), ec2);
         fs::rename(tmp, path, ec);
         if (ec) { err = "cannot replace " + path + ": " + ec.message(); return false; }
     }
@@ -1244,7 +1255,7 @@ bool Platform::backupCreate(std::string& outPath, std::string& err) {
     for (auto& ch : name)
         if (ch == ':') ch = '-';
     auto pathFor = [&](const std::string& n) {
-        return (fs::path(home_dir_) / "backup" / n).string();
+        return home_dir_ + "/backup/" + n;
     };
     std::error_code ec;
     for (int attempt = 0; attempt < 10; ++attempt) {
@@ -1252,7 +1263,7 @@ bool Platform::backupCreate(std::string& outPath, std::string& err) {
             attempt == 0 ? name
                          : name.substr(0, name.size() - 3) + "-" + randomHex(3) + ".db";
         const std::string candidatePath = pathFor(candidate);
-        if (fs::exists(candidatePath, ec)) continue;
+        if (fs::exists(fsPath(candidatePath), ec)) continue;
         outPath = candidatePath;
         name = candidate;
         break;
@@ -1280,10 +1291,10 @@ bool Platform::backupList(std::vector<std::string>& out, std::string& err) {
     std::lock_guard lock(mutex_);
     out.clear();
     std::error_code ec;
-    fs::path dir = fs::path(home_dir_) / "backup";
+    const fs::path dir = fsPath(home_dir_ + "/backup");
     for (const auto& entry : fs::directory_iterator(dir, ec)) {
         if (entry.is_regular_file(ec) && entry.path().extension() == ".db")
-            out.push_back(entry.path().filename().string());
+            out.push_back(pathToUtf8(entry.path().filename()));
     }
     if (ec) { err = "cannot list backup dir: " + ec.message(); return false; }
     std::sort(out.rbegin(), out.rend());  // 新的在前
@@ -1297,10 +1308,10 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
         err = "invalid backup name";
         return false;
     }
-    fs::path src = fs::path(home_dir_) / "backup" / name;
-    if (!fs::exists(src)) { err = "backup not found: " + name; return false; }
+    const std::string src = home_dir_ + "/backup/" + name;
+    if (!fs::exists(fsPath(src))) { err = "backup not found: " + name; return false; }
     {
-        std::ifstream in(src, std::ios::binary);
+        std::ifstream in(fsPath(src), std::ios::binary);
         char header[16] = {0};
         in.read(header, 15);
         if (std::string(header) != "SQLite format 3") {
@@ -1312,7 +1323,7 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
     // 拒绝恢复（覆盖当前库之后本程序无法正确解读它，等于把好库换成读不了的库）。
     {
         sqlite3* probe = nullptr;
-        if (sqlite3_open_v2(src.string().c_str(), &probe, SQLITE_OPEN_READONLY, nullptr) !=
+        if (sqlite3_open_v2(src.c_str(), &probe, SQLITE_OPEN_READONLY, nullptr) !=
             SQLITE_OK) {
             err = "cannot open backup file: " + name;
             if (probe) sqlite3_close(probe);
@@ -1339,9 +1350,10 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
     // 而界面上只有一个"恢复失败"的提示。因此在窗口内失败时按优先级做两件事：
     //   1) 尝试把旧的库文件放回去并重开（补偿），失败也无妨，只要重新 open 成功；
     //   2) 都失败就把平台标记为不可用（usable_ = false），HTTP 统一 503、界面强制提示重启。
-    const fs::path livePath = fs::path(home_dir_) / "platform.db";
-    const fs::path prePath = fs::path(home_dir_) / "platform.db.before-restore";
-    const fs::path prevPath = fs::path(home_dir_) / "platform.db.before-restore.previous";
+    // 路径保持 UTF-8 字符串；fs 调用一律经 fsPath（同 bootstrap 的说明）
+    const std::string livePath = home_dir_ + "/platform.db";
+    const std::string prePath = home_dir_ + "/platform.db.before-restore";
+    const std::string prevPath = home_dir_ + "/platform.db.before-restore.previous";
     std::error_code ec;
     // 顺序是硬约束：**必须先关连接**。Windows 上 SQLite 还持有 platform.db 句柄时
     // fs::rename 会直接失败（实测："The process cannot access the file because it is
@@ -1354,17 +1366,17 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
     // （usable_=false 那条路径会**故意**留下它）——那是用户原始数据的最后一份救援副本。
     // 用户重启后重试恢复是最常见的动作，无条件 fs::remove(prePath) 会把这份副本静默
     // 删掉。因此先把旧留底转存为 .previous（保持至多两代：本次 + 上次），再留新的底。
-    fs::remove(prevPath, ec);   // 丢弃更老的一代（保底两代，不无限增长）
+    fs::remove(fsPath(prevPath), ec);   // 丢弃更老的一代（保底两代，不无限增长）
     ec.clear();
-    fs::rename(prePath, prevPath, ec);  // prePath 不存在属正常（上次恢复成功已清理）
+    fs::rename(fsPath(prePath), fsPath(prevPath), ec);  // prePath 不存在属正常（上次恢复成功已清理）
     ec.clear();
-    fs::rename(livePath, prePath, ec);
+    fs::rename(fsPath(livePath), fsPath(prePath), ec);
     if (ec) {
         // 连留底都做不到：没动过任何文件，直接把连接开回去即可（平台仍可用）。
         // 注意必须重新注册 vec0——sqlite3_vec_init 是按**连接**生效的，新连接上
         // 不认识 vec0，随后任何语义检索/向量写入都会报 "no such module: vec0"。
         std::string reopenErr;
-        if (db_.open(livePath.string(), reopenErr)) {
+        if (db_.open(livePath, reopenErr)) {
             sqlite3_vec_init(db_.handle(), nullptr, nullptr);
         } else {
             usable_ = false;
@@ -1382,14 +1394,14 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
         // 同时清掉同名的 -wal/-shm：库文件是被整体换掉的，旧 WAL 的头部序列号与新主库
         // 对不上，留着只会让 SQLite 走一次不确定的 WAL 恢复。
         std::error_code rec;
-        fs::remove(livePath, rec);
+        fs::remove(fsPath(livePath), rec);
         rec.clear();
-        fs::remove(fs::path(livePath.string() + "-wal"), rec);
-        fs::remove(fs::path(livePath.string() + "-shm"), rec);
+        fs::remove(fsPath(livePath + "-wal"), rec);
+        fs::remove(fsPath(livePath + "-shm"), rec);
         rec.clear();
-        fs::rename(prePath, livePath, rec);
+        fs::rename(fsPath(prePath), fsPath(livePath), rec);
         std::string reopenErr;
-        if (!rec && db_.open(livePath.string(), reopenErr)) {
+        if (!rec && db_.open(livePath, reopenErr)) {
             // sqlite3_vec_init 是按连接生效的：补偿用的新连接必须重新注册 vec0，
             // 否则平台"看起来可用"，而向量写入与语义检索全都报 no such module: vec0。
             sqlite3_vec_init(db_.handle(), nullptr, nullptr);
@@ -1399,21 +1411,21 @@ bool Platform::backupRestore(const std::string& name, std::string& err) {
         usable_ = false;
         // 指明留底位置：这是用户原始数据的手工救援路径，不能让人猜文件在哪
         err = why + "; the data store is now unusable - restart MiderHive "
-              "(your previous database was kept as " + prePath.filename().string() + ")";
+              "(your previous database was kept as " + prePath + ")";
         return false;
     };
 
     ec.clear();
-    fs::copy_file(src, livePath, fs::copy_options::overwrite_existing, ec);
+    fs::copy_file(fsPath(src), fsPath(livePath), fs::copy_options::overwrite_existing, ec);
     if (ec) return bail("copy failed: " + ec.message());
-    if (!db_.open(livePath.string(), err)) return bail("cannot reopen database: " + err);
+    if (!db_.open(livePath, err)) return bail("cannot reopen database: " + err);
     // 与启动完全同一套初始化：版本门、schema、迁移、vec/FTS。
     // 少了这一步，恢复出来的旧库不会重新打上 user_version——"拒绝更新版本库"那道门
     // 在恢复路径上就是空的（此前只跑了 initVectorStore/initSearchIndex）。
     if (!initStoreLocked(err)) return bail("initializing the restored database failed: " + err);
     // 成功：丢弃**本次**留底。不动 .previous——那可能是更早一次失败留下的救援副本，
     // 用户此刻刚恢复成功，删掉它没有任何收益，轮转逻辑会在下次恢复时自然处理。
-    fs::remove(prePath, ec);
+    fs::remove(fsPath(prePath), ec);
     // IGNORE: 元操作留痕——库已被替换并重开，此时审计失败不能再"撤销恢复"
     // （把旧库换回去是更危险的操作）；失败原因留在局部变量里。
     std::string restoreAuditErr;
@@ -1463,14 +1475,14 @@ Diagnostics Platform::diagnostics() {
     // 数据目录可写：写探针文件再删（目录不存在则先补建——bootstrap 本应建好）
     {
         std::error_code ec;
-        fs::create_directories(home_dir_, ec);
-        const auto probe = fs::path(home_dir_) / ".diag-probe";
+        fs::create_directories(fsPath(home_dir_), ec);
+        const std::string probe = home_dir_ + "/.diag-probe";
         bool ok = false;
         {
-            std::ofstream out(probe, std::ios::trunc);
+            std::ofstream out(fsPath(probe), std::ios::trunc);
             ok = static_cast<bool>(out);
         }
-        if (ok) fs::remove(probe, ec);
+        if (ok) fs::remove(fsPath(probe), ec);
         d.home_writable = ok;
     }
 
@@ -1488,11 +1500,11 @@ Diagnostics Platform::diagnostics() {
         std::vector<AgentInfo> agents;
         std::string aerr;
         if (!agents_.listAgents(agents, aerr)) agents.clear();
-        const auto keyPath = fs::path(home_dir_) / "config" / "agents.json";
+        const std::string keyPath = home_dir_ + "/config/agents.json";
         nlohmann::json j;
         bool readable = false;
         {
-            std::ifstream in(keyPath);
+            std::ifstream in(fsPath(keyPath));
             if (in) {
                 j = nlohmann::json::parse(in, nullptr, false);
                 readable = !j.is_discarded() && j.is_object();

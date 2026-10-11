@@ -2459,6 +2459,51 @@ static void test_install_detection() {
     fs::remove_all(tmp, ec);
 }
 
+// 非 ASCII（中文）数据目录端到端：此前 platform.cpp 的窄路径 IO 按 ANSI 代码页
+// 解释 UTF-8 字节，中文用户名下 GUI/platformd 启动即败（sqlite3_open 的 UTF-8
+// 契约拿到 GBK 字节 → CANTOPEN）、备份链断裂、master.key 落错目录。全链路经
+// fsPath 宽转换后必须全部可用。
+static void test_non_ascii_home() {
+    namespace fs = std::filesystem;
+    // 注意：叶子名里的中文经 fs::path / std::string 的窄构造会按 ACP 误读——
+    // 整条路径先用 UTF-8 字节拼好，再经 fsPath 一次转宽（与本测试验证的产品行为一致）
+    const fs::path baseDir = ah::fsPath(
+        ah::pathToUtf8(fs::temp_directory_path()) + "/MiderHive_test_" + ah::randomHex(6) + "_ä¸­æå®¶");
+    const std::string home = ah::pathToUtf8(baseDir);
+    {
+        ah::Platform p(home);
+        std::string err;
+        CHECK(p.bootstrap(err));
+
+        ah::KnowledgeEntry k;
+        CHECK(p.knowledgeCreate("hermes", "中文家测试", "内容 v1", {}, "", {}, "", k, err));
+        // master.key 落盘且可读（明钥路径此前会落到乱码目录）
+        std::ifstream in(ah::fsPath(home + "/config/master.key"));
+        CHECK(in.good());
+        std::string keyLine;
+        std::getline(in, keyLine);
+        CHECK(!keyLine.empty());
+        in.close();
+        // agents.json 含管理者条目
+        std::ifstream aj(ah::fsPath(home + "/config/agents.json"));
+        CHECK(aj.good());
+        // 备份创建 + 列举（directory_iterator 走 fsPath）
+        std::string bp;
+        CHECK(p.backupCreate(bp, err));
+        std::vector<std::string> backups;
+        CHECK(p.backupList(backups, err));
+        CHECK(!backups.empty());
+        // 恢复闭环（含 fs::copy_file / rename 的 fsPath 路径）
+        CHECK(p.backupRestore(fs::path(bp).filename().string(), err));
+        std::vector<ah::KnowledgeHit> hits;
+        CHECK(p.knowledgeSearch("中文家", ah::SearchMode::Keyword, 10, "", hits, err));
+        CHECK(!hits.empty());
+        p.shutdown();
+    }
+    std::error_code ec;
+    fs::remove_all(baseDir, ec);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -2468,6 +2513,7 @@ int main() {
     run("sha256", test_sha256);
     run("rsa_verify", test_rsa_verify);
     run("install_detection", test_install_detection);
+    run("non_ascii_home", test_non_ascii_home);
     run("week_start", test_week_start);
     run("embedder", test_embedder);
     run("url_guard", test_url_guard);

@@ -62,54 +62,58 @@ struct Identity {
 // agents.json 是平台约定的 name -> api_key 平面映射（bootstrap 预置 zcode，
 // 一键接入追加）。读失败/不存在都按空对象处理，不阻塞主流程；
 // 损坏（解析失败）返回 nullopt：调用方必须放弃写入，防止清空其他 agent 的明文密钥。
-std::optional<json> readAgentsJson(const fs::path& home) {
-    std::ifstream in(home / "config" / "agents.json");
+std::optional<json> readAgentsJson(const std::string& home) {
+    std::ifstream in(ah::fsPath(home + "/config/agents.json"));
     if (!in) return json::object();
     json j = json::parse(in, nullptr, false);
     if (j.is_discarded()) return std::nullopt;
     return j.is_object() ? j : json::object();
 }
 
-void writeAgentsJson(const fs::path& home, const json& j) {
+void writeAgentsJson(const std::string& home, const json& j) {
+    namespace fs = std::filesystem;
     std::error_code ec;
-    const fs::path dir = home / "config";
-    fs::create_directories(dir, ec);
-    const fs::path target = dir / "agents.json";
-    const fs::path tmp = dir / "agents.json.tmp";
+    const std::string dir = home + "/config";
+    fs::create_directories(ah::fsPath(dir), ec);
+    const std::string target = dir + "/agents.json";
+    const std::string tmp = dir + "/agents.json.tmp";
     {
         // 先写临时文件再原子替换：中途失败不会留下半截文件（那等于丢失全部明文密钥，
         // 与 platformd persistAgentKey 同一策略、同一原因）
-        std::ofstream out(tmp, std::ios::trunc);
+        std::ofstream out(ah::fsPath(tmp), std::ios::trunc);
         if (!out) {
-            std::cerr << "[miderhive-mcp] cannot write " << tmp.string() << std::endl;
+            std::cerr << "[miderhive-mcp] cannot write " << tmp << std::endl;
             return;
         }
         out << j.dump(2) << "\n";
         out.flush();
         if (!out.good()) {
             out.close();
-            std::cerr << "[miderhive-mcp] write failed: " << tmp.string() << std::endl;
-            fs::remove(tmp, ec);
+            std::cerr << "[miderhive-mcp] write failed: " << tmp << std::endl;
+            fs::remove(ah::fsPath(tmp), ec);
             return;
         }
         out.close();
     }
-    fs::rename(tmp, target, ec);
+    fs::rename(ah::fsPath(tmp), ah::fsPath(target), ec);
     if (ec) {
         // Windows 的 rename 不覆盖既有文件：退化为先删再改名（同 persistAgentKey）
         std::error_code ec2;
-        fs::remove(target, ec2);
-        fs::rename(tmp, target, ec);
-        if (ec) std::cerr << "[miderhive-mcp] cannot replace " << target.string()
+        fs::remove(ah::fsPath(target), ec2);
+        fs::rename(ah::fsPath(tmp), ah::fsPath(target), ec);
+        if (ec) std::cerr << "[miderhive-mcp] cannot replace " << target
                           << ": " << ec.message() << std::endl;
     }
 }
 
 Identity resolveIdentity() {
     Identity id{envOr("MIDERHIVE_AGENT_NAME"), envOr("MIDERHIVE_AGENT_KEY")};
-    fs::path home = envOr("MIDERHIVE_HOME").empty()
-                        ? fs::path(envOr("USERPROFILE")) / ".miderhive"
-                        : fs::path(envOr("MIDERHIVE_HOME"));
+    // home 保持 UTF-8 字符串；agents.json 的读写经 ah::fsPath 宽转换（同上）
+    const std::string userProfile = envOr("USERPROFILE");
+    std::string home = envOr("MIDERHIVE_HOME").empty()
+                        ? (userProfile.empty() ? std::string(".miderhive")
+                                               : userProfile + "/.miderhive")
+                        : envOr("MIDERHIVE_HOME");
     // 2) 已有密钥文件：直接复用（同名重复注册会被平台拒绝）
     if (!id.name.empty() && id.key.empty()) {
         std::optional<json> agents = readAgentsJson(home);

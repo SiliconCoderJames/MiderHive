@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -18,6 +19,26 @@
 #endif
 
 namespace ah {
+
+// UTF-8 路径字节 → std::filesystem。窄字符串构造在 Windows 上按 ANSI 代码页
+// 解释：中文用户的 %USERPROFILE%（UTF-8，经 ah::envOr 宽字符读取）直接传给
+// 窄构造会 exists()/读写全部错位。char8_t 构造才是真正的 UTF-8 → 宽字符转换。
+// 本仓库所有消费 UTF-8 路径字符串的文件系统调用一律经此函数。
+inline std::filesystem::path fsPath(const std::string& p) {
+#ifdef _WIN32
+    return std::filesystem::path(reinterpret_cast<const char8_t*>(p.data()),
+                                 reinterpret_cast<const char8_t*>(p.data() + p.size()));
+#else
+    return std::filesystem::path(p);
+#endif
+}
+
+// std::filesystem::path → UTF-8 字节串。path::string() 在 Windows 上按 ANSI
+// 代码页做宽→窄转换（非 ASCII 会错位/抛异常）；u8string() 才是 UTF-8。
+inline std::string pathToUtf8(const std::filesystem::path& p) {
+    const auto u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
 
 // 读取环境变量：多个名字按顺序取第一个非空者（品牌更名后依次为
 // MIDERHIVE_* → AGENTHIVE_* → ZCODE_*，旧名永久兼容识别）。

@@ -169,8 +169,25 @@ Args parseArgs(int argc, char** argv) {
 }
 
 
+// miderhive-mcp 缺省命令：与 agent-cli 同目录。argv0/selfDir 是 UTF-8 字节，
+// 必须经 fsPath 宽转换再取父目录——窄构造按 ANSI 代码页解释，中文目录名会被
+// GBK 两两配对吞掉分隔符（静默指错）甚至直接崩溃（审计 mcp-cli-2）。
+std::string defaultMcpCommand(const std::string& argv0,
+                              const std::string& selfDirFallback) {
+    namespace fs = std::filesystem;
+#ifdef _WIN32
+    const char* mcpName = "miderhive-mcp.exe";
+#else
+    const char* mcpName = "miderhive-mcp";
+#endif
+    fs::path base = ah::fsPath(argv0).parent_path();
+    if (base.empty()) base = ah::fsPath(selfDirFallback);
+    if (base.empty()) return {};
+    return ah::pathToUtf8(base / mcpName);
+}
+
 std::string readMasterKeyFromDisk() {
-    std::ifstream in(ah::defaultHomeDir() + "/config/master.key");
+    std::ifstream in(ah::fsPath(ah::defaultHomeDir() + "/config/master.key"));
     std::string k;
     if (in) std::getline(in, k);
     return k;
@@ -324,7 +341,7 @@ static std::string selfDir() {
     const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return {};
     namespace fs = std::filesystem;
-    return fs::path(utf16ToUtf8(buf, static_cast<int>(n))).parent_path().string();
+    return ah::pathToUtf8(std::filesystem::path(buf).parent_path());
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -340,6 +357,7 @@ int wmain(int argc, wchar_t** argv) {
     const std::string argv0 = argc > 0 ? (utf8Argv[0] ? utf8Argv[0] : "") : "";
     Args a = parseArgs(argc, utf8Argv);
 #else
+static std::string selfDir() { return {}; }  // POSIX：argv0 通常自带路径，无需额外兜底
 int main(int argc, char** argv) {
     const std::string argv0 = argc > 0 ? (argv[0] ? argv[0] : "") : "";
     Args a = parseArgs(argc, argv);
@@ -362,19 +380,11 @@ int main(int argc, char** argv) {
         if (tool == "custom") {
             std::string command = a.opts.count("command") ? a.opts.at("command") : "";
             if (command.empty()) {
-                namespace fs = std::filesystem;
-#ifdef _WIN32
-                const char* mcpName = "miderhive-mcp.exe";
-#else
-                const char* mcpName = "miderhive-mcp";
-#endif
-                fs::path base = fs::path(argv0).parent_path();
-                if (base.empty()) base = fs::path(selfDir());
-                if (base.empty()) {
+                command = defaultMcpCommand(argv0, selfDir());
+                if (command.empty()) {
                     std::cerr << "无法定位 miderhive-mcp，请用 --command 显式指定完整路径\n";
                     return 2;
                 }
-                command = (base / mcpName).string();
             }
             if (cmd == "connect-snippet") {
                 std::cout << ah::integrations::generateConfig("custom", command,
@@ -406,19 +416,11 @@ int main(int argc, char** argv) {
         if (command.empty()) {
             // 默认指向与 agent-cli 同目录的 miderhive-mcp（安装后四个可执行文件总在同一目录）。
             // 优先取模块真实路径；从 PATH 启动时 argv[0] 无目录，必须兜底。
-            namespace fs = std::filesystem;
-#ifdef _WIN32
-            const char* mcpName = "miderhive-mcp.exe";
-#else
-            const char* mcpName = "miderhive-mcp";
-#endif
-            fs::path base = fs::path(argv0).parent_path();
-            if (base.empty()) base = fs::path(selfDir());
-            if (base.empty()) {
+            command = defaultMcpCommand(argv0, selfDir());
+            if (command.empty()) {
                 std::cerr << "无法定位 miderhive-mcp，请用 --command 显式指定完整路径\n";
                 return 2;
             }
-            command = (base / mcpName).string();
         }
         const std::string name = a.opts.count("name") ? a.opts.at("name") : tool;
         const std::string key = a.opts.count("key") ? a.opts.at("key") : "";
@@ -458,19 +460,11 @@ int main(int argc, char** argv) {
         // 命令解析与 connect-snippet 同款：默认指向同目录的 miderhive-mcp
         std::string command = a.opts.count("command") ? a.opts.at("command") : "";
         if (command.empty()) {
-            namespace fs = std::filesystem;
-#ifdef _WIN32
-            const char* mcpName = "miderhive-mcp.exe";
-#else
-            const char* mcpName = "miderhive-mcp";
-#endif
-            fs::path base = fs::path(argv0).parent_path();
-            if (base.empty()) base = fs::path(selfDir());
-            if (base.empty()) {
+            command = defaultMcpCommand(argv0, selfDir());
+            if (command.empty()) {
                 std::cerr << "无法定位 miderhive-mcp，请用 --command 显式指定完整路径\n";
                 return 2;
             }
-            command = (base / mcpName).string();
         }
 
         Client c(a);
@@ -495,7 +489,7 @@ int main(int argc, char** argv) {
             {
                 std::string existing;
                 std::error_code ec;
-                if (std::filesystem::exists(ah::integrations::fsPath(cfgPath), ec) &&
+                if (std::filesystem::exists(ah::fsPath(cfgPath), ec) &&
                     ah::integrations::readFileUtf8(cfgPath, existing) &&
                     existing.find("miderhive") != std::string::npos) {
                     skip("配置里已有 miderhive 条目，不动它");

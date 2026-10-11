@@ -96,19 +96,7 @@ inline std::string relativeConfigPath(const std::string& id) {
 }
 
 // ---------------- 本机安装检测（Qt-free；GUI 与 CLI 共用）----------------
-
-// UTF-8 路径 → std::filesystem。窄字符串构造在 Windows 上按 ANSI 代码页解释：
-// 中文用户的 %USERPROFILE%（UTF-8，经 ah::envOr 宽字符读取）直接传给窄构造会
-// exists()/读写全部错位。char8_t 构造才是真正的 UTF-8 → 宽字符转换。
-// 本头文件的所有文件系统操作一律经此函数。
-inline std::filesystem::path fsPath(const std::string& p) {
-#ifdef _WIN32
-    return std::filesystem::path(reinterpret_cast<const char8_t*>(p.data()),
-                                 reinterpret_cast<const char8_t*>(p.data() + p.size()));
-#else
-    return std::filesystem::path(p);
-#endif
-}
+// 文件系统操作一律经 ah::fsPath（util.h；UTF-8 → 宽字符，原因见彼处注释）。
 
 // 在 PATH 上查找可执行文件（Windows 依次补 .exe/.cmd/.bat 后缀；POSIX 原样）。
 // 只回答"在不在"——路径值不出这个函数，因此不涉及宽窄转换的返回问题。
