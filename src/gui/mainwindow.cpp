@@ -107,7 +107,18 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
     settingsBtn_->setAccessibleName(i18n::trs("设置", "Settings"));
     connect(settingsBtn_, &QToolButton::clicked, this, &MainWindow::openSettings);
     langBtn_ = new QToolButton(foot);
-    connect(langBtn_, &QToolButton::clicked, this, [] { i18n::toggle(); });
+    langBtn_->setObjectName("langBtn");  // 自测的英文扫描按名字排除（按钮显示当前语言名）
+    langBtn_->setPopupMode(QToolButton::InstantPopup);
+    langBtn_->setStyleSheet(
+        "QToolButton::menu-indicator { image: none; }");  // 纯文字外观
+    auto* langMenu = new QMenu(langBtn_);
+    for (const auto& li : i18n::languages()) {
+        const auto lang = li.lang;
+        auto* act = langMenu->addAction(QString::fromUtf8(li.nativeName));
+        act->setCheckable(true);
+        connect(act, &QAction::triggered, this, [lang] { i18n::apply(lang); });
+    }
+    langBtn_->setMenu(langMenu);
     footLay->addWidget(ver_);
     footLay->addStretch(1);
     footLay->addWidget(settingsBtn_);
@@ -247,7 +258,14 @@ void MainWindow::applyLanguage() {
     setWindowTitle(i18n::trs("MiderHive · 多 Agent 协作工作台",
                              "MiderHive · Multi-Agent Collaboration Workbench"));
     tagline_->setText(i18n::trs("多 Agent 协作工作台", "multi-agent collaboration hub"));
-    langBtn_->setText(i18n::g_lang == i18n::Lang::Zh ? "EN" : "中文");
+    // 语言按钮显示当前语言的_nativeName_；菜单四语言全量列出、勾选当前项
+    if (auto* menu = langBtn_->menu()) {
+        const auto& langs = i18n::languages();
+        for (int i = 0; i < menu->actions().size() && i < static_cast<int>(langs.size()); ++i)
+            menu->actions()[i]->setChecked(langs[i].lang == i18n::g_lang);
+    }
+    if (const auto* li = i18n::langInfo(i18n::g_lang))
+        langBtn_->setText(QString::fromUtf8(li->nativeName));
     langBtn_->setToolTip(i18n::trs("切换语言", "Switch language"));
     settingsBtn_->setToolTip(i18n::trs("设置", "Settings"));
     settingsBtn_->setAccessibleName(i18n::trs("设置", "Settings"));

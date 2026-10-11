@@ -544,7 +544,7 @@ int main(int argc, char** argv) {
         // 它是 QToolButton（不是 QPushButton），所以必须按 QAbstractButton 查。
         QAbstractButton* langBtn = nullptr;
         for (auto* b : w.findChildren<QAbstractButton*>())
-            if (b->text() == "中文" || b->text() == "EN") langBtn = b;
+            if (b->objectName() == QLatin1String("langBtn")) langBtn = b;
 
         for (auto* l : w.findChildren<QLabel*>()) note("QLabel", l->text());
         for (auto* b : w.findChildren<QAbstractButton*>()) {
@@ -602,6 +602,45 @@ int main(int argc, char** argv) {
             QString("切语言不再整页重建（控件数 %1 → %2）").arg(widgetsBefore).arg(widgetsAfter));
 
         i18n::apply(i18n::Lang::Zh);  // 还原：后续流程仍按中文跑
+
+        // ---- 新语言地标（zh-Hant/ja/ko/de/fr/it）：切语言后设置按钮的 tooltip
+        // 必须等于 pack 表里「设置」的译文——验证 trs → 覆盖表查找 → 重译的
+        // 全链路接线（值直接读 pack，不硬编码，换译不换测）。 ----
+        QToolButton* settingsBtn = nullptr;
+        for (auto* b : w.findChildren<QToolButton*>())
+            if (b->accessibleName() == i18n::trs("设置", "Settings"))
+                settingsBtn = b;
+        chk(settingsBtn != nullptr, "找到设置按钮（新语言地标探针）");
+        if (settingsBtn) {
+            const std::pair<i18n::Lang, const std::unordered_map<std::string_view,
+                            std::string_view>&> packs[] = {
+                {i18n::Lang::ZhHant, i18n_pack::zhHant()},
+                {i18n::Lang::Ja, i18n_pack::ja()},
+                {i18n::Lang::Ko, i18n_pack::ko()},
+                {i18n::Lang::De, i18n_pack::de()},
+                {i18n::Lang::Fr, i18n_pack::fr()},
+                {i18n::Lang::It, i18n_pack::it()},
+            };
+            for (const auto& [lang, pack] : packs) {
+                const auto it = pack.find("\xE8\xAE\xBE\xE7\xBD\xAE");  // "设置" UTF-8
+                if (it == pack.end()) {
+                    chk(false, QString("pack 缺少「设置」键（lang #%1）")
+                                     .arg(static_cast<int>(lang)));
+                    continue;
+                }
+                i18n::apply(lang);
+                QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                const QString want =
+                    QString::fromUtf8(it->second.data(), static_cast<qsizetype>(it->second.size()));
+                chk(settingsBtn->toolTip() == want,
+                    QString("新语言地标：%1 的「设置」= %2")
+                        .arg(i18n::langInfo(lang)->nativeName,
+                             QString::fromUtf8(it->second.data(),
+                                               static_cast<qsizetype>(it->second.size()))));
+            }
+            i18n::apply(i18n::Lang::Zh);  // 还原
+            QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
     }
 
     // ---- 弹窗自动处理器：扮演用户的手，把流程中的模态框逐个"点掉"并留痕 ----
