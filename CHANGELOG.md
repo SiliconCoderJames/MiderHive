@@ -24,7 +24,70 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-11
+
 ### Added
+- **13 first-class clients + a custom-client fallback + auto-connect, three ways**: Gemini CLI,
+  Qwen Code, iFlow CLI, Windsurf and Kiro joined the onboarding registry (all standard
+  `mcpServers` JSON — the wizard writes their settings files while preserving every unrelated
+  setting); anything else that speaks the Claude shape is covered by a custom-client fallback;
+  and connecting became one click, three ways — a "Connect all detected" button in the wizard,
+  a dashboard banner when installed-but-unconnected tools are found, and `agent-cli
+  auto-connect` for headless setups (idempotent re-runs). All three deliberately skip tools
+  that are online or already wired: provisioning rotates keys, and re-issuing would invalidate
+  keys you already pasted.
+- **The UI now speaks 8 languages**: 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Français,
+  Italiano and English (per-language Qt translations included). The i18n architecture moved
+  from hardcoded zh/en pairs to N-language override tables keyed by the Simplified Chinese
+  source text; new tooling: `scripts/i18n_extract.py` and `scripts/merge_i18n_packs.py`.
+- **The update manifest is signed and verified**: CI signs `latest.json` with RSA-2048 and
+  publishes `latest.json.sig`; the updater verifies the signature before trusting the manifest
+  and refuses a mismatched one. (1.3.0)
+
+### Fixed
+- **Non-ASCII data directories work end to end**: the platform core read `%USERPROFILE%` via
+  `std::getenv` (ANSI bytes) while SQLite interprets paths as UTF-8 — on a Chinese Windows
+  account the GUI and platformd failed to start at all, backups were invisible, and the MCP
+  server exited permanently. All path handling now goes through explicit UTF-8→wide
+  conversion; verified by a new end-to-end test that bootstraps, writes, backs up and restores
+  inside a Chinese-named directory.
+- **A corrupted `agents.json` no longer crashes the app on every start**: bootstrap parsed it
+  with a throwing parser and both entry points had no handler — `std::terminate` with zero
+  diagnostics. Corrupt files are now treated as unreadable and land in the existing
+  keyfile-missing diagnostics.
+- **Modal dialogs no longer race the 3-second auto-refresh**: resolving an error or replying to
+  a message held a reference into a vector that refresh rebuilds — a use-after-free that could
+  write the resolution onto a different record. The identity is copied before the dialog opens.
+- **Batch connect no longer rotates keys of Claude Code users** connected via the recommended
+  project-root `.mcp.json` (the "already connected" check only looked at the Desktop config).
+- **Broadcast messages can be acted on by everyone**: accepting a broadcast task or marking a
+  broadcast note read used to return 400 for every non-manager agent (deadlocking broadcast
+  tasks in pending) — the broadcast exemption that `messageReply` already had now applies to
+  status changes too.
+- **Single-connect re-issuing an online agent now asks first**: provisioning an online
+  identity rotates its key and drops the tool offline; both dialogs confirm before rotating.
+- **The Codex TOML writer refuses two more shapes it cannot merge** (top-level inline
+  `mcp_servers = { ... }` tables and commented `[mcp_servers]` headers with an occupied
+  `miderhive` key) instead of appending a table that breaks the whole config.toml.
+- **`agent-cli auto-connect` writes Hermes into `%LOCALAPPDATA%`** where Hermes actually reads
+  it (it used the wrong root and reported success), and every generated config now carries
+  `MIDERHIVE_PORT` when the platform runs on a non-default port.
+- **Old versions' vector rows leave the dimension table** when a knowledge entry gets a new
+  version — ghost rows used to crowd out kNN recall and degrade semantic search as version
+  chains grew.
+- **Port settings are validated everywhere** (platformd, the GUI, the CLI — including `--port`
+  written after the subcommand): invalid values now fail loudly or fall back explicitly instead
+  of silently binding to a random OS port no agent can find.
+- Plus: skill-invoke rejects wrapped token counts like the usage endpoint does; skill names
+  with `/` are rejected at registration (they could never be invoked); length caps cover
+  resolve notes, heartbeat tasks and reply bodies; a removed agent's leftover plaintext key is
+  audited; read failures in the knowledge panel and settings dialogs surface as toasts instead
+  of fake empty states; table context menus copy what you actually right-clicked; CSV export
+  reports disk failures; the updater is cross-instance single-flight, detects mirror error
+  pages instead of calling them tampered, and `fetch-deps.ps1` now vendors SQLite too (truly
+  offline builds).
+
+## [1.3.0] - 2026-10-07
 
 - **The UI now speaks 8 languages**: 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Français, Italiano and English, switchable from the footer menu (per-language Qt translations included). The i18n architecture moved from hardcoded zh/en pairs to N-language override tables keyed by the Simplified Chinese source text — all 668 existing call sites unchanged, missing entries gracefully fall back to English, and adding a new language is one header table plus one registry line. New tooling: `scripts/i18n_extract.py` (key extraction + coverage check) and `scripts/merge_i18n_packs.py` (merge translator output into the pack headers). The GUI self-test now asserts per-language landmarks (switch language → the settings tooltip must equal the pack's translation of "设置").
 - **Five more first-class clients + a custom-client fallback**: Gemini CLI, Qwen Code, iFlow CLI,
@@ -571,7 +634,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.0...v1.2.1
