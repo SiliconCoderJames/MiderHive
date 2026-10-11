@@ -357,6 +357,23 @@ void ConnectDialog::provision() {
     if (current_ < 0) return;
     const ui::integrations::Tool& t = rows_[current_].tool;
 
+    // 已在线的身份重新签发 = 轮换密钥 = 该工具立刻掉线（agentProvision 对已存在
+    // 身份是轮换语义）。批量接入防住了这一点（connectAllDetected 跳过已在线），
+    // 单发路径此前漏接——同文件现成的 onlineAgents 补上，用户明确确认才继续。
+    for (const QString& online : onlineAgents(platform_)) {
+        if (online == name) {
+            const auto answer = QMessageBox::question(
+                this, i18n::trs("该身份已在线", "This agent is online"),
+                i18n::trs("身份「%1」当前在线。重新签发会作废它正在使用的密钥，"
+                          "该工具会立刻掉线（重新配置后才能恢复）。\n\n继续重新签发吗？",
+                          "Agent \"%1\" is online right now. Re-issuing rotates its key — "
+                          "the tool will drop offline until reconfigured.\n\nRotate anyway?")
+                    .arg(name));
+            if (answer != QMessageBox::Yes) return;
+            break;
+        }
+    }
+
     // 1) 签发身份（幂等：不存在则注册，已存在则轮换）。明文只在这一次可读。
     std::string key, err;
     if (!platform_.agentProvision(ah::kManagerName, name.toStdString(), key, err)) {
@@ -369,12 +386,14 @@ void ConnectDialog::provision() {
 
     // 2) 生成该工具真正能用的片段（JSON / TOML / YAML / 环境变量 / 指令块）
     const QString exe = mcpExePath();
-    const QString snippet = ui::integrations::generateConfig(t.id, exe, name, issuedKey_);
+    const QString snippet =
+        ui::integrations::generateConfig(t.id, exe, name, issuedKey_, platform_.httpPort());
     snippet_->setPlainText(snippet);
     QApplication::clipboard()->setText(snippet);
 
     // 3) 有手工命令的工具（Claude Code / Droid）额外给出命令——比改文件更稳
-    const QString cmd = ui::integrations::cliCommand(t.id, exe, name, issuedKey_);
+    const QString cmd =
+        ui::integrations::cliCommand(t.id, exe, name, issuedKey_, platform_.httpPort());
     if (!cmd.isEmpty()) {
         cmdHint_->setText(cmd);
         cmdHint_->setVisible(true);
@@ -423,8 +442,9 @@ void ConnectDialog::writeToConfig() {
     // 改名后写入 (新名, 旧钥) 会让该工具永远鉴权失败
     const ui::integrations::ApplyResult r = t.id == QLatin1String("custom")
         ? ui::integrations::applyCustomConfig(customPath_, mcpExePath(), issuedName_,
-                                              issuedKey_)
-        : ui::integrations::applyConfig(t.id, mcpExePath(), issuedName_, issuedKey_);
+                                              issuedKey_, platform_.httpPort())
+        : ui::integrations::applyConfig(t.id, mcpExePath(), issuedName_, issuedKey_,
+                                        platform_.httpPort());
     actionNotice_ = i18n::trs(r.detailZh, r.detailEn);
     if (r.ok) actionNotice_ += "\n" + i18n::trs("下一步：完全退出并重启该工具。",
                                                 "Next: fully quit and restart that tool.");
@@ -457,7 +477,8 @@ void ConnectDialog::writeProjectConfig() {
 
     const QString name = issuedName_;  // 同 writeToConfig：写配置必须配签发名
     const ui::integrations::ApplyResult r =
-        ui::integrations::applyProjectConfig(dir, mcpExePath(), name, issuedKey_);
+        ui::integrations::applyProjectConfig(dir, mcpExePath(), name, issuedKey_,
+                                             platform_.httpPort());
     actionNotice_ = i18n::trs(r.detailZh, r.detailEn);
     if (r.ok) {
         actionNotice_ += "\n" +

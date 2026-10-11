@@ -984,6 +984,20 @@ static void test_integrations_generate() {
     }
     CHECK(relativeConfigPath("codex") == ".codex/config.toml");
     CHECK(relativeConfigPath("zcode").empty());
+    // 自定义端口：接入片段必须携带 MIDERHIVE_PORT（miderhive-mcp 只从环境读）
+    CHECK(generateConfig("zcode", winExe, "z1", "k1", 9000).find("MIDERHIVE_PORT=9000") !=
+          std::string::npos);
+    {  // JSON env 块同样携带；默认 8787 不噪音化
+        auto j = nlohmann::json::parse(generateConfig("droid", winExe, "d1", "k1", 9000));
+        CHECK_EQ(j["mcpServers"]["miderhive"]["env"]["MIDERHIVE_PORT"].get<int>(), 9000);
+        auto j2 = nlohmann::json::parse(generateConfig("droid", winExe, "d1", "k1"));
+        CHECK(!j2["mcpServers"]["miderhive"]["env"].contains("MIDERHIVE_PORT"));
+    }
+    // 落点根的种类：hermes=local、claude-code=appdata、其余 home（CLI auto-connect
+    // 与 GUI/检测三方同源——此前 CLI 一律 USERPROFILE，hermes 写出永不读取的路径）
+    CHECK(std::string(configRootKind("hermes")) == "local");
+    CHECK(std::string(configRootKind("claude-code")) == "appdata");
+    CHECK(std::string(configRootKind("codex")) == "home");
 }
 
 // 写入器四条路径：新建 / 合并保留他人条目 / 坏 JSON 拒绝且不改 / 重复写入替换
@@ -1098,6 +1112,29 @@ static void test_integrations_write() {
         txt.clear();
         CHECK(readFileUtf8(customPath, txt));
         CHECK(txt == "not json at all");
+    }
+
+    // TOML 逃逸形状（audit integrations-1）：顶层内联表与带行尾注释的
+    // [mcp_servers] 表头（且 miderhive 键已被占用）——此前漏判后追加整张表，
+    // 整份 config.toml 拒载（tomllib 实测 Cannot declare twice）
+    {
+        const std::string tomlPath = (tmp / ".codex/config.toml").string();
+        const std::string inlineForm =
+            "mcp_servers = { notes = \"x\" }\n\n[other]\nkey = 1\n";
+        writeFileUtf8(tomlPath, inlineForm);
+        r = writeConfigUnderRoot(tmp.string(), "codex", exe, "x4", "k4");
+        CHECK(!r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(tomlPath, txt));
+        CHECK(txt == inlineForm);
+        const std::string commentedHeader =
+            "[mcp_servers] # my servers\nmiderhive = { command = \"y\" }\n";
+        writeFileUtf8(tomlPath, commentedHeader);
+        r = writeConfigUnderRoot(tmp.string(), "codex", exe, "x5", "k5");
+        CHECK(!r.ok);
+        txt.clear();
+        CHECK(readFileUtf8(tomlPath, txt));
+        CHECK(txt == commentedHeader);
     }
 
     // Hermes 父键带 flow 值（mcp_servers: {}）：缩进块插在 flow 值后面是结构性

@@ -317,15 +317,17 @@ inline QString mcpExePath() {
 // ---------------- 片段生成与写入（全部委托 core）----------------
 
 inline QString generateConfig(const QString& id, const QString& command, const QString& agentName,
-                              const QString& agentKey) {
+                              const QString& agentKey, int port = 8787) {
     return QString::fromStdString(ah::integrations::generateConfig(
-        id.toStdString(), command.toStdString(), agentName.toStdString(), agentKey.toStdString()));
+        id.toStdString(), command.toStdString(), agentName.toStdString(), agentKey.toStdString(),
+        port));
 }
 
 inline QString cliCommand(const QString& id, const QString& command, const QString& agentName,
-                          const QString& agentKey) {
+                          const QString& agentKey, int port = 8787) {
     return QString::fromStdString(ah::integrations::cliCommand(
-        id.toStdString(), command.toStdString(), agentName.toStdString(), agentKey.toStdString()));
+        id.toStdString(), command.toStdString(), agentName.toStdString(), agentKey.toStdString(),
+        port));
 }
 
 struct ApplyResult {
@@ -344,27 +346,29 @@ inline ApplyResult toResult(const ah::integrations::WriteResult& r) {
 
 // 把配置写进该工具在这台机器上的真实配置文件。失败时给出可执行的下一步，绝不静默。
 inline ApplyResult applyConfig(const QString& id, const QString& command, const QString& agentName,
-                               const QString& agentKey) {
+                               const QString& agentKey, int port = 8787) {
     return toResult(ah::integrations::writeConfigFile(
         id.toStdString(), configPath(id).toStdString(), command.toStdString(),
-        agentName.toStdString(), agentKey.toStdString()));
+        agentName.toStdString(), agentKey.toStdString(), port));
 }
 
 // 自定义 MCP 客户端兜底：用户给出任意配置文件路径，按标准 mcpServers 形状
 // 合并写入（安全网与注册表路径同一套：备份/原子写/形状拒绝）。
 inline ApplyResult applyCustomConfig(const QString& path, const QString& command,
-                                     const QString& agentName, const QString& agentKey) {
+                                     const QString& agentName, const QString& agentKey,
+                                     int port = 8787) {
     return toResult(ah::integrations::writeCustomMcpConfig(
         path.toStdString(), command.toStdString(), agentName.toStdString(),
-        agentKey.toStdString()));
+        agentKey.toStdString(), port));
 }
 
 // Claude Code 的项目级写入：<项目根>/.mcp.json（向导让用户挑一次项目文件夹）。
 inline ApplyResult applyProjectConfig(const QString& projectDir, const QString& command,
-                                      const QString& agentName, const QString& agentKey) {
+                                      const QString& agentName, const QString& agentKey,
+                                      int port = 8787) {
     return toResult(ah::integrations::writeProjectConfig(
         projectDir.toStdString(), command.toStdString(), agentName.toStdString(),
-        agentKey.toStdString()));
+        agentKey.toStdString(), port));
 }
 
 }  // namespace ui::integrations

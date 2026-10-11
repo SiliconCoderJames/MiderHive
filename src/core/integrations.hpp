@@ -95,6 +95,17 @@ inline std::string relativeConfigPath(const std::string& id) {
     return "";  // zcode / copilot：无固定配置文件
 }
 
+// 各工具配置根的种类：真实根 = home(USERPROFILE) / local(LOCALAPPDATA) /
+// appdata(APPDATA)。此前只有 GUI 知道这个映射（hermes 特判 LOCALAPPDATA、
+// claude-code 特判 APPDATA），CLI auto-connect 一律用 USERPROFILE——对
+// hermes 写出永远不被读取的路径（audit integrations-3）。core 化后
+// GUI/CLI/检测三方同源。
+inline const char* configRootKind(const std::string& id) {
+    if (id == "hermes") return "local";
+    if (id == "claude-code") return "appdata";
+    return "home";
+}
+
 // ---------------- 本机安装检测（Qt-free；GUI 与 CLI 共用）----------------
 // 文件系统操作一律经 ah::fsPath（util.h；UTF-8 → 宽字符，原因见彼处注释）。
 
@@ -210,7 +221,8 @@ inline std::string tomlQuote(const std::string& v) {
 
 // 生成该工具的接入配置片段。command 为 miderhive-mcp 可执行文件完整路径。
 inline std::string generateConfig(const std::string& id, const std::string& command,
-                                  const std::string& agentName, const std::string& agentKey) {
+                                  const std::string& agentName, const std::string& agentKey,
+                                  int port = 8787) {
     std::ostringstream o;
     switch (formatOf(id)) {
         case Format::TomlCodex:
@@ -220,7 +232,9 @@ inline std::string generateConfig(const std::string& id, const std::string& comm
               << "command = " << tomlQuote(command) << "\n"
               << "args = []\n"
               << "env = { MIDERHIVE_AGENT_NAME = " << tomlQuote(agentName)
-              << ", MIDERHIVE_AGENT_KEY = " << tomlQuote(agentKey) << " }\n";
+              << ", MIDERHIVE_AGENT_KEY = " << tomlQuote(agentKey);
+            if (port != 8787) o << ", MIDERHIVE_PORT = " << port;
+            o << " }\n";
             return o.str();
         case Format::DshPatchYaml:
             // DSH 会清洗子进程环境（名字含 KEY/TOKEN/SECRET 的一律删除），
@@ -236,6 +250,7 @@ inline std::string generateConfig(const std::string& id, const std::string& comm
               << "        env:\n"
               << "          MIDERHIVE_AGENT_NAME: " << yamlQuote(agentName) << "\n"
               << "          MIDERHIVE_AGENT_KEY: " << yamlQuote(agentKey) << "\n";
+            if (port != 8787) o << "          MIDERHIVE_PORT: " << port << "\n";
             return o.str();
         case Format::HermesYaml:
             o << "mcp_servers:\n"
@@ -245,15 +260,17 @@ inline std::string generateConfig(const std::string& id, const std::string& comm
               << "    env:\n"
               << "      MIDERHIVE_AGENT_NAME: " << yamlQuote(agentName) << "\n"
               << "      MIDERHIVE_AGENT_KEY: " << yamlQuote(agentKey) << "\n";
+            if (port != 8787) o << "      MIDERHIVE_PORT: " << port << "\n";
             return o.str();
         case Format::EnvVars:
             o << "MIDERHIVE_AGENT_NAME=" << agentName << "\n"
               << "MIDERHIVE_AGENT_KEY=" << agentKey << "\n"
-              << "MIDERHIVE_PORT=8787\n";
+              << "MIDERHIVE_PORT=" << port << "\n";
             return o.str();
         case Format::InstructionsMd:
             o << "## MiderHive (local multi-agent hive)\n\n"
-              << "This machine runs a local-first agent hive at http://127.0.0.1:8787.\n"
+              << "This machine runs a local-first agent hive at http://127.0.0.1:" << port
+              << ".\n"
               << "Before starting work, read shared context; when you learn something reusable,\n"
               << "write it back so other agents do not rediscover it.\n\n"
               << "Identity headers (send on every request):\n"
@@ -272,6 +289,7 @@ inline std::string generateConfig(const std::string& id, const std::string& comm
             // ordered_json：输出键序 = 插入序（command → args → env），与官方示例一致
             nlohmann::ordered_json env{{"MIDERHIVE_AGENT_NAME", agentName},
                                        {"MIDERHIVE_AGENT_KEY", agentKey}};
+            if (port != 8787) env["MIDERHIVE_PORT"] = port;  // miderhive-mcp 只从环境读端口
             nlohmann::ordered_json server{{"command", command}};
             if (id == "cursor") server["args"] = nlohmann::ordered_json::array();
             server["env"] = env;
@@ -296,16 +314,24 @@ inline std::string cmdQuote(const std::string& v) {
 }
 
 inline std::string cliCommand(const std::string& id, const std::string& command,
-                              const std::string& agentName, const std::string& agentKey) {
+                              const std::string& agentName, const std::string& agentKey,
+                              int port = 8787) {
+    // 非默认端口也要写进命令行：miderhive-mcp 只从环境变量读端口
+    const std::string portClaude =
+        port == 8787 ? "" : " \\\n  -e MIDERHIVE_PORT=" + std::to_string(port);
+    const std::string portDroid =
+        port == 8787 ? "" : " --env MIDERHIVE_PORT=" + std::to_string(port);
     if (id == "claude-code")
         return "claude mcp add miderhive \\\n"
                "  -e MIDERHIVE_AGENT_NAME=" + cmdQuote(agentName) +
                " \\\n  -e MIDERHIVE_AGENT_KEY=" + cmdQuote(agentKey) +
+               portClaude +
                " \\\n  -- \"" + command + "\"";
     if (id == "droid")
         return "droid mcp add miderhive \"" + command +
                "\" \\\n  --env MIDERHIVE_AGENT_NAME=" + cmdQuote(agentName) +
-               " --env MIDERHIVE_AGENT_KEY=" + cmdQuote(agentKey);
+               " --env MIDERHIVE_AGENT_KEY=" + cmdQuote(agentKey) +
+               portDroid;
     return "";
 }
 
@@ -707,13 +733,13 @@ inline WriteResult finishConfigWrite(const std::string& path, std::string out,
 
 inline WriteResult writeConfigFile(const std::string& id, const std::string& path,
                                    const std::string& command, const std::string& agentName,
-                                   const std::string& agentKey) {
+                                   const std::string& agentKey, int port = 8787) {
     const Format fmt = formatOf(id);
     if (path.empty() || !hasWritableConfig(id)) {
         return makeResult(false, "该工具没有可自动写入的配置文件。",
                           "This tool has no config file that can be written automatically.");
     }
-    const std::string snippet = generateConfig(id, command, agentName, agentKey);
+    const std::string snippet = generateConfig(id, command, agentName, agentKey, port);
 
     std::string existing;
     const bool hasFile = std::filesystem::exists(fsPath(path));
@@ -768,7 +794,17 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
         if (at < 0 && hasFile) {
             for (const auto& l : lines) {
                 const std::string t = trimCopy(l);
-                if (t == "[mcp_servers]" ||
+                // 行尾注释剥离（TOML 的 # 起注释；值内含 # 的极端写法会误判——
+                // 误判方向是"拒绝合并、请手工粘贴"，安全）
+                const size_t hashAt = t.find('#');
+                const std::string beforeComment =
+                    trimCopy(hashAt == std::string::npos ? t : t.substr(0, hashAt));
+                // 值形式：mcp_servers = { ... } 顶层内联表（此前只拦表头行）
+                const bool valueForm =
+                    t.compare(0, 11, "mcp_servers") == 0 &&
+                    t.size() > 11 && (t[11] == '=' || t[11] == ' ' || t[11] == '\t') &&
+                    t.find('=') != std::string::npos;
+                if (t == "[mcp_servers]" || beforeComment == "[mcp_servers]" || valueForm ||
                     t.find("mcp_servers.miderhive") != std::string::npos) {
                     return makeResult(
                         false,
@@ -820,12 +856,13 @@ inline WriteResult writeConfigFile(const std::string& id, const std::string& pat
 // 覆盖注册表之外但兼容 Claude 形状的工具（市面上绝大多数）；备份/原子写/形状
 // 拒绝的安全网与注册表路径完全同一套。
 inline WriteResult writeCustomMcpConfig(const std::string& path, const std::string& command,
-                                        const std::string& agentName, const std::string& agentKey) {
+                                        const std::string& agentName, const std::string& agentKey,
+                                        int port = 8787) {
     if (path.empty()) {
         return makeResult(false, "请先选择配置文件路径。",
                           "Pick the config file path first.");
     }
-    const std::string snippet = generateConfig("custom", command, agentName, agentKey);
+    const std::string snippet = generateConfig("custom", command, agentName, agentKey, port);
     std::string existing;
     const bool hasFile = std::filesystem::exists(fsPath(path));
     if (hasFile && !readFileUtf8(path, existing)) {
@@ -845,7 +882,7 @@ inline WriteResult writeCustomMcpConfig(const std::string& path, const std::stri
 // 写到 rootDir 下该工具的约定相对路径（CLI / 测试 / MIDERHIVE_CONNECT_ROOT 重定向共用）。
 inline WriteResult writeConfigUnderRoot(const std::string& rootDir, const std::string& id,
                                         const std::string& command, const std::string& agentName,
-                                        const std::string& agentKey) {
+                                        const std::string& agentKey, int port = 8787) {
     const std::string rel = relativeConfigPath(id);
     if (rel.empty() || rootDir.empty()) {
         return makeResult(false, "该工具没有可自动写入的配置文件。",
@@ -853,7 +890,7 @@ inline WriteResult writeConfigUnderRoot(const std::string& rootDir, const std::s
     }
     std::string root = rootDir;
     while (!root.empty() && (root.back() == '/' || root.back() == '\\')) root.pop_back();
-    return writeConfigFile(id, root + "/" + rel, command, agentName, agentKey);
+    return writeConfigFile(id, root + "/" + rel, command, agentName, agentKey, port);
 }
 
 // Claude Code 的项目级落点：<项目根>/.mcp.json（Claude Code 官方约定的项目作用域 MCP 配置，
@@ -866,9 +903,10 @@ inline std::string projectConfigPath(const std::string& projectDir) {
 }
 
 inline WriteResult writeProjectConfig(const std::string& projectDir, const std::string& command,
-                                      const std::string& agentName, const std::string& agentKey) {
+                                      const std::string& agentName, const std::string& agentKey,
+                                      int port = 8787) {
     return writeConfigFile("claude-code", projectConfigPath(projectDir), command, agentName,
-                           agentKey);
+                           agentKey, port);
 }
 
 }  // namespace ah::integrations

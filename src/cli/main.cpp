@@ -215,6 +215,13 @@ std::string resolvePort(const Args& a) {
     return port;
 }
 
+// 连接端口（与 Client 同一解析链）；写入接入片段时带上，miderhive-mcp 只从
+// 环境变量读端口——平台跑在自定义端口时片段必须显式携带（audit integrations-4）
+static int resolvedPort(const Args& a) {
+    const std::string p = resolvePort(a);
+    return static_cast<int>(std::strtol(p.c_str(), nullptr, 10));
+}
+
 struct Client {
     httplib::Client http;
     std::string name;
@@ -402,7 +409,7 @@ int main(int argc, char** argv) {
             const ah::integrations::WriteResult r = ah::integrations::writeCustomMcpConfig(
                 a.opts.at("path"), command,
                 a.opts.count("name") ? a.opts.at("name") : "custom",
-                a.opts.count("key") ? a.opts.at("key") : "");
+                a.opts.count("key") ? a.opts.at("key") : "", resolvedPort(a));
             std::cout << (r.ok ? "OK: " : "FAIL: ") << r.detailZh << "\n";
             return r.ok ? 0 : 1;
         }
@@ -426,7 +433,8 @@ int main(int argc, char** argv) {
         const std::string key = a.opts.count("key") ? a.opts.at("key") : "";
 
         if (cmd == "connect-snippet") {
-            std::cout << ah::integrations::generateConfig(tool, command, name, key);
+            std::cout << ah::integrations::generateConfig(tool, command, name, key,
+                                                          resolvedPort(a));
             return 0;
         }
 
@@ -438,13 +446,15 @@ int main(int argc, char** argv) {
         }
         // --dir 的语义按工具分两种：claude-code 的落点是**项目根**的 .mcp.json
         // （Claude Code 的项目作用域约定）；其余工具是配置根下的约定相对路径。
+        const int port = resolvedPort(a);
         ah::integrations::WriteResult r =
-            hasPath ? ah::integrations::writeConfigFile(tool, a.opts.at("path"), command, name, key)
+            hasPath ? ah::integrations::writeConfigFile(tool, a.opts.at("path"), command, name, key,
+                                                        port)
                     : (tool == "claude-code"
                            ? ah::integrations::writeProjectConfig(a.opts.at("dir"), command, name,
-                                                                  key)
+                                                                  key, port)
                            : ah::integrations::writeConfigUnderRoot(a.opts.at("dir"), tool, command,
-                                                                    name, key));
+                                                                    name, key, port));
         std::cout << (r.ok ? "OK: " : "FAIL: ") << r.detailZh << "\n";
         return r.ok ? 0 : 1;
     }
@@ -455,8 +465,15 @@ int main(int argc, char** argv) {
     if (cmd == "auto-connect") {
         const bool dryRun = a.opts.count("dry-run") != 0;
         const std::string rootOverride = a.opts.count("dir") ? a.opts.at("dir") : "";
-        const std::string root =
-            rootOverride.empty() ? ah::envOr({"USERPROFILE"}) : rootOverride;
+        // 每工具的配置根：core 的 configRootKind 是 GUI/检测/CLI 的同源映射。
+        // --dir 重定向（测试/便携）仍优先于一切。
+        auto rootFor = [&](const std::string& id) {
+            if (!rootOverride.empty()) return rootOverride;
+            const std::string kind = ah::integrations::configRootKind(id);
+            if (kind == "local") return ah::envOr({"LOCALAPPDATA"});
+            if (kind == "appdata") return ah::envOr({"APPDATA"});
+            return ah::envOr({"USERPROFILE"});
+        };
         // 命令解析与 connect-snippet 同款：默认指向同目录的 miderhive-mcp
         std::string command = a.opts.count("command") ? a.opts.at("command") : "";
         if (command.empty()) {
@@ -480,7 +497,7 @@ int main(int argc, char** argv) {
         for (const auto& t : ah::integrations::toolRegistry()) {
             if (!ah::integrations::hasWritableConfig(t.id)) continue;  // zcode/copilot 走手工
             const std::string rel = ah::integrations::relativeConfigPath(t.id);
-            const std::string cfgPath = root + "/" + rel;
+            const std::string cfgPath = rootFor(t.id) + "/" + rel;
             const std::string agentName = t.defaultAgentName;
             auto skip = [&](const std::string& why) {
                 std::cout << "SKIP: " << t.id << " — " << why << "\n";
@@ -515,8 +532,8 @@ int main(int argc, char** argv) {
                 continue;
             }
             const std::string key = reg["data"].value("api_key", "");
-            const ah::integrations::WriteResult r =
-                ah::integrations::writeConfigUnderRoot(root, t.id, command, agentName, key);
+            const ah::integrations::WriteResult r = ah::integrations::writeConfigUnderRoot(
+                rootFor(t.id), t.id, command, agentName, key, resolvedPort(a));
             if (r.ok) {
                 ++ok;
                 std::cout << "OK: " << t.id << " → " << cfgPath << "\n";

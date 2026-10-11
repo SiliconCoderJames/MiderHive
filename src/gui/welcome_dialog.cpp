@@ -271,6 +271,26 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
                                        "Enter an agent name first (e.g. claude-code)."));
         return;
     }
+    // 已在线的身份重新签发 = 轮换密钥 = 该工具立刻掉线（同 connect_dialog 的
+    // 防护；批量路径 connectAllDetected 也防住了）。用户明确确认才继续。
+    {
+        std::vector<ah::AgentInfo> agents;
+        std::string lerr;
+        if (platform_.listAgents(agents, lerr)) {
+            for (const auto& a : agents) {
+                if (QString::fromStdString(a.name) != agentName || a.status != "online") continue;
+                const auto answer = QMessageBox::question(
+                    this, i18n::trs("该身份已在线", "This agent is online"),
+                    i18n::trs("身份「%1」当前在线。重新签发会作废它正在使用的密钥，"
+                              "该工具会立刻掉线（重新配置后才能恢复）。\n\n继续重新签发吗？",
+                              "Agent \"%1\" is online right now. Re-issuing rotates its key — "
+                              "the tool will drop offline until reconfigured.\n\nRotate anyway?")
+                        .arg(agentName));
+                if (answer != QMessageBox::Yes) return;
+                break;
+            }
+        }
+    }
     std::string err, apiKey;
     if (!platform_.agentProvision(ah::kManagerName, agentName.toStdString(), apiKey, err)) {
         QMessageBox::warning(this, i18n::trs("接入失败", "Connect failed"),
@@ -283,8 +303,8 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
 
     // 3) 生成该工具的接入片段并展示 + 复制（JSON / TOML / YAML / 环境变量 / 指令块）
     const QString exe = ui::integrations::mcpExePath();
-    configView_->setPlainText(
-        ui::integrations::generateConfig(tool.id, exe, agentName, issuedKey_));
+    configView_->setPlainText(ui::integrations::generateConfig(
+        tool.id, exe, agentName, issuedKey_, platform_.httpPort()));
     QApplication::clipboard()->setText(configView_->toPlainText());
 
     // 落点：能解析出真实路径就显示真实路径（用户可以直接去那儿找），否则显示约定位置。

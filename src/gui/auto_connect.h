@@ -31,7 +31,17 @@ struct Outcome {
 
 // 配置是否已接入：实现在 gui/integrations.h（connectedState 的判定基础）
 inline bool configHasMiderhive(const QString& id) {
-    return ui::integrations::configHasMiderhive(id);
+    if (ui::integrations::configHasMiderhive(id)) return true;
+    // claude-code 的官方推荐落点是项目根的 .mcp.json（configPath 只覆盖 Desktop
+    // 配置）——走该路径接入的用户此前不被"已接入跳过"判定覆盖，批量接入会对
+    // 在用身份轮换密钥（audit integrations-2）。按 lastProjectDir 记忆补查。
+    if (id != QLatin1String("claude-code")) return false;
+    QSettings s;
+    const QString lastDir = s.value("ui/lastProjectDir").toString();
+    if (lastDir.isEmpty()) return false;
+    QFile f(lastDir + "/.mcp.json");
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    return f.readAll().contains("miderhive");
 }
 
 inline QVector<Outcome> connectAllDetected(ah::Platform& platform) {
@@ -91,7 +101,7 @@ inline QVector<Outcome> connectAllDetected(ah::Platform& platform) {
             }
             const auto r = ui::integrations::applyConfig(
                 t.id, ui::integrations::mcpExePath(), o.agentName,
-                QString::fromStdString(key));
+                QString::fromStdString(key), platform.httpPort());
             o.state = r.ok ? "ok" : "failed";
             o.detail = i18n::trs(r.detailZh, r.detailEn);
         } else if (t.id == QLatin1String("claude-code")) {
@@ -114,7 +124,7 @@ inline QVector<Outcome> connectAllDetected(ah::Platform& platform) {
             }
             const auto r = ui::integrations::applyProjectConfig(
                 lastDir, ui::integrations::mcpExePath(), o.agentName,
-                QString::fromStdString(key));
+                QString::fromStdString(key), platform.httpPort());
             o.state = r.ok ? "ok" : "failed";
             o.detail = i18n::trs(r.detailZh, r.detailEn);
         } else {
