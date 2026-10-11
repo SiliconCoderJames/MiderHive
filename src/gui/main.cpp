@@ -140,7 +140,23 @@ int main(int argc, char** argv) {
     {
         std::string portEnv =
             ah::envOr({"MIDERHIVE_PORT", "AGENTHIVE_PORT", "ZCODE_PLATFORM_PORT"});
-        if (!portEnv.empty()) port = std::atoi(portEnv.c_str());
+        // 与 agent-cli resolvePort 同一口径：atoi 无校验会把 "abc"/"0" 变成 0，
+        // bind_to_port(0) 静默绑到随机临时端口且被当成功——Agent 全部连不上
+        // 而界面零告警（audit workbench-4）。非法值回落默认 8787 并留痕。
+        bool ok = true;
+        for (char ch : portEnv)
+            if (ch < '0' || ch > '9') ok = false;
+        if (ok) {
+            const long v = std::strtol(portEnv.c_str(), nullptr, 10);
+            if (v < 1 || v > 65535) ok = false;
+        }
+        if (!ok) {
+            std::fprintf(stderr, "[miderhive] invalid MIDERHIVE_PORT: %s - using 8787\n",
+                         portEnv.c_str());
+            port = 8787;
+        } else {
+            port = std::atoi(portEnv.c_str());
+        }
     }
     const QString homeDir = QString::fromStdString(ah::defaultHomeDir());
     const QVector<ui::startup::Issue> issues = ui::startup::preflight(

@@ -197,8 +197,14 @@ std::string readMasterKeyFromDisk() {
 // 此前帮助文本一直宣告 --port，代码却从未读取——多实例场景（第二实例必须换端口）
 // 下按帮助传参会被静默忽略、连到错误实例。端口非法立即退出 2，绝不静默忽略。
 std::string resolvePort(const Args& a) {
-    std::string port = a.gopts.count("port")
-                           ? a.gopts.at("port")
+    // --port 写在命令后（register --name X --port 9000 这类自然写法）会被
+    // parseArgs 归入子命令选项而此前只读 gopts——静默忽略并连到默认实例
+    // （audit mcp-cli-4，多实例场景有真实副作用）。两处都查，前置优先。
+    const std::string portArg =
+        a.gopts.count("port") ? a.gopts.at("port")
+                              : (a.opts.count("port") ? a.opts.at("port") : "");
+    std::string port = !portArg.empty()
+                           ? portArg
                            : ah::envOr({"MIDERHIVE_PORT", "AGENTHIVE_PORT", "ZCODE_PLATFORM_PORT"},
                                        "8787");
     bool ok = !port.empty();

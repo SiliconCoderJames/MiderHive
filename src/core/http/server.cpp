@@ -578,12 +578,21 @@ void HttpServer::setupRoutes() {
         if (!checkAgent(req, p, actor, res)) return;
         auto body = json::parse(req.body, nullptr, false);
         if (body.is_discarded() || !body.is_object()) { send(res, fail(400, "invalid JSON body")); return; }
+        // 数值必须整数：此前 value(key, 0) 按 int 推导——超大整数静默回绕、浮点
+        // 静默截断后直落 skill_invocations 与用量记账（与 /api/usage/report 同源，
+        // 审计 storage-2/3；那是 1.2.2 修过的兄弟路径）
+        for (const char* field : {"duration_ms", "tokens_in", "tokens_out"}) {
+            if (body.contains(field) && !body[field].is_number_integer()) {
+                send(res, fail(400, std::string(field) + " must be a non-negative integer"));
+                return;
+            }
+        }
         std::string params = body.contains("params") ? body["params"].dump() : "{}";
         std::string result = body.value("result_summary", "");
         std::string status = body.value("status", "success");
-        int64_t duration = body.value("duration_ms", 0);
-        int64_t tin = body.value("tokens_in", 0);
-        int64_t tout = body.value("tokens_out", 0);
+        int64_t duration = body.value("duration_ms", int64_t{0});
+        int64_t tin = body.value("tokens_in", int64_t{0});
+        int64_t tout = body.value("tokens_out", int64_t{0});
         std::string referenceId = body.value("reference_id", "");
         std::string err;
         if (!p.skillInvoke(actor, req.matches[1], params, result, status, duration, tin, tout,

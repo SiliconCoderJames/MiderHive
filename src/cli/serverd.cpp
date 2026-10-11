@@ -34,7 +34,24 @@ int main() {
     {
         std::string portEnv =
             ah::envOr({"MIDERHIVE_PORT", "AGENTHIVE_PORT", "ZCODE_PLATFORM_PORT"});
-        if (!portEnv.empty()) port = std::atoi(portEnv.c_str());
+        // 校验与 agent-cli resolvePort 同一口径：atoi 无校验——"abc"/"0" 静默绑到
+        // OS 临时端口（bind_to_port(0) 必成功）、"8787xyz" 前缀截断静默改端口、
+        // 99999 16 位截断错绑，服务"在跑"却无人能连且零报错
+        if (!portEnv.empty()) {
+            bool ok = !portEnv.empty();
+            for (char ch : portEnv)
+                if (ch < '0' || ch > '9') ok = false;
+            if (ok) {
+                const long v = std::strtol(portEnv.c_str(), nullptr, 10);
+                if (v < 1 || v > 65535) ok = false;
+            }
+            if (!ok) {
+                std::cerr << "[platformd] invalid MIDERHIVE_PORT: " << portEnv
+                          << " (expected 1..65535)\n";
+                return 2;
+            }
+            port = std::atoi(portEnv.c_str());
+        }
     }
     if (!platform.startHttpServer(port, err)) {
         std::cerr << "[platformd] cannot start server: " << err << "\n";
