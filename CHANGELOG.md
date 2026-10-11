@@ -25,6 +25,8 @@ join the hive over HTTP or MCP.
 ## [Unreleased]
 
 ### Added
+
+- **The UI now speaks 8 languages**: 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Français, Italiano and English, switchable from the footer menu (per-language Qt translations included). The i18n architecture moved from hardcoded zh/en pairs to N-language override tables keyed by the Simplified Chinese source text — all 668 existing call sites unchanged, missing entries gracefully fall back to English, and adding a new language is one header table plus one registry line. New tooling: `scripts/i18n_extract.py` (key extraction + coverage check) and `scripts/merge_i18n_packs.py` (merge translator output into the pack headers). The GUI self-test now asserts per-language landmarks (switch language → the settings tooltip must equal the pack's translation of "设置").
 - **Five more first-class clients + a custom-client fallback**: Gemini CLI, Qwen Code, iFlow CLI,
   Windsurf and Kiro join the onboarding registry — all speak the standard `mcpServers` JSON
   shape, so the wizard writes their settings files directly while preserving every unrelated
