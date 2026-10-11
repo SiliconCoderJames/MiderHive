@@ -56,6 +56,10 @@ inline bool isPrivateIpv4(uint32_t ip) {
 inline bool isPrivateIpv6(const std::string& host) {
     std::string h;
     for (char ch : host) h += static_cast<char>((ch >= 'A' && ch <= 'F') ? ch - 'A' + 'a' : ch);
+    // RFC 4007 zone 后缀（::1%eth0）：剥掉后再比对——精确匹配认不出带 zone 的
+    // 环回字面量，而 Windows 解析器实测接受 ::1%zone（audit http-server-1）
+    const size_t zone = h.find('%');
+    if (zone != std::string::npos) h = h.substr(0, zone);
     if (h == "::" || h == "::1" || h == "0:0:0:0:0:0:0:1") return true;            // 环回
     if (h.rfind("fc", 0) == 0 || h.rfind("fd", 0) == 0) return true;               // ULA fc00::/7
     if (h.rfind("fe8", 0) == 0 || h.rfind("fe9", 0) == 0 || h.rfind("fea", 0) == 0 ||
@@ -126,6 +130,8 @@ inline bool isSafeOutboundUrl(const std::string& url) {
     std::string normalized;
     if (!normalizeHost(host, normalized)) return false;
     host = normalized;
+    // 解码后再复查 @（%40 会伪装成 userinfo）与残留 %（解码结果不是合法 host）
+    if (host.find('@') != std::string::npos || host.find('%') != std::string::npos) return false;
 
     uint32_t v4 = 0;
     if (parseIpv4(host, v4)) return !isPrivateIpv4(v4);

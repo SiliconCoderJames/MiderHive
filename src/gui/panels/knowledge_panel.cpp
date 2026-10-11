@@ -139,6 +139,11 @@ void KnowledgePanel::onSearch() {
         std::vector<ah::KnowledgeEntry> entries;
         if (platform_.knowledgeList(200, tag, entries, err)) {
             for (auto& e : entries) hits_.push_back({std::move(e), 0.0});
+        } else {
+            // 读失败如实提示（与下方搜索分支同款）：失败前 hits_ 已被清空，
+            // 不提示会把读失败呈现成"还没有任何知识条目"的空库（audit workbench-3）
+            ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+            return;
         }
     } else {
         ah::SearchMode mode =

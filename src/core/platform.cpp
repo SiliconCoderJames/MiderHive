@@ -464,9 +464,22 @@ bool Platform::agentRemove(const std::string& actor, const std::string& name, st
         db_.rollback();
         return false;
     }
-    // 密钥缓存文件同步移除该条目（文件操作不进数据库事务：失败不回滚删除）
+    // 密钥缓存文件同步移除该条目（文件操作不进数据库事务：失败不回滚删除）。
+    // 失败必须留痕：静默吞掉的话，已删除 Agent 的明文 API key 永久残留在
+    // agents.json 里且运维零感知（audit core-platform-4；三个兄弟调用点失败
+    // 都记 system.keyfile_write_failed，此处是唯一漏网）。凭据在库中已死，
+    // 残留属清理缺口而非活凭据。
     std::string persistErr;
-    (void)persistAgentKey(name, "", persistErr);
+    if (!persistAgentKey(name, "", persistErr)) {
+        // IGNORE: 删除本身已提交、审计已留痕——此处失败只降级"明文清理"，
+        // 再让整个 agentRemove 失败反而无从重试；如实留痕即可。
+        std::string auditErr;
+        audit_.log("system", "system.keyfile_write_failed", name,
+                   nlohmann::json{{"op", "remove"},
+                                  {"error", persistErr}}
+                       .dump(),
+                   auditErr);
+    }
     return true;
 }
 
@@ -551,6 +564,9 @@ bool Platform::agentProvision(const std::string& actor, const std::string& name,
 
 void Platform::heartbeat(const std::string& name, const std::string& currentTask) {
     std::lock_guard lock(mutex_);
+    // 长度闸（audit collab-4）：current_task 整段进库与审计，状态行不是正文——
+    // 截断到 500 字符（参数名保持 currentTask，函数体内全部用它）
+    const std::string task = currentTask.size() > 500 ? currentTask.substr(0, 500) : currentTask;
     std::string prevTask, prevSeen;
     bool found = false;
     std::string err;
@@ -565,18 +581,18 @@ void Platform::heartbeat(const std::string& name, const std::string& currentTask
               },
               err);
     if (!found) return;
-    agents_.heartbeat(name, currentTask);
+    agents_.heartbeat(name, task);
     // 状态/任务变化才留痕，避免高频心跳淹没审计表
     bool wasOffline = prevSeen.empty();
     std::time_t t = 0;
     if (!prevSeen.empty() && parseIso(prevSeen, t) && (std::time(nullptr) - t) > 120) wasOffline = true;
-    if (wasOffline || prevTask != currentTask) {
+    if (wasOffline || prevTask != task) {
         // IGNORE: 心跳是 30-60s 一次的高频上报，审计失败不该让心跳失败
         // （那会把"暂时写不进审计表"放大成"Agent 集体离线"）；心跳本身仍由审计覆盖，
         // 只是允许这条留痕尽力而为。
         std::string heartbeatAuditErr;
         audit_.log(name, "agent.heartbeat", name,
-                   nlohmann::json{{"task", currentTask}}.dump(), heartbeatAuditErr);
+                   nlohmann::json{{"task", task}}.dump(), heartbeatAuditErr);
     }
 }
 
@@ -799,6 +815,12 @@ bool Platform::skillRegister(const std::string& author, const std::string& name,
     if (name.size() > 64 || description.size() > 2000 || category.size() > 64 ||
         paramSchema.size() > 10000) {
         err = "field too long (name<=64, description<=2000, category<=64, schema<=10000)";
+        return false;
+    }
+    // 名字含 "/" 的技能注册成功后 GET/invoke/invocations 三条路由（[^/]+）
+    // 永远匹配不到——仅 list 可见的静默失效（audit storage-5）。入口即拒。
+    if (name.find('/') != std::string::npos) {
+        err = "skill name must not contain '/'";
         return false;
     }
     // 审计作为服务事务内的一步：技能注册与留痕同生同灭
@@ -1026,6 +1048,7 @@ bool Platform::messageReply(const std::string& sender, const std::string& parent
                             const std::string& body, Message& out, std::string& err) {
     std::lock_guard lock(mutex_);
     if (body.empty()) { err = "body is required"; return false; }
+    if (body.size() > 50000) { err = "field too long (body<=50000)"; return false; }
     // 可见性/权限校验（此前整条链路都没有，任意 Agent 可回复任意 uuid，还会把
     // 别人之间点对点消息翻成已读）：与 messageSetStatus 同一白名单——user、
     // 管理者、父消息的发件人或收件人；广播（无收件人）人人可回。
@@ -1051,13 +1074,20 @@ bool Platform::messageSetStatus(const std::string& actor, const std::string& uui
     std::lock_guard lock(mutex_);
     Message cur;
     if (!messages_.get(uuid, cur, err)) return false;
+    // 广播消息（无收件人）人人可流转：广播 task 的接单与广播 note 的已读
+    // 回执是其主流程，此前对所有普通 Agent 一律 400——广播任务死锁在
+    // pending、已读回执不可用（audit collab-3；与 messageReply 的广播豁免
+    // 同步，1.2.2 只给 reply 加了豁免）
+    const bool broadcast = cur.recipient.empty();
     // 任务类消息只有收件人（执行者）、用户或管理者可流转，发件人不能代为接单
-    if (cur.kind == "task" && actor != cur.recipient && actor != "user" && !isManager(actor)) {
+    if (!broadcast && cur.kind == "task" && actor != cur.recipient && actor != "user" &&
+        !isManager(actor)) {
         err = "only the task recipient can change task status";
         return false;
     }
     // 其余消息仅收件人、发件人、用户或管理者可流转
-    if (actor != "user" && actor != cur.recipient && actor != cur.sender && !isManager(actor)) {
+    if (!broadcast && actor != "user" && actor != cur.recipient && actor != cur.sender &&
+        !isManager(actor)) {
         err = "not allowed to change this message's status";
         return false;
     }
@@ -1109,6 +1139,9 @@ bool Platform::errorList(const std::string& statusFilter, const std::string& sev
 bool Platform::errorResolve(const std::string& actor, const std::string& uuid,
                             const std::string& notes, ErrorReport& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    // 长度闸（audit collab-4）：notes 整段进审计 detail 与 resolution_notes，
+    // 是写路径里唯一无长度限制的可控字符串，重复 resolve 会滚雪球
+    if (notes.size() > 20000) { err = "notes too long (max 20000)"; return false; }
     ErrorReport cur;
     if (!errors_.get(uuid, cur, err)) return false;
     if (actor != "user" && actor != cur.reporter && !isManager(actor)) {

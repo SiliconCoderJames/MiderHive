@@ -92,6 +92,11 @@ endif()
 if(EXISTS ${CMAKE_SOURCE_DIR}/vendor/json AND NOT FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON)
     set(FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON ${CMAKE_SOURCE_DIR}/vendor/json CACHE PATH "local vendor")
 endif()
+# SQLite amalgamation：fetch-deps.ps1 预取到 vendor/sqlite/（含 sqlite3.c 顶层）。
+# 没有这段的话 vendor/ 齐备后断网构建仍会在 configure 阶段联网下载（audit scripts-1）
+if(EXISTS ${CMAKE_SOURCE_DIR}/vendor/sqlite/sqlite3.c AND NOT FETCHCONTENT_SOURCE_DIR_SQLITE)
+    set(FETCHCONTENT_SOURCE_DIR_SQLITE ${CMAKE_SOURCE_DIR}/vendor/sqlite CACHE PATH "local vendor")
+endif()
 
 # SQLite official amalgamation (pinned; URL_HASH = 官方 zip 的 SHA256，防下载被篡改)
 # The amalgamation archive extracts into a versioned top-level directory

@@ -374,6 +374,19 @@ inline void attachTableContextMenu(QTableWidget* table, int idColumn = -1) {
     QObject::connect(table, &QTableWidget::customContextMenuRequested,
                      table, [table, idColumn](const QPoint& pos) {
                          int row = table->rowAt(pos.y());
+                         // 菜单 exec 是嵌套事件循环：3s 自动刷新会在菜单打开期间重建
+                         // 表格行（新记录插到顶端），exec 后的 item(row, col) 会取到
+                         // 另一条记录（audit workbench-6）。打开菜单前把整行文本
+                         // 快照下来，复制动作一律用快照。
+                         QStringList rowSnapshot;
+                         for (int c = 0; c < table->columnCount(); ++c) {
+                             auto* it0 = table->item(row, c);
+                             rowSnapshot << (it0 ? it0->text() : QString());
+                         }
+                         const QString idSnapshot =
+                             (idColumn >= 0 && row >= 0 && idColumn < static_cast<int>(rowSnapshot.size()))
+                                 ? rowSnapshot[idColumn]
+                                 : QString();
                          QMenu menu(table);
                          QAction* copyCell = menu.addAction(i18n::trs("复制单元格", "Copy cell"));
                          QAction* copyRow = menu.addAction(i18n::trs("复制整行", "Copy row"));
@@ -385,18 +398,14 @@ inline void attachTableContextMenu(QTableWidget* table, int idColumn = -1) {
                          QAction* act = menu.exec(table->viewport()->mapToGlobal(pos));
                          if (!act || row < 0) return;
                          if (act == copyCell) {
-                             auto* it = table->item(row, table->columnAt(pos.x()));
-                             if (it) QApplication::clipboard()->setText(it->text());
+                             const int col = table->columnAt(pos.x());
+                             if (col >= 0 && col < rowSnapshot.size())
+                                 QApplication::clipboard()->setText(rowSnapshot[col]);
                          } else if (act == copyRow) {
-                             QStringList cells;
-                             for (int c = 0; c < table->columnCount(); ++c) {
-                                 auto* it = table->item(row, c);
-                                 cells << (it ? it->text() : "");
-                             }
-                             QApplication::clipboard()->setText(cells.join("\t"));
+                             QApplication::clipboard()->setText(rowSnapshot.join("\t"));
                          } else if (copyId && act == copyId) {
-                             auto* it = table->item(row, idColumn);
-                             if (it) QApplication::clipboard()->setText(it->text());
+                             if (!idSnapshot.isEmpty())
+                                 QApplication::clipboard()->setText(idSnapshot);
                          } else if (act == exportCsv) {
                              QString path = QFileDialog::getSaveFileName(
                                  table, i18n::trs("导出 CSV", "Export CSV"), "export.csv",
@@ -426,6 +435,17 @@ inline void attachTableContextMenu(QTableWidget* table, int idColumn = -1) {
                                      out << esc(it ? it->text() : "")
                                          << (c + 1 < table->columnCount() ? "," : "\n");
                                  }
+                             }
+                             out.flush();
+                             // 写完必须查状态：磁盘满/占用中途失败时 QTableWidget 数据还在，
+                             // 静默报"导出完成"会给用户一个截断文件（audit workbench-5）
+                             if (out.status() != QTextStream::Ok || f.error() != QFile::NoError) {
+                                 QMessageBox::warning(
+                                     table, i18n::trs("导出失败", "Export failed"),
+                                     i18n::trs("写入中途失败（磁盘空间不足或文件被占用？），导出的文件可能不完整。",
+                                               "Writing failed midway (disk full or locked?); the "
+                                               "exported file may be incomplete."));
+                                 return;
                              }
                              QMessageBox::information(table, i18n::trs("导出完成", "Export done"),
                                                       path);

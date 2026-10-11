@@ -32,6 +32,7 @@
 #include <QUrl>
 
 class QNetworkAccessManager;
+class QLockFile;
 
 namespace ui {
 
@@ -104,10 +105,13 @@ private:
     int dlAttempt_ = 0;
     int dlTries_ = 0;
     qint64 dlGot_ = 0;
-    // 单飞保护：同实例重复触发（双击按钮、设置页与弹窗并发）此前会并发写同一个
-    // 按版本固定的临时 MSI（Qt 的文件共享模式允许第二个句柄），产出损坏文件并被
-    // 误报"可能被篡改"。检查与下载全程置位，到任一终态信号复位。
+    // 单飞保护：同实例重复触发（双击按钮）此前会并发写同一个按版本固定的临时
+    // MSI（Qt 的文件共享模式允许第二个句柄），产出损坏文件并被误报"可能被篡改"。
+    // 检查与下载全程置位，到任一终态信号复位。注意这只是**实例级**——主窗口
+    // 自动检查与设置页各持一个 UpdateChecker，跨实例互斥靠 lockFile_（QLockFile
+    // 是跨进程的）。
     bool inFlight_ = false;
+    QLockFile* lockFile_ = nullptr;  // 跨实例互斥：同一临时 MSI 只允许一个下载者
     // 下载写盘失败（磁盘满/配额/被锁）：网络层一切正常，必须在写盘处如实失败，
     // 否则截断的文件一路走到 SHA256 被误诊为"可能被篡改"
     bool dlWriteFailed_ = false;

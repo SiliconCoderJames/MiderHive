@@ -347,10 +347,11 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
     // 追加新版本：旧版本内容原样保留，仅翻转 is_latest 标记
     int64_t oldId = 0;
     int oldVersion = 0;
+    int oldDim = -1;  // 旧版本向量所在的维度表（-1 = 未知/无向量，跳过清理）
     std::string oldTitle, oldTags, oldCategory;
     bool found = false;
     if (!db_.query(
-            "SELECT id, version, title, tags_json, category FROM knowledge_entries WHERE uuid=? AND is_latest=1",
+            "SELECT id, version, title, tags_json, category, embedding_dim FROM knowledge_entries WHERE uuid=? AND is_latest=1",
             [&](Stmt& st) { st.bind(1, uuid); },
             [&](Stmt& st) {
                 oldId = st.i64(0);
@@ -358,6 +359,7 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
                 oldTitle = st.text(2);
                 oldTags = st.text(3);
                 oldCategory = st.isNull(4) ? std::string() : st.text(4);
+                oldDim = st.isNull(5) ? -1 : static_cast<int>(st.i64(5));
                 found = true;
             },
             err)) {
@@ -374,6 +376,17 @@ bool KnowledgeService::addVersion(const std::string& author, const std::string& 
                    [&](Stmt& st) { st.bind(1, oldId); }, nullptr, err)) {
         db_.rollback();
         return false;
+    }
+    // 旧版本的向量行同步退出维度表（FTS 由触发器处理，向量表没有触发器）：
+    // 残留的幽灵行挤占 kNN 召回名额且命中后被 is_latest 过滤——语义检索随
+    // 版本链增长单调劣化（audit storage-1）
+    if (oldDim >= 64) {
+        if (!db_.query("DELETE FROM " + vecTableFor(static_cast<size_t>(oldDim)) +
+                           " WHERE entry_id = ?",
+                       [&](Stmt& st) { st.bind(1, oldId); }, nullptr, err)) {
+            db_.rollback();
+            return false;
+        }
     }
 
     std::string title = newTitle.empty() ? oldTitle : newTitle;

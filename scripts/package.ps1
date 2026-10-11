@@ -109,6 +109,7 @@ $required = @(
     "miderhive.exe",
     "agent-cli.exe",
     "platformd.exe",
+    "miderhive-mcp.exe",
     "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll", "Qt6Svg.dll",
     "platforms/qwindows.dll",
     "licenses/THIRD-PARTY-NOTICES.md", "licenses/LICENSE"

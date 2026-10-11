@@ -148,6 +148,9 @@ static void test_url_guard() {
     // 非法 % 序列：解码失败一律拒绝
     CHECK(!isSafeOutboundUrl("http://example.com%ZZ/"));
     CHECK(!isSafeOutboundUrl("http://ex%2mple.com/"));
+    // 解码后伪装：zone 后缀环回与 %40 伪装 userinfo（audit http-server-1）
+    CHECK(!isSafeOutboundUrl("http://[::1%25eth0]/"));
+    CHECK(!isSafeOutboundUrl("http://example.com%40127.0.0.1/"));
     // 正常域名不能误伤（含数字但含非十六进制字符）
     CHECK(isSafeOutboundUrl("https://api.github.com/x"));
     CHECK(isSafeOutboundUrl("http://abc.de/x"));

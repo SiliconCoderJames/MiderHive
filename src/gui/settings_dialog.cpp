@@ -446,7 +446,11 @@ void SettingsDialog::refreshBackupList() {
     if (!backupTable_) return;
     std::vector<std::string> snaps;
     std::string err;
-    if (!platform_.backupList(snaps, err)) return;
+    if (!platform_.backupList(snaps, err)) {
+        // 读失败如实提示并保留上一轮内容（范式同 1.2.2 面板修复）
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+        return;
+    }
     backupTable_->setRowCount(static_cast<int>(snaps.size()));
     for (size_t i = 0; i < snaps.size(); ++i) {
         const QString name = QString::fromStdString(snaps[i]);
@@ -461,7 +465,10 @@ void SettingsDialog::refreshAgents() {
     if (!agentsTable_) return;
     std::vector<ah::AgentInfo> agents;
     std::string err;
-    if (!platform_.listAgents(agents, err)) return;
+    if (!platform_.listAgents(agents, err)) {
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
+        return;
+    }
     agentsTable_->setRowCount(static_cast<int>(agents.size()));
     for (size_t i = 0; i < agents.size(); ++i) {
         const auto& a = agents[i];

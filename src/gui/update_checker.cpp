@@ -9,6 +9,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
+#include <QLockFile>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
@@ -125,7 +126,11 @@ void stripMarkOfTheWeb(const QString& path) {
 
 UpdateChecker::UpdateChecker(QObject* parent) : QObject(parent) {
     // 单飞保护的复位点：到任一终态即结束（checking/verifying/downloadProgress 是中间态）
-    auto endFlight = [this] { inFlight_ = false; };
+    auto endFlight = [this] {
+        inFlight_ = false;
+        delete lockFile_;
+        lockFile_ = nullptr;
+    };
     connect(this, &UpdateChecker::failed, this, endFlight);
     connect(this, &UpdateChecker::upToDate, this, endFlight);
     connect(this, &UpdateChecker::updateAvailable, this, endFlight);
@@ -372,6 +377,19 @@ void UpdateChecker::downloadAndInstall(const UpdateInfo& info) {
     // 候选地址顺序：直连 GitHub → 用户自定义镜像 → 公共镜像（仅在允许时）
     dlInfo_ = info;
     dlPath_ = tempMsiPath(info.version);
+    // 跨实例互斥：主窗口自动检查与设置页各持一个 UpdateChecker，实例级
+    // inFlight_ 防不住它们并发写同一个按版本固定的临时 MSI（实测内容交错
+    // 损坏 + 双双误报"可能被篡改"）。QLockFile 跨进程；锁随对象析构释放。
+    lockFile_ = new QLockFile(dlPath_ + ".lock");
+    lockFile_->setStaleLockTime(0);  // 下载可能远超默认 30s；持有者存活由进程生死决定
+    if (!lockFile_->tryLock(0)) {
+        inFlight_ = false;
+        delete lockFile_;
+        lockFile_ = nullptr;
+        emit failed(i18n::trs("另一个窗口正在下载同一更新，请等待其完成。",
+                              "Another window is already downloading this update; wait for it."));
+        return;
+    }
     dlUrls_.clear();
     dlUrls_ << info.msiUrl.toString();
     const QString caseSwapped = withTagCaseSwapped(info.msiUrl.toString());
@@ -504,6 +522,26 @@ void UpdateChecker::verifyAndInstall(const UpdateInfo& info, const QString& file
     if (!f.open(QIODevice::ReadOnly)) {
         emit failed(i18n::trs("下载的文件无法读取", "downloaded file cannot be read"));
         return;
+    }
+    // MSI 是 OLE 复合文档，魔数固定。镜像/代理返回 200 + HTML 错误页时此前会
+    // 把整页 HTML 当安装包走完哈希流程，最后误诊"可能被篡改"——内容闸先行，
+    // 给出指认镜像的真实原因（audit low；D0 CF 11 E0 = OLE magic）
+    {
+        QFile magic(filePath);
+        if (magic.open(QIODevice::ReadOnly)) {
+            const QByteArray head = magic.read(8);
+            magic.close();
+            static const QByteArray kMsiMagic = QByteArrayLiteral("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1");
+            if (head.size() >= 4 && !head.startsWith(kMsiMagic.left(4))) {
+                QFile::remove(filePath);
+                emit failed(i18n::trs("下载的内容不是安装包（镜像或代理返回了错误页面？）。\n"
+                                      "可重试，或在设置里更换镜像加速地址。",
+                                      "The download is not an installer (a mirror or proxy returned "
+                                      "an error page?).\nRetry, or change the mirror prefix in "
+                                      "Settings."));
+                return;
+            }
+        }
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
     if (!hash.addData(&f)) {
