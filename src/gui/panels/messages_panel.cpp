@@ -293,8 +293,12 @@ void MessagesPanel::onReply() {
     for (const auto& m : messages_)
         if (m.uuid == selectedUuid_) cur = &m;
     if (!cur) return;
+    // 按值拷贝：对话框 exec 的模态事件循环里 3s 自动刷新会重建 messages_，
+    // 指针会悬空/错位——exec 返回后经旧指针读 uuid 是 use-after-free（审计
+    // workbench-1 的 messages 同型），可能把回复发到错误的 parent 上。
+    const ah::Message target = *cur;
     QDialog dlg(this);
-    dlg.setWindowTitle(i18n::trs("回复: %1", "Reply: %1").arg(QString::fromStdString(cur->subject)));
+    dlg.setWindowTitle(i18n::trs("回复: %1", "Reply: %1").arg(QString::fromStdString(target.subject)));
     auto* l = new QVBoxLayout(&dlg);
     auto* body = new QPlainTextEdit(&dlg);
     l->addWidget(body);
@@ -306,7 +310,7 @@ void MessagesPanel::onReply() {
 
     ah::Message out;
     std::string err;
-    if (!platform_.messageReply("user", cur->uuid, body->toPlainText().toStdString(), out, err)) {
+    if (!platform_.messageReply("user", target.uuid, body->toPlainText().toStdString(), out, err)) {
         ui::Toast::show(this, i18n::trs("回复失败: %1", "Reply failed: %1")
                                   .arg(QString::fromStdString(err)),
                         false);

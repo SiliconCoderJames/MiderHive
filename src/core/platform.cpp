@@ -276,8 +276,11 @@ bool Platform::bootstrap(std::string& err) {
         {
             std::ifstream in(fsPath(keyPath));
             if (in) {
-                nlohmann::json j;
-                in >> j;
+                // 非抛出解析：文件损坏（半截/空/垃圾）时 operator>> 抛 parse_error
+                // 会穿透无 try/catch 的 main 直接 std::terminate——启动即崩且零诊断
+                // （审计 core-platform-1；修复模式同 persistAgentKey）。损坏按
+                // "密钥缓存不可读"处理，落入下方的 keyfile_missing 留痕分支。
+                nlohmann::json j = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/false);
                 if (j.is_object() && j.contains(kManagerName) && j[kManagerName].is_string() &&
                     !j[kManagerName].get<std::string>().empty())
                     managerKeyCached = true;

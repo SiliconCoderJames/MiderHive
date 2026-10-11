@@ -216,7 +216,10 @@ void ErrorsPanel::onResolve() {
                              i18n::trs("请先选择一条错误", "Select an error first"));
         return;
     }
-    const auto& e = errors_[static_cast<size_t>(row)];
+    // 按值拷贝：对话框 exec 的模态事件循环里 3s 自动刷新会重建 errors_（新错误
+    // 插到顶端），引用会悬空/错位——exec 返回后经旧引用读 uuid 是 use-after-free
+    //（审计 workbench-1），可能把解决说明登记到另一条错误上。
+    const ah::ErrorReport e = errors_[static_cast<size_t>(row)];
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("登记解决: %1", "Resolve: %1").arg(QString::fromStdString(e.title)));
     auto* l = new QVBoxLayout(&dlg);

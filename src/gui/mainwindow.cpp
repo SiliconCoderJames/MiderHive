@@ -530,7 +530,13 @@ void MainWindow::checkOnboarding() {
         return;
     }
     for (const QString& name : names) {
+        // 弹窗的模态 exec 期间 3s 轮询会重入本函数并消费掉快照里靠后的名字
+        //（remove 立即可见）：外层循环恢复后按快照继续，必须重读登记——
+        // 已被消费的名字跳过，否则会以空 toolId 写出 key 为 "welcome/" 的
+        // 垃圾欢迎记忆并重复弹「接入成功」（审计 workbench-2）。
+        if (!s.contains(name)) continue;
         const QString toolId = s.value(name).toString();
+        if (toolId.isEmpty()) continue;
         for (const auto& a : agents) {
             if (QString::fromStdString(a.name) != name || a.status != "online") continue;
             const auto* tool = ui::integrations::toolById(toolId);
