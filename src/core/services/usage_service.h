@@ -12,22 +12,28 @@ namespace ah {
 
 constexpr int64_t kDefaultWeeklyBudget = 10'000'000;  // 每周 1000 万 Token
 
+// 记账来源（token_usage.source）：'' = Agent 自报（外部唯一入口
+// /api/usage/report 不解析该字段，外部无法伪造豁免行）；
+// 'llm-ask' = 平台自营临时问答，预算豁免通道（预算口径排除，总消耗仍计入）。
+constexpr const char* kUsageSourceLlmAsk = "llm-ask";
+
 class UsageService {
 public:
     explicit UsageService(Database& db) : db_(db) {}
 
     // idempotencyKey 非空时幂等：同一键重复上报只记一次，duplicate=true 标记
     // model 非空时按模型维度累计（设置界面「模型用量」）
+    // source 留空即 Agent 自报；平台自营调用传 kUsageSource* 常量
     bool report(const std::string& agent, int64_t tokensIn, int64_t tokensOut,
                 const std::string& callType, const std::string& model,
                 const std::string& referenceId, const std::string& idempotencyKey,
-                bool& duplicate, std::string& err);
+                bool& duplicate, std::string& err, const std::string& source = "");
     // report 的事务内变体：不自行 BEGIN/COMMIT，供需要把"业务写入+记账"绑进同一
     // 事务的调用方（如 skillInvoke）使用；必须在已开启的事务内调用。
     bool reportInTx(const std::string& agent, int64_t tokensIn, int64_t tokensOut,
                     const std::string& callType, const std::string& model,
                     const std::string& referenceId, const std::string& idempotencyKey,
-                    bool& duplicate, std::string& err);
+                    bool& duplicate, std::string& err, const std::string& source = "");
     bool summary(UsageSummary& out, std::string& err);
     // 最近 days 天的逐日消耗（连续日期，缺失天补 0），days 夹取到 1..90
     bool daily(int days, std::vector<UsageDailyPoint>& out, std::string& err);

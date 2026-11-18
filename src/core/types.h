@@ -112,6 +112,11 @@ struct UsageSummary {
     std::string week_start;
     int64_t budget = 0;
     int64_t total_tokens = 0;
+    // v3 豁免口径：total_tokens 含平台自营豁免调用（临时问答），预算分子与
+    // 三级告警按 budgeted_tokens（= 总量 - 豁免量）算；consumers 用 budgeted
+    // 判断预算，用 total 看真实总消耗
+    int64_t exempt_tokens = 0;
+    int64_t budgeted_tokens = 0;
     int64_t total_in = 0;
     int64_t total_out = 0;
     std::vector<std::pair<std::string, int64_t>> per_agent;  // name, tokens

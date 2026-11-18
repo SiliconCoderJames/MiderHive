@@ -10,12 +10,12 @@ namespace ah {
 bool UsageService::report(const std::string& agent, int64_t tokensIn, int64_t tokensOut,
                           const std::string& callType, const std::string& model,
                           const std::string& referenceId, const std::string& idempotencyKey,
-                          bool& duplicate, std::string& err) {
+                          bool& duplicate, std::string& err, const std::string& source) {
     duplicate = false;
     // BEGIN IMMEDIATE + 事务内查重：并发/重复上报不会双重扣减
     if (!db_.beginImmediate(err)) return false;
     if (!reportInTx(agent, tokensIn, tokensOut, callType, model, referenceId, idempotencyKey,
-                    duplicate, err)) {
+                    duplicate, err, source)) {
         db_.rollback();
         return false;
     }
@@ -28,7 +28,7 @@ bool UsageService::report(const std::string& agent, int64_t tokensIn, int64_t to
 bool UsageService::reportInTx(const std::string& agent, int64_t tokensIn, int64_t tokensOut,
                               const std::string& callType, const std::string& model,
                               const std::string& referenceId, const std::string& idempotencyKey,
-                              bool& duplicate, std::string& err) {
+                              bool& duplicate, std::string& err, const std::string& source) {
     duplicate = false;
     if (tokensIn < 0 || tokensOut < 0) { err = "token counts must be >= 0"; return false; }
     // 单次上报上限：真实单次模型调用远低于此，防手滑/畸形客户端把周用量统计
@@ -40,6 +40,7 @@ bool UsageService::reportInTx(const std::string& agent, int64_t tokensIn, int64_
     }
     if (idempotencyKey.size() > 200) { err = "idempotency_key too long (max 200)"; return false; }
     if (model.size() > 100) { err = "model too long (max 100)"; return false; }
+    if (source.size() > 100) { err = "source too long (max 100)"; return false; }
 
     if (!idempotencyKey.empty()) {
         bool exists = false;
@@ -54,8 +55,8 @@ bool UsageService::reportInTx(const std::string& agent, int64_t tokensIn, int64_
         }
     }
     return db_.query(
-        "INSERT INTO token_usage(agent, week_start, tokens_in, tokens_out, call_type, model, reference_id, idempotency_key, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO token_usage(agent, week_start, tokens_in, tokens_out, call_type, model, reference_id, idempotency_key, source, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         [&](Stmt& st) {
             st.bind(1, agent);
             st.bind(2, weekStartIso());
@@ -65,7 +66,8 @@ bool UsageService::reportInTx(const std::string& agent, int64_t tokensIn, int64_
             st.bind(6, model);
             st.bind(7, referenceId);
             st.bind(8, idempotencyKey);
-            st.bind(9, nowIso());
+            st.bind(9, source);
+            st.bind(10, nowIso());
         },
         nullptr, err);
 }
@@ -215,6 +217,19 @@ bool UsageService::summary(UsageSummary& out, std::string& err) {
         return false;
     out.total_tokens = out.total_in + out.total_out;
 
+    // 豁免通道（平台自营临时问答）：总消耗计入，但不占预算口径——预算分子与
+    // 三级告警都按 budgeted_tokens（= 总量 - 豁免量）算
+    if (!db_.query(
+            "SELECT COALESCE(SUM(tokens_in + tokens_out),0) FROM token_usage "
+            "WHERE week_start=? AND source=?",
+            [&](Stmt& st) {
+                st.bind(1, out.week_start);
+                st.bind(2, kUsageSourceLlmAsk);
+            },
+            [&](Stmt& st) { out.exempt_tokens = st.i64(0); }, err))
+        return false;
+    out.budgeted_tokens = out.total_tokens - out.exempt_tokens;
+
     if (!db_.query(
             "SELECT agent, SUM(tokens_in + tokens_out) AS t FROM token_usage WHERE week_start=? "
             "GROUP BY agent ORDER BY t DESC",
@@ -222,7 +237,7 @@ bool UsageService::summary(UsageSummary& out, std::string& err) {
             [&](Stmt& st) { out.per_agent.emplace_back(st.text(0), st.i64(1)); }, err))
         return false;
 
-    double ratio = out.budget > 0 ? static_cast<double>(out.total_tokens) / out.budget : 0.0;
+    double ratio = out.budget > 0 ? static_cast<double>(out.budgeted_tokens) / out.budget : 0.0;
     if (ratio > 1.0) out.alert_level = "over";
     else if (ratio >= 0.95) out.alert_level = "critical";
     else if (ratio >= 0.80) out.alert_level = "warn";

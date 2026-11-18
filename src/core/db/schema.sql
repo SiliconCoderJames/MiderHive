@@ -126,6 +126,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 -- Token 用量：每次调用一条，按自然周（周一 UTC 起）聚合。
 -- idempotency_key 非空时全局唯一，保证同一任务重复上报不重复扣减。
+-- source：记账来源。空 = Agent 自报（唯一的外部入口是 /api/usage/report，
+-- 它不解析 source，外部无法伪造豁免行）；'llm-ask' = 平台自营临时问答，
+-- 属预算豁免通道（summary 的预算口径排除之，总消耗仍计入）。
 -- 注意：idx_usage_idem 部分唯一索引由启动迁移创建（存量旧库先 ALTER 加列）。
 CREATE TABLE IF NOT EXISTS token_usage (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,6 +140,7 @@ CREATE TABLE IF NOT EXISTS token_usage (
     model           TEXT NOT NULL DEFAULT '',
     reference_id    TEXT,
     idempotency_key TEXT,
+    source          TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL
 );
 
@@ -191,4 +195,4 @@ CREATE INDEX IF NOT EXISTS idx_invocations_ref     ON skill_invocations(referenc
 --   >  当前值 → 库来自更新的 MiderHive，bootstrap 明确拒绝启动（否则会带着错位的
 --              schema 继续跑，那类错误要到数据被写坏时才显形）。
 -- 改 schema 时必须递增本值，并在 platform.cpp 的迁移链里补上对应步骤。
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;

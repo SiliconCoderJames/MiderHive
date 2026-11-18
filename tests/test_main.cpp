@@ -1728,7 +1728,7 @@ static void test_schema_version_gate() {
         std::string err;
         CHECK(p.bootstrap(err));
         p.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
     }
     {
         // 旧库（version=0）：重新 bootstrap 应照常迁移并置回当前版本，重复调用幂等
@@ -1737,11 +1737,11 @@ static void test_schema_version_gate() {
         std::string err;
         CHECK(p.bootstrap(err));
         p.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
         ah::Platform p2(tmp.string());
         CHECK(p2.bootstrap(err));
         p2.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
     }
     {
         // 来自更新版本的库：必须拒绝启动，且错误说明「更新版本」
@@ -1771,9 +1771,9 @@ static void test_schema_version_gate() {
             const std::string backupName = fs::path(backupPath).filename().string();
             CHECK(!p.backupRestore(backupName, err));
             CHECK(err.find("newer") != std::string::npos);
-            // 原库未被覆盖：版本仍是当前值（2）
+            // 原库未被覆盖：版本仍是当前值（3）
             p.shutdown();
-            CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(2));
+            CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
         }
     }
     std::error_code ec;
@@ -2118,7 +2118,7 @@ static void test_backup_restore_failure_paths() {
         CHECK(writeSchemaVersion(fs::path(bp), 1));
         CHECK(p.backupRestore(backupName, err));
         p.shutdown();
-        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(2));
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(3));
     }
     {
         ah::Platform p(tmp.string());
@@ -2201,7 +2201,7 @@ static void test_backup_restore_failure_paths() {
         // 旧库原样回来了：标记条目仍在（若是被损坏文件覆盖，这里会是 0 或读不出来）
         CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE title='恢复前写入'"),
                  1);
-        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(2));
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(3));
     }
 
     // ---- 5. 恢复中断自愈：主库缺失 + 留底还在 → 启动时自动改回，绝不静默新建空库 ----
@@ -2221,7 +2221,7 @@ static void test_backup_restore_failure_paths() {
         // 空库顶替，这里会是 0）
         CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE title='恢复前写入'"),
                  1);
-        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(2));
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(3));
         // 留底已消费（改回原名），不再是悬空文件
         CHECK(!fs::exists(leftover));
         p.shutdown();
@@ -2767,6 +2767,170 @@ static void test_llm_protocols() {
     t.join();
 }
 
+// ---- LLM 平台集成：llm.json 往返与损坏拒写、schema v3 的 source 列、
+// 豁免记账（预算口径排除）、审计脱敏（密钥绝不入审计）、env 覆盖密钥 ----
+static void test_llm_platform() {
+    using namespace ah::llm;
+    // 测试密钥按段拼接派生（无任何真实凭据）
+    const std::string kKey = std::string("llm") + "-" + "test-" + "secret";
+    fs::path tmp = fs::temp_directory_path() / ("miderhive_llm_" + ah::randomHex(6));
+    fs::create_directories(tmp);
+    const std::string dbPath = (tmp / "platform.db").string();
+    std::string err;
+
+    ah::Platform p(tmp.string());
+    CHECK(p.bootstrap(err));
+
+    // v3：source 列存在（新库直接建出；旧库迁移由 legacy_migration 用例覆盖）
+    CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM pragma_table_info('token_usage') "
+                               "WHERE name='source'"),
+             static_cast<int64_t>(1));
+
+    // ---- 未配置：llmAsk 拒绝、llmConfigGet configured=false（不是错误）----
+    LlmReply reply;
+    CHECK(!p.llmAsk({{"user", "hi"}}, nullptr, reply, err));
+    CHECK(err.find("not configured") != std::string::npos);
+    LlmConfig cfg;
+    bool configured = true;
+    CHECK(p.llmConfigGet(cfg, configured, err));
+    CHECK(!configured);
+
+    // ---- 测试工厂：记录看到的配置，回固定 usage 的 Fake ----
+    // 注意：客户端对象随 llmAsk 结束销毁，测试侧只留 shared 状态（裸指针会 UAF）
+    struct FakeClient final : LlmClient {
+        LlmReply reply;
+        std::vector<LlmMessage>* historySink = nullptr;  // 指向测试局部变量
+        std::string name() const override { return "fake"; }
+        LlmReply complete(const std::vector<LlmMessage>& h, const ChunkSink& onDelta,
+                          std::string& e) override {
+            if (historySink) *historySink = h;
+            if (onDelta && !reply.text.empty())
+                if (!onDelta(reply.text.data(), reply.text.size())) {
+                    e = "cancelled";
+                    return {};
+                }
+            return reply;
+        }
+    };
+    LlmConfig seenCfg;
+    std::vector<LlmMessage> seenHistory;
+    LlmReply canned;
+    canned.text = "fake-answer";
+    canned.tokensIn = 100;
+    canned.tokensOut = 50;
+    canned.usageKnown = true;
+    p.setLlmClientFactory([&](const LlmConfig& c) {
+        seenCfg = c;
+        auto f = std::make_unique<FakeClient>();
+        f->reply = canned;
+        f->historySink = &seenHistory;
+        return f;
+    });
+
+    // ---- 保存配置 → 往返 → 审计在但密钥不在 ----
+    cfg.providerId = "deepseek";
+    cfg.protocol = Protocol::OpenAiCompat;
+    cfg.baseUrl = "https://api.example.test";
+    cfg.model = "test-model";
+    cfg.apiKey = kKey;
+    CHECK(p.llmConfigSet("zcode", cfg, err));
+    cfg = LlmConfig{};
+    CHECK(p.llmConfigGet(cfg, configured, err));
+    CHECK(configured);
+    CHECK_EQ(cfg.providerId, std::string("deepseek"));
+    CHECK_EQ(cfg.model, std::string("test-model"));
+    CHECK_EQ(cfg.apiKey, kKey);
+    CHECK_EQ(static_cast<int>(cfg.protocol), static_cast<int>(Protocol::OpenAiCompat));
+    {
+        std::vector<ah::AuditRecord> rows;
+        CHECK(p.auditList("", "", "", 100, rows, err));
+        std::string allDetail;
+        bool sawConfigSet = false;
+        for (const auto& r : rows) {
+            allDetail += r.detail + "\n";
+            if (r.action == "llm.config_set") sawConfigSet = true;
+        }
+        CHECK(sawConfigSet);
+        CHECK(allDetail.find(kKey) == std::string::npos);  // 密钥绝不入审计
+    }
+
+    // ---- llmAsk：回复 + 豁免记账 + 审计（注意：err 此时带着上文"未配置"的残句，
+    // llmAsk 必须自行清空，否则会把残句误判成本次失败——stale-err 回归哨）----
+    CHECK(p.llmAsk({{"user", "问题一"}}, nullptr, reply, err));
+    CHECK_EQ(reply.text, std::string("fake-answer"));
+    CHECK_EQ(seenCfg.apiKey, kKey);  // env 未设时用文件密钥
+    CHECK_EQ(seenHistory.size(), std::size_t{1});  // 历史原样传给客户端
+    // 流式：delta 透传
+    std::string streamed;
+    CHECK(p.llmAsk({{"user", "问题二"}},
+                   [&](const char* d, std::size_t n) {
+                       streamed.append(d, n);
+                       return true;
+                   },
+                   reply, err));
+    CHECK_EQ(streamed, std::string("fake-answer"));
+
+    // 豁免记账：source 列正确、预算口径排除
+    {
+        int64_t n = countRows(dbPath, "SELECT COUNT(*) FROM token_usage WHERE source='llm-ask'");
+        CHECK_EQ(n, static_cast<int64_t>(2));
+        n = countRows(dbPath, "SELECT COUNT(*) FROM token_usage WHERE agent='user'");
+        CHECK_EQ(n, static_cast<int64_t>(2));
+    }
+    CHECK(p.usageSetBudget("user", 1000, err));
+    // 正常自报 900 + 豁免 300（两次各 150）→ total=1200，budgeted=900 → 90% warn
+    bool dup = false;
+    CHECK(p.usageReport("claude", 800, 100, "chat", "", "", "", dup, err));
+    ah::UsageSummary sum;
+    CHECK(p.usageSummary(sum, err));
+    CHECK_EQ(sum.total_tokens, static_cast<int64_t>(1200));
+    CHECK_EQ(sum.exempt_tokens, static_cast<int64_t>(300));
+    CHECK_EQ(sum.budgeted_tokens, static_cast<int64_t>(900));
+    CHECK_EQ(sum.alert_level, std::string("warn"));  // 按预算口径而非总量（总量已超 1000）
+
+    // 审计含 llm.ask 且无密钥
+    {
+        std::vector<ah::AuditRecord> rows;
+        CHECK(p.auditList("", "", "", 100, rows, err));
+        std::string allDetail;
+        bool sawAsk = false;
+        for (const auto& r : rows) {
+            if (r.action == "llm.ask") sawAsk = true;
+            allDetail += r.detail + "\n";
+        }
+        CHECK(sawAsk);
+        CHECK(allDetail.find("问题一") != std::string::npos);  // 问题截断入 detail
+        CHECK(allDetail.find(kKey) == std::string::npos);
+    }
+
+#ifdef _WIN32
+    // ---- env 覆盖密钥（不落盘）----
+    const std::wstring envVal = std::wstring(L"env") + L"-key" + L"-xyz";
+    SetEnvironmentVariableW(L"MIDERHIVE_LLM_KEY", envVal.c_str());
+    CHECK(p.llmAsk({{"user", "问题三"}}, nullptr, reply, err));
+    CHECK_EQ(seenCfg.apiKey, std::string("env-key-xyz"));
+    SetEnvironmentVariableW(L"MIDERHIVE_LLM_KEY", nullptr);
+#endif
+
+    // ---- 损坏 llm.json：读如实失败、写拒绝覆盖 ----
+    {
+        std::ofstream bad(ah::fsPath((tmp / "config" / "llm.json").string()), std::ios::trunc);
+        bad << "not-json{{{";
+        bad.close();
+        std::string cfgErr;
+        CHECK(!p.llmConfigGet(cfg, configured, cfgErr));
+        CHECK(cfgErr.find("not valid JSON") != std::string::npos);
+        std::string setErr;
+        CHECK(!p.llmConfigSet("zcode", cfg, setErr));
+        if (setErr.find("not valid JSON") == std::string::npos)
+            std::printf("  [dbg] llmConfigSet err: %s\n", setErr.c_str());
+        CHECK(setErr.find("not valid JSON") != std::string::npos);
+    }
+
+    p.shutdown();
+    fs::remove_all(tmp);
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -2803,6 +2967,7 @@ int main() {
     run("backup_restore_failure_paths", test_backup_restore_failure_paths);
     run("llm_transport", test_llm_transport);
     run("llm_protocols", test_llm_protocols);
+    run("llm_platform", test_llm_platform);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

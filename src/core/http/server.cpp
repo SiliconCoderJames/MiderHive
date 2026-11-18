@@ -834,7 +834,9 @@ void HttpServer::setupRoutes() {
                           {"total_in", sum.total_in},
                           {"total_out", sum.total_out},
                           {"total_tokens", sum.total_tokens},
-                          {"remaining", sum.budget - sum.total_tokens},
+                          {"exempt_tokens", sum.exempt_tokens},
+                          {"budgeted_tokens", sum.budgeted_tokens},
+                          {"remaining", sum.budget - sum.budgeted_tokens},
                           {"alert_level", sum.alert_level},
                           {"per_agent", per}}));
     });

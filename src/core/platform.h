@@ -1,6 +1,7 @@
 #pragma once
 // Platform：平台门面。Qt 工作台（进程内直调）与 HTTP API 层共用同一实例，
 // 内部以互斥锁串行化，保证 SQLite 与各服务线程安全。
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -8,6 +9,7 @@
 
 #include "core/db/database.h"
 #include "core/embed/embedder.h"
+#include "core/llm/llm_client.h"
 #include "core/services/agent_service.h"
 #include "core/services/audit_service.h"
 #include "core/services/error_service.h"
@@ -151,6 +153,26 @@ public:
     int64_t usageBudget(std::string& err);
     bool usageSetBudget(const std::string& actor, int64_t budget, std::string& err);
 
+    // ---- LLM 接入（平台自营调用；P1：临时问答，预算豁免通道）----
+    // 配置存 <home>/config/llm.json（密钥明文仅存本机，同 agents.json 纪律）；
+    // MIDERHIVE_LLM_KEY 环境变量在 ask 时覆盖密钥（CI/无头场景可不落盘）。
+    // configured=false 表示尚未配置（不是错误）；文件损坏/不可读返回 false
+    // 且 out 保持调用方原值不动（失败不清调用方的配置副本）。
+    bool llmConfigGet(ah::llm::LlmConfig& out, bool& configured, std::string& err);
+    // 保存配置并审计 llm.config_set（detail 绝不含密钥）；损坏的旧文件拒写不覆盖
+    bool llmConfigSet(const std::string& actor, const ah::llm::LlmConfig& cfg, std::string& err);
+    // 用给定配置发一条最小请求（不落盘、不记账）；设置页「测试连接」用
+    bool llmTestConfig(const ah::llm::LlmConfig& cfg, ah::llm::LlmReply& out, std::string& err);
+    // 临时问答：按已存配置调一次模型（onDelta 可空=非流式），豁免记账
+    // （source=llm-ask）+ 审计 llm.ask（问题截断入 detail，绝无密钥）。
+    // 网络调用不持锁。返回 true 时 out 有效；err 非空但 out.text 非空 = 记账失败
+    // 的警告（回复本身已成功）。
+    bool llmAsk(const std::vector<ah::llm::LlmMessage>& history,
+                const ah::llm::ChunkSink& onDelta, ah::llm::LlmReply& out, std::string& err);
+    // 测试注入口：替换客户端构造（默认 makeClient + WinHTTP 传输）
+    void setLlmClientFactory(
+        std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)> f);
+
     // ---- 操作日志 ----
     // viewer 非空 = HTTP 侧普通 Agent：只能看到自己作为主体的行（可见性收敛）；
     // viewer 为空 = 进程内 GUI/管理视角，看全量
@@ -209,6 +231,8 @@ private:
     // created 出参：本次是否新登记了维度绑定（调用方写入失败时据此清孤儿占位）
     bool bindEmbeddingProvider(size_t dim, const std::string& provider, std::string& err,
                                bool* created = nullptr);
+    // llmConfigGet 的持锁变体（llmAsk 在已持锁路径上复用）
+    bool llmConfigGetLocked(ah::llm::LlmConfig& out, bool& configured, std::string& err);
 
     std::string home_dir_;
     Database db_;
@@ -225,6 +249,9 @@ private:
     std::string master_key_hash_;
     bool bootstrapped_ = false;
     bool usable_ = true;  // 恢复备份失败后置 false：必须重启（见 isUsable）
+    // LLM 客户端工厂（测试注入 Fake；空 = 默认 makeClient）
+    std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)>
+        llmClientFactory_;
     mutable std::recursive_mutex mutex_;
 };
 

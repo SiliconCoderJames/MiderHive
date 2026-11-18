@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
 
 // 库结构版本：必须与 schema.sql 末尾的 `PRAGMA user_version` 保持一致。
 // 改 schema 时两处一起递增，并在 bootstrap 的迁移链里补上对应步骤。
-constexpr int64_t kSchemaVersion = 2;
+constexpr int64_t kSchemaVersion = 3;
 
 // ---- 审计留痕是硬契约：审计写不进去，这次写操作就算失败 ----
 // 理由：schema/README 承诺"所有写操作在 audit_log 留痕"。若让业务数据落库而审计行写不进去，
@@ -128,6 +128,9 @@ bool Platform::initStoreLocked(std::string& err) {
     db_.tryExec("ALTER TABLE token_usage ADD COLUMN idempotency_key TEXT;");
     db_.tryExec("ALTER TABLE token_usage ADD COLUMN model TEXT NOT NULL DEFAULT '';");
     db_.tryExec("ALTER TABLE skill_invocations ADD COLUMN reference_id TEXT;");
+    // v3：token_usage.source——记账来源（'' = Agent 自报；'llm-ask' = 平台自营
+    // 临时问答，预算豁免通道）。外部 HTTP 上报不解析该字段，豁免行只能由平台自造。
+    db_.tryExec("ALTER TABLE token_usage ADD COLUMN source TEXT NOT NULL DEFAULT '';");
     // v2：记录每个版本向量所在的维度（精确清理向量行 + 诊断信息）
     db_.tryExec("ALTER TABLE knowledge_entries ADD COLUMN embedding_dim INTEGER;");
     db_.tryExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_idem "
@@ -1260,6 +1263,175 @@ bool Platform::usageSetBudget(const std::string& actor, int64_t budget, std::str
         return false;
     }
     return true;
+}
+
+// ---------------- LLM 接入（P1：临时问答，预算豁免通道）----------------
+
+namespace {
+// 审计 detail 里的用户输入截断（≤200 字节，不截断多字节字符的中间）
+std::string truncateForAudit(const std::string& s) {
+    if (s.size() <= 200) return s;
+    std::string out = s.substr(0, 200);
+    while (!out.empty() && (out.back() & 0xC0) == 0x80) out.pop_back();
+    return out + "...";
+}
+}  // namespace
+
+// <home>/config/llm.json 读取（持锁调用）。文件不存在 = 未配置（返回 true，
+// out 清空）；解析失败返回 false 且 **out 保持调用方原值不动**（调用方可能
+// 还要拿这份配置走修复路径，失败不能顺手把它抹了）。
+bool Platform::llmConfigGetLocked(ah::llm::LlmConfig& out, bool& configured, std::string& err) {
+    configured = false;
+    const std::string path = home_dir_ + "/config/llm.json";
+    std::ifstream in(fsPath(path));
+    if (!in) {
+        out = ah::llm::LlmConfig{};
+        return true;
+    }
+    nlohmann::json j = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/false);
+    if (j.is_discarded()) { err = "llm.json is not valid JSON: " + path; return false; }
+    if (!j.is_object()) { err = "llm.json must be a JSON object: " + path; return false; }
+    out = ah::llm::LlmConfig{};
+    out.providerId = j.value("provider", std::string{});
+    const std::string proto = j.value("protocol", std::string{"openai"});
+    out.protocol =
+        proto == "anthropic" ? ah::llm::Protocol::Anthropic : ah::llm::Protocol::OpenAiCompat;
+    out.baseUrl = j.value("base_url", std::string{});
+    out.model = j.value("model", std::string{});
+    out.apiKey = j.value("api_key", std::string{});
+    configured = !out.baseUrl.empty() && !out.model.empty() && !out.apiKey.empty();
+    return true;
+}
+
+bool Platform::llmConfigGet(ah::llm::LlmConfig& out, bool& configured, std::string& err) {
+    std::lock_guard lock(mutex_);
+    return llmConfigGetLocked(out, configured, err);
+}
+
+bool Platform::llmConfigSet(const std::string& actor, const ah::llm::LlmConfig& cfg,
+                            std::string& err) {
+    std::lock_guard lock(mutex_);
+    if (refuseIfUnusable(err)) return false;
+    if (cfg.baseUrl.empty() || cfg.model.empty() || cfg.apiKey.empty()) {
+        err = "base URL, model and API key are all required";
+        return false;
+    }
+    const std::string path = home_dir_ + "/config/llm.json";
+    std::error_code ec;
+    fs::create_directories(fsPath(home_dir_ + "/config"), ec);
+    // 损坏文件拒写（同 agents.json：绝不静默清掉既有内容再重写）
+    {
+        std::ifstream in(fsPath(path));
+        if (in) {
+            nlohmann::json old = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/false);
+            if (old.is_discarded()) { err = "llm.json is not valid JSON: " + path; return false; }
+        }
+    }
+    const char* proto = cfg.protocol == ah::llm::Protocol::Anthropic ? "anthropic" : "openai";
+    nlohmann::json j{{"provider", cfg.providerId},
+                     {"protocol", proto},
+                     {"base_url", cfg.baseUrl},
+                     {"model", cfg.model},
+                     {"api_key", cfg.apiKey},
+                     {"updated_at", nowIso()}};
+    // 先写临时文件再原子替换（同 persistAgentKey 纪律）
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream out(fsPath(tmp), std::ios::trunc);
+        if (!out) { err = "cannot write " + tmp; return false; }
+        out << j.dump(2) << "\n";
+        out.flush();
+        if (!out.good()) { err = "write failed: " + tmp; return false; }
+    }
+    fs::rename(fsPath(tmp), fsPath(path), ec);
+    if (ec) {
+        // Windows 的 rename 不覆盖既有文件：退化为先删再改名
+        std::error_code ec2;
+        fs::remove(fsPath(path), ec2);
+        fs::rename(fsPath(tmp), fsPath(path), ec);
+        if (ec) { err = "cannot replace " + path + ": " + ec.message(); return false; }
+    }
+    // 审计留痕，detail 绝不含密钥
+    std::string aerr;
+    auditStep(actor, "llm.config_set", cfg.providerId,
+              nlohmann::json{{"provider", cfg.providerId},
+                             {"protocol", proto},
+                             {"base_url", cfg.baseUrl},
+                             {"model", cfg.model}}.dump(),
+              aerr);
+    return true;
+}
+
+bool Platform::llmTestConfig(const ah::llm::LlmConfig& cfg, ah::llm::LlmReply& out,
+                             std::string& err) {
+    // 用调用方给定的配置（通常是设置页里还没保存的表单值）发一条最小请求
+    auto client = llmClientFactory_ ? llmClientFactory_(cfg) : ah::llm::makeClient(cfg);
+    err.clear();  // 同 llmAsk：err 残留文本会被误判成本次失败
+    out = client->complete({ah::llm::LlmMessage{"user", "ping"}}, nullptr, err);
+    if (!err.empty()) return false;
+    std::lock_guard lock(mutex_);
+    if (refuseIfUnusable(err)) return false;
+    std::string aerr;
+    auditStep(ah::kManagerName, "llm.test", cfg.providerId,
+              nlohmann::json{{"model", cfg.model}, {"usage_known", out.usageKnown}}.dump(), aerr);
+    return true;
+}
+
+bool Platform::llmAsk(const std::vector<ah::llm::LlmMessage>& history,
+                      const ah::llm::ChunkSink& onDelta, ah::llm::LlmReply& out, std::string& err) {
+    ah::llm::LlmConfig cfg;
+    {
+        std::lock_guard lock(mutex_);
+        bool configured = false;
+        if (!llmConfigGetLocked(cfg, configured, err)) return false;
+        if (!configured) {
+            err = "LLM provider is not configured yet (Settings > LLM)";
+            return false;
+        }
+        if (refuseIfUnusable(err)) return false;
+        // env 覆盖密钥：CI/无头场景可不落盘注入
+        const std::string envKey = envOr({"MIDERHIVE_LLM_KEY"});
+        if (!envKey.empty()) cfg.apiKey = envKey;
+    }
+    auto client = llmClientFactory_ ? llmClientFactory_(cfg) : ah::llm::makeClient(cfg);
+    // 网络调用不持锁（秒级耗时；mutex_ 只护 SQLite/内存状态）。
+    // err 先清空：调用方的 err 可能带着上一次操作的残留文本，complete 不清 err，
+    // 否则"上次失败的残句"会被误判成本次调用失败（stale-err，实测踩过）。
+    err.clear();
+    ah::llm::LlmReply reply = client->complete(history, onDelta, err);
+    if (!err.empty()) return false;
+    out = reply;
+    // 记账（豁免通道 source=llm-ask：预算口径排除此行）+ 审计。记账失败不掩蔽
+    // 已拿到的回复，但必须如实带出警告（err 非空 + out 有效）。
+    // 身份用保留名 "user"（人的控制台）——不占 agents 表，也不与 zcode 管理者
+    // 身份的用量混账；审计/用量里普通 Agent 看不到这些行。
+    {
+        std::lock_guard lock(mutex_);
+        bool dup = false;
+        std::string recErr;
+        if (!usage_.report("user", reply.tokensIn, reply.tokensOut, "llm", cfg.model, "", "",
+                           dup, recErr, kUsageSourceLlmAsk)) {
+            err = "reply received, but usage accounting failed: " + recErr;
+        }
+        std::string question;
+        for (const auto& m : history) {
+            if (m.role == "user") { question = m.content; break; }
+        }
+        std::string aerr;
+        auditStep("user", "llm.ask", cfg.model,
+                  nlohmann::json{{"model", cfg.model},
+                                 {"tokens_in", reply.tokensIn},
+                                 {"tokens_out", reply.tokensOut},
+                                 {"exempt", true},
+                                 {"question", truncateForAudit(question)}}.dump(),
+                  aerr);
+    }
+    return true;
+}
+
+void Platform::setLlmClientFactory(
+    std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)> f) {
+    llmClientFactory_ = std::move(f);
 }
 
 // ---------------- 操作日志 ----------------
