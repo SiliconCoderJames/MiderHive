@@ -5,6 +5,7 @@
 # 对象可能被链接器丢弃；exe 直连自己的资源对象没有这个问题。
 add_library(miderhive_gui STATIC
     mainwindow.cpp
+    ask_dialog.cpp
     settings_dialog.cpp
     connect_dialog.cpp
     welcome_dialog.cpp

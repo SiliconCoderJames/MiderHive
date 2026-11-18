@@ -17,6 +17,7 @@
 class QFrame;
 class QCloseEvent;
 class QHideEvent;
+class AskDialog;
 class SettingsDialog;
 class QSystemTrayIcon;
 
@@ -44,6 +45,7 @@ private:
     void applyUiPrefs(); // 读取界面偏好（刷新频率/错误提醒）并应用
     void setupTray();    // 系统托盘：蜂巢常驻 + 显示/退出
     void openSettings(); // ⚙ 设置对话框（复用同一实例，关闭即删）
+    void openAsk();      // ✦ 临时问答对话框（复用同一实例，关闭即删）
     void scheduleUpdateCheck();                // 启动后的自动检查（每天一次，可关）
     void promptUpdate(const ui::UpdateInfo&);  // 发现新版本时的选择框
     // 接入引导观察：轮询 ui/onboardingPending 里的接入身份，Agent 上线即弹
@@ -76,10 +78,12 @@ private:
     QLabel* statusUpdated_ = nullptr;  // 最近一次刷新时刻（数据新鲜度）
     QLabel* spin_ = nullptr;
     QToolButton* settingsBtn_ = nullptr;
+    QToolButton* askBtn_ = nullptr;
     QToolButton* langBtn_ = nullptr;
     QLabel* ver_ = nullptr;
     QLabel* tagline_ = nullptr;
     QPointer<SettingsDialog> settings_ = nullptr;
+    QPointer<AskDialog> ask_ = nullptr;
     ui::UpdateChecker* updater_ = nullptr;  // 启动时的自动更新检查（延迟创建）
     bool quitForUpdate_ = false;            // 自动更新中：closeEvent 要真退出而非最小化到托盘
     QSystemTrayIcon* tray_ = nullptr;

@@ -20,6 +20,7 @@
 
 #include <utility>
 
+#include "ask_dialog.h"
 #include "gui_util.h"
 #include "panels/dashboard_panel.h"
 #include "panels/errors_panel.h"
@@ -121,6 +122,12 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
     langBtn_->setMenu(langMenu);
     footLay->addWidget(ver_);
     footLay->addStretch(1);
+    askBtn_ = new QToolButton(foot);
+    askBtn_->setIcon(ui::makeIcon("spark", ui::muted(), 16));
+    askBtn_->setToolTip(i18n::trs("临时问答（Ctrl+Q）", "Ask console (Ctrl+Q)"));
+    askBtn_->setAccessibleName(i18n::trs("临时问答", "Ask console"));
+    connect(askBtn_, &QToolButton::clicked, this, &MainWindow::openAsk);
+    footLay->addWidget(askBtn_);
     footLay->addWidget(settingsBtn_);
     footLay->addWidget(langBtn_);
     sideLay->addWidget(foot);
@@ -195,6 +202,8 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
     });
     auto* settingsSc = new QShortcut(QKeySequence("Ctrl+,"), this);
     connect(settingsSc, &QShortcut::activated, this, &MainWindow::openSettings);
+    auto* askSc = new QShortcut(QKeySequence("Ctrl+Q"), this);
+    connect(askSc, &QShortcut::activated, this, &MainWindow::openAsk);
 }
 
 void MainWindow::hideEvent(QHideEvent* e) {
@@ -269,6 +278,8 @@ void MainWindow::applyLanguage() {
     langBtn_->setToolTip(i18n::trs("切换语言", "Switch language"));
     settingsBtn_->setToolTip(i18n::trs("设置", "Settings"));
     settingsBtn_->setAccessibleName(i18n::trs("设置", "Settings"));
+    askBtn_->setToolTip(i18n::trs("临时问答（Ctrl+Q）", "Ask console (Ctrl+Q)"));
+    askBtn_->setAccessibleName(i18n::trs("临时问答", "Ask console"));
     // 版本 tooltip 只在构造时设过，不在这里重译的话切到英文后会一直留着中文
     ver_->setToolTip(i18n::trs("MiderHive 版本 %1", "MiderHive %1")
                          .arg(QString::fromUtf8(ah::kPlatformVersion)));
@@ -473,6 +484,16 @@ void MainWindow::openSettings() {
     settings_->show();
     settings_->raise();
     settings_->activateWindow();
+}
+
+void MainWindow::openAsk() {
+    if (!ask_) {
+        ask_ = new AskDialog(platform_, [this] { openSettings(); }, this);
+        ask_->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    ask_->show();
+    ask_->raise();
+    ask_->activateWindow();
 }
 
 void MainWindow::applyTheme() {
