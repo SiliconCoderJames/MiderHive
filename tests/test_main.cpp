@@ -16,6 +16,7 @@
 
 #include "core/embed/embedder.h"
 #include "core/http/url_guard.h"
+#include "core/llm/transport.h"
 #include "core/integrations.hpp"
 #include "core/platform.h"
 #include "core/update_sign.h"
@@ -2544,6 +2545,52 @@ static void test_non_ascii_home() {
     fs::remove_all(baseDir, ec);
 }
 
+// ---- LLM 传输层：真实 WinHTTP 打回环 mock（http://127.0.0.1），验证
+// 状态/体/流式回调/取消/诚实失败。https 由真实 provider 才能全验，这里
+// 只验传输语义（URL 拆解、头传递、分块、错误不上抛）。
+static void test_llm_transport() {
+    using namespace ah::llm;
+    httplib::Server svr;
+    std::string seenAuth;
+    svr.Post("/echo", [&](const httplib::Request& req, httplib::Response& res) {
+        seenAuth = req.get_header_value("Authorization");
+        res.set_content("hello-llm", "text/plain");
+    });
+    const int port = svr.bind_to_any_port("127.0.0.1");
+    CHECK(port > 0);
+    std::thread t([&] { svr.listen_after_bind(); });
+
+    auto tr = makeDefaultTransport();
+    HttpRequest req;
+    req.url = "http://127.0.0.1:" + std::to_string(port) + "/echo";
+    req.headers = {{"Authorization", "Bearer test-dummy-key"}};
+    req.body = "{}";
+    std::string streamed;
+    HttpResponse res = tr->send(req, [&](const char* d, std::size_t n) {
+        streamed.append(d, n);
+        return true;
+    });
+    CHECK(res.err.empty());
+    CHECK(res.status == 200);
+    CHECK(res.body == "hello-llm");
+    CHECK(streamed == "hello-llm");
+    CHECK(seenAuth == "Bearer test-dummy-key");
+
+    // 取消路径：回调返回 false → err=cancelled（流式中止，不抛异常）
+    HttpResponse res2 = tr->send(req, [](const char*, std::size_t) { return false; });
+    CHECK(res2.err == "cancelled");
+
+    // 不可达端口 → err 非空且 status=0（传输失败必须可区分，绝不静默成功）
+    HttpRequest dead = req;
+    dead.url = "http://127.0.0.1:9/echo";
+    HttpResponse res3 = tr->send(dead, nullptr);
+    CHECK(!res3.err.empty());
+    CHECK(res3.status == 0);
+
+    svr.stop();
+    t.join();
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -2578,6 +2625,7 @@ int main() {
     run("embedding_dim_tracking", test_embedding_dim_tracking);
     run("failure_paths_report_errors", test_failure_paths_report_errors);
     run("backup_restore_failure_paths", test_backup_restore_failure_paths);
+    run("llm_transport", test_llm_transport);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

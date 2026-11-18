@@ -2,6 +2,7 @@ add_library(miderhive_core STATIC
     util.cpp
     db/database.cpp
     embed/embedder.cpp
+    llm/transport.cpp
     services/agent_service.cpp
     services/knowledge_service.cpp
     services/skill_service.cpp
@@ -26,6 +27,10 @@ target_link_libraries(miderhive_core PUBLIC
     nlohmann_json::nlohmann_json
     httplib_hdr
 )
+# LLM 外呼走 WinHTTP：TLS 用系统证书栈、代理走系统设置（含 PAC）
+if(WIN32)
+    target_link_libraries(miderhive_core PUBLIC winhttp)
+endif()
 
 # 把 schema.sql 嵌入二进制
 # CMAKE_CONFIGURE_DEPENDS：file(READ) 不会让 CMake 感知输入变化，改了 schema.sql
