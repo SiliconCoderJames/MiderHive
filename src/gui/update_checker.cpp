@@ -379,9 +379,8 @@ void UpdateChecker::downloadAndInstall(const UpdateInfo& info) {
     dlPath_ = tempMsiPath(info.version);
     // 跨实例互斥：主窗口自动检查与设置页各持一个 UpdateChecker，实例级
     // inFlight_ 防不住它们并发写同一个按版本固定的临时 MSI（实测内容交错
-    // 损坏 + 双双误报"可能被篡改"）。QLockFile 跨进程；锁随对象析构释放。
+    // 损坏 + 双双误报"可能被篡改"）。QLockFile 跨进程；锁随对象析构释放，崩溃时由 Qt 的陈旧锁检测（存活 PID 检查）自动回收。
     lockFile_ = new QLockFile(dlPath_ + ".lock");
-    lockFile_->setStaleLockTime(0);  // 下载可能远超默认 30s；持有者存活由进程生死决定
     if (!lockFile_->tryLock(0)) {
         inFlight_ = false;
         delete lockFile_;

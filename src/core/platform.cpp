@@ -628,8 +628,10 @@ int Platform::embeddingDim() const { return embedder_->dim(); }  // 内置嵌入
 // 互相污染 kNN 结果（查询时无法区分来源维度相同但语义空间不同的向量）。
 // 首次写入某维度时登记其 provider；之后同维度不同模型的写入明确拒绝——把"检索结果
 // 莫名其妙"变成"一眼可读的用法错误"。调用方须持有 mutex_。
-bool Platform::bindEmbeddingProvider(size_t dim, const std::string& provider, std::string& err) {
+bool Platform::bindEmbeddingProvider(size_t dim, const std::string& provider, std::string& err,
+                                     bool* created) {
     const std::string key = "embed_provider_" + std::to_string(dim);
+    if (created) *created = false;
     std::string bound;
     bool found = false;
     if (!db_.query("SELECT value FROM settings WHERE key=?",
@@ -641,6 +643,9 @@ bool Platform::bindEmbeddingProvider(size_t dim, const std::string& provider, st
                    err))
         return false;
     if (!found) {
+        // created 出参：调用方的写入随后失败时，需要清掉这条空占位登记——
+        // 否则该维度被永久锁死，其他模型的合法写入被残留拒绝（audit storage-4）。
+        if (created) *created = true;
         return db_.query("INSERT OR IGNORE INTO settings(key, value) VALUES(?,?)",
                          [&](Stmt& st) {
                              st.bind(1, key);
@@ -681,7 +686,8 @@ bool Platform::knowledgeCreate(const std::string& author, const std::string& tit
         return false;
     }
     std::string provider = provided ? embeddingProvider : embedder_->name();
-    if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
+    bool bindingCreated = false;
+    if (!bindEmbeddingProvider(vec.size(), provider, err, &bindingCreated)) return false;
     std::string tagsJson = nlohmann::json(tags).dump();
     // 审计作为服务事务内的一步：知识条目与它的留痕要么都在、要么都不在。
     // 审计用独立的 err——审计失败时本函数即将返回 false，绝不能把审计的错误文本
@@ -694,6 +700,20 @@ bool Platform::knowledgeCreate(const std::string& author, const std::string& tit
             return auditStep(author, "knowledge.create", out.uuid, createDetail, auditErr);
         });
     if (!ok && err.empty()) err = auditErr;  // 失败原因来自审计时要如实上报
+    // 本次首次登记的维度绑定：写入失败（回滚）时清掉孤儿占位，否则该维度对
+    // 其他模型永久锁死（audit storage-4）。按 key+value 精确删：并发下已被
+    // 其他写入者覆盖的不动。DELETE 在 autocommit 下执行（服务事务已结束）。
+    if (!ok && bindingCreated) {
+        std::string derr;
+        if (!db_.query("DELETE FROM settings WHERE key=? AND value=?",
+                       [&](Stmt& st) {
+                           st.bind(1, "embed_provider_" + std::to_string(vec.size()));
+                           st.bind(2, provider);
+                       },
+                       nullptr, derr)) {
+            err += " (note: the orphan dimension-binding row could not be cleaned up)";
+        }
+    }
     return ok;
 }
 
@@ -729,7 +749,8 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
         return false;
     }
     std::string provider = provided ? embeddingProvider : embedder_->name();
-    if (!bindEmbeddingProvider(vec.size(), provider, err)) return false;
+    bool bindingCreated = false;
+    if (!bindEmbeddingProvider(vec.size(), provider, err, &bindingCreated)) return false;
     // 审计作为服务事务内的一步（InTxStep）：SQLite 无嵌套事务，不能在服务外面再包 BEGIN
     // detail 必须在 lambda 内构造：审计执行时服务才刚把新版本号填进 out（在调用前拼串
     // 拿到的是调用方传入的旧对象，version 恒为默认值——审计留痕就此失真）
@@ -740,6 +761,19 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
                              nlohmann::json{{"version", out.version}}.dump(), auditErr);
         });
     if (!ok && err.empty()) err = auditErr;
+    // 同 knowledgeCreate：首次登记的维度绑定在写入失败（回滚）时清孤儿占位，
+    // 否则该维度对其他模型永久锁死（audit storage-4）
+    if (!ok && bindingCreated) {
+        std::string derr;
+        if (!db_.query("DELETE FROM settings WHERE key=? AND value=?",
+                       [&](Stmt& st) {
+                           st.bind(1, "embed_provider_" + std::to_string(vec.size()));
+                           st.bind(2, provider);
+                       },
+                       nullptr, derr)) {
+            err += " (note: the orphan dimension-binding row could not be cleaned up)";
+        }
+    }
     return ok;
 }
 

@@ -206,7 +206,9 @@ private:
                                         const std::vector<float>* provided, bool& isProvided);
     // 维度↔provider 绑定校验（同维度共用 vec 表，不同模型会互相污染）；
     // 调用方须持有 mutex_
-    bool bindEmbeddingProvider(size_t dim, const std::string& provider, std::string& err);
+    // created 出参：本次是否新登记了维度绑定（调用方写入失败时据此清孤儿占位）
+    bool bindEmbeddingProvider(size_t dim, const std::string& provider, std::string& err,
+                               bool* created = nullptr);
 
     std::string home_dir_;
     Database db_;
