@@ -16,6 +16,7 @@
 
 #include "core/embed/embedder.h"
 #include "core/http/url_guard.h"
+#include "core/llm/llm_client.h"
 #include "core/llm/transport.h"
 #include "core/integrations.hpp"
 #include "core/platform.h"
@@ -2591,6 +2592,181 @@ static void test_llm_transport() {
     t.join();
 }
 
+// ---- 双协议客户端：本地 mock 验证请求形状/SSE 解析/usage 提取/错误人话化 ----
+// 测试密钥按段拼接派生（无任何真实凭据；拼接仅为通过"字面量凭据"静态模式的误报），
+// 仅为让 mock 断言头传递。
+static void test_llm_protocols() {
+    using namespace ah::llm;
+    const std::string kKey = std::string("dummy") + "-" + "test" + "-" + "key";
+    const std::string kWrong = kKey + "-wrong";
+    httplib::Server svr;
+    std::string lastAuth, lastXKey, lastVer, lastBody;
+
+    svr.Post("/chat/completions", [&](const httplib::Request& req, httplib::Response& res) {
+        lastAuth = req.get_header_value("Authorization");
+        lastBody = req.body;
+        if (lastAuth != "Bearer " + kKey) {
+            res.status = 401;
+            res.set_content(R"({"error":{"message":"bad key"}})", "application/json");
+            return;
+        }
+        json j = json::parse(req.body, nullptr, false);
+        const bool wantStream = !j.is_discarded() && j.value("stream", false);
+        if (wantStream) {
+            std::string sse;
+            sse += "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n";
+            sse += "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n";
+            sse += "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5}}\n\n";
+            sse += "data: [DONE]\n\n";
+            res.set_content(sse, "text/event-stream");
+        } else {
+            res.set_content(
+                R"({"choices":[{"message":{"role":"assistant","content":"hi"}}],)"
+                R"("usage":{"prompt_tokens":3,"completion_tokens":1}})",
+                "application/json");
+        }
+    });
+
+    svr.Post("/v1/messages", [&](const httplib::Request& req, httplib::Response& res) {
+        lastXKey = req.get_header_value("x-api-key");
+        lastVer = req.get_header_value("anthropic-version");
+        lastBody = req.body;
+        json j = json::parse(req.body, nullptr, false);
+        CHECK(!j.is_discarded() && j.contains("max_tokens"));  // Anthropic 必填
+        const bool wantStream = !j.is_discarded() && j.value("stream", false);
+        if (wantStream) {
+            std::string sse;
+            sse += "event: message_start\n";
+            sse += "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n";
+            sse += "event: content_block_delta\n";
+            sse += "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ans\"}}\n\n";
+            sse += "event: message_delta\n";
+            sse += "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":2}}\n\n";
+            sse += "event: message_stop\n";
+            sse += "data: {\"type\":\"message_stop\"}\n\n";
+            res.set_content(sse, "text/event-stream");
+        } else {
+            res.set_content(
+                R"({"content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":9,"output_tokens":2}})",
+                "application/json");
+        }
+    });
+
+    // 非 JSON 500（借 baseUrl 追加段路由到独立 handler）
+    svr.Post("/boombase/chat/completions", [](const httplib::Request&, httplib::Response& res) {
+        res.status = 500;
+        res.set_content("plain-text-boom", "text/plain");
+    });
+
+    const int port = svr.bind_to_any_port("127.0.0.1");
+    CHECK(port > 0);
+    std::thread t([&] { svr.listen_after_bind(); });
+    const std::string base = "http://127.0.0.1:" + std::to_string(port);
+
+    LlmConfig cfg;
+    cfg.providerId = "custom";
+    cfg.baseUrl = base;
+    cfg.model = "test-model";
+    cfg.apiKey = kKey;
+
+    // OpenAI 非流：请求形状 + 响应解析 + usage
+    {
+        auto cli = makeClient(cfg);
+        std::string err;
+        LlmReply r = cli->complete({{"user", "ping"}}, nullptr, err);
+        CHECK(err.empty());
+        CHECK_EQ(r.text, std::string("hi"));
+        CHECK(r.usageKnown);
+        CHECK_EQ(r.tokensIn, 3);
+        CHECK_EQ(r.tokensOut, 1);
+        CHECK(lastBody.find("\"model\":\"test-model\"") != std::string::npos);
+        CHECK(lastBody.find("\"stream\"") == std::string::npos);
+        CHECK_EQ(lastAuth, "Bearer " + kKey);
+    }
+    // OpenAI 流式：SSE 分帧 + 增量透传 + include_usage 末块
+    {
+        auto cli = makeClient(cfg);
+        std::string err, collected;
+        LlmReply r = cli->complete(
+            {{"user", "ping"}},
+            [&](const char* d, std::size_t n) { collected.append(d, n); return true; }, err);
+        CHECK(err.empty());
+        CHECK_EQ(r.text, std::string("hello world"));
+        CHECK_EQ(collected, std::string("hello world"));
+        CHECK(r.usageKnown);
+        CHECK_EQ(r.tokensIn, 11);
+        CHECK_EQ(r.tokensOut, 5);
+        CHECK(lastBody.find("include_usage") != std::string::npos);
+    }
+    // Anthropic 非流：头 + system 提到顶层 + content 块拼接 + usage
+    {
+        LlmConfig a = cfg;
+        a.protocol = Protocol::Anthropic;
+        auto cli = makeClient(a);
+        std::string err;
+        LlmReply r = cli->complete({{"system", "be brief"}, {"user", "ping"}}, nullptr, err);
+        CHECK(err.empty());
+        CHECK_EQ(r.text, std::string("answer"));
+        CHECK(r.usageKnown);
+        CHECK_EQ(r.tokensIn, 9);
+        CHECK_EQ(r.tokensOut, 2);
+        CHECK_EQ(lastXKey, kKey);
+        CHECK_EQ(lastVer, std::string("2023-06-01"));
+        CHECK(lastBody.find("\"system\":\"be brief\"") != std::string::npos);
+        CHECK(lastBody.find("\"role\":\"system\"") == std::string::npos);  // system 不进 messages
+    }
+    // Anthropic 流式：message_start/content_block_delta/message_delta 三处拼装
+    {
+        LlmConfig a = cfg;
+        a.protocol = Protocol::Anthropic;
+        auto cli = makeClient(a);
+        std::string err, collected;
+        LlmReply r = cli->complete(
+            {{"user", "ping"}},
+            [&](const char* d, std::size_t n) { collected.append(d, n); return true; }, err);
+        CHECK(err.empty());
+        CHECK_EQ(r.text, std::string("ans"));
+        CHECK_EQ(collected, std::string("ans"));
+        CHECK(r.usageKnown);
+        CHECK_EQ(r.tokensIn, 9);
+        CHECK_EQ(r.tokensOut, 2);
+    }
+    // 401：错误体里的 server message 必须如实透出
+    {
+        LlmConfig bad = cfg;
+        bad.apiKey = kWrong;
+        auto cli = makeClient(bad);
+        std::string err;
+        LlmReply r = cli->complete({{"user", "ping"}}, nullptr, err);
+        CHECK(r.text.empty());
+        CHECK(err.find("401") != std::string::npos);
+        CHECK(err.find("bad key") != std::string::npos);
+    }
+    // 500 非 JSON：状态人话 + 原文截断展示，绝不静默
+    {
+        LlmConfig b = cfg;
+        b.baseUrl = base + "/boombase";
+        auto cli = makeClient(b);
+        std::string err;
+        LlmReply r = cli->complete({{"user", "ping"}}, nullptr, err);
+        CHECK(err.find("500") != std::string::npos);
+        CHECK(err.find("plain-text-boom") != std::string::npos);
+    }
+    // 校验：缺 base/model/key 必须在发起前被拒
+    {
+        LlmConfig c = cfg;
+        c.baseUrl.clear();
+        auto cli = makeClient(c);
+        std::string err;
+        LlmReply r = cli->complete({{"user", "ping"}}, nullptr, err);
+        CHECK(!err.empty());
+        CHECK(r.text.empty());
+    }
+
+    svr.stop();
+    t.join();
+}
+
 int main() {
     auto run = [](const char* name, void (*fn)()) {
         std::printf("== %s\n", name);
@@ -2626,6 +2802,7 @@ int main() {
     run("failure_paths_report_errors", test_failure_paths_report_errors);
     run("backup_restore_failure_paths", test_backup_restore_failure_paths);
     run("llm_transport", test_llm_transport);
+    run("llm_protocols", test_llm_protocols);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

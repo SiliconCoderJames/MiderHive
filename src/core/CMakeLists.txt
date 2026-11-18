@@ -3,6 +3,7 @@ add_library(miderhive_core STATIC
     db/database.cpp
     embed/embedder.cpp
     llm/transport.cpp
+    llm/llm_client.cpp
     services/agent_service.cpp
     services/knowledge_service.cpp
     services/skill_service.cpp
