@@ -1,0 +1,83 @@
+# ---- 构建输出 ----
+build/
+build-*/
+out/
+data/
+# 打包暂存目录（cmake --install 的产物，ZIP 与 MSI 都从它取材）
+_stage/
+_stage-*/
+
+# ---- 发行目录：产物不入库（MSI/ZIP/校验和经 GitHub Releases 发布）----
+# 打包所需的 WiX 源文件在 installer/MiderHive.wxs（入库）；本目录只留本地产物。
+# 发行说明（RELEASE_NOTES-*.md）入库：release.yml 直接采用其作为 Release 正文，
+# 保证手动发布与 CI 发布文案一致（v1.1.0 的正文就曾退化为 fallback 文案）。
+release/*
+!release/RELEASE_NOTES-*.md
+
+# Python 脚本（可行性验证 / 演示数据播种）产生的字节码缓存
+__pycache__/
+*.pyc
+
+# ---- 第三方依赖（FetchContent 缓存，scripts/fetch-deps.ps1 可重建）----
+vendor/
+
+# ---- CMake / Qt 生成物 ----
+CMakeUserPresets.json
+*.user
+moc_*.cpp
+qrc_*.cpp
+*.qrc.depends
+
+# ---- 编译中间产物 / 二进制 ----
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.log
+
+# ---- 编辑器 / IDE ----
+.vs/
+.vscode/
+.idea/
+.clion/
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 本地工具状态（不入库）----
+.mimosa/
+.v2c/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
