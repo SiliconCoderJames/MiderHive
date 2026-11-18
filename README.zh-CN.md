@@ -58,6 +58,8 @@
 | Agent 交流 | note / question / task 三种消息，点对点或广播；任务仅执行者可接单；点对点消息只对收发双方可见 |
 | 错误日志 | 分级（info~critical）上报、解决闭环、解决说明追加不覆盖 |
 | 用量观测 | 每次调用上报消耗（可标注模型），幂等键防重复；周用量 / 逐日趋势 / 按模型累计；80% 警告 / 95% 预警 / 超额高亮 |
+| LLM 接入 | 平台可自带大模型：DeepSeek / OpenAI / Anthropic / 任意 OpenAI 兼容端点（双协议含流式）；外呼走 WinHTTP（TLS 用系统证书栈、代理跟随系统）；密钥明文仅存本机 `config/llm.json`，`MIDERHIVE_LLM_KEY` 可运行时覆盖；设置 → LLM 接入 一页完成配置与测试连接 |
+| 临时问答 | `Ctrl+Q` 弹出 Codex 式多轮会话流，回答逐字流式输出；用量照常记账展示，但走豁免通道不占周预算（预算环/告警按 `budgeted_tokens` 口径） |
 | 首次接入引导 | 首启自动弹出：一键接入 **Claude、ChatGPT / Codex、Factory Droid、DSH、Hermes、ZCode、Cursor、GitHub Copilot、Gemini CLI、Qwen Code、iFlow CLI、Windsurf、Kiro**（13 种，另含任意兼容 mcpServers 形状的**自定义客户端**兜底）——自动检测本机安装、预配接入身份，并**按该工具自己的格式**生成配置（JSON / TOML / DSH profile 补丁 / Hermes YAML / 环境变量 / 指令块）。能安全合并的配置文件由向导**直接写入**（原文件备份为 `.miderhive.bak`）；Agent 一上线，面板当场显示「已连接」，并写入一条欢迎记忆（每个身份仅一次）。**自动连接**：接入向导「接入全部已检测」一键批量签发+写入（已在线的不动）；总览页检测到新装未接入的工具会出提示条；脚本场景用 `agent-cli auto-connect`。设置里随时可重新打开 |
 | MCP 接入 | 自带 `miderhive-mcp` stdio 服务器，把记忆 / 知识（检索、新增、版本迭代）/ 消息 / 错误 / 技能市场 / 用量（汇总、上报、逐日、多维切片）暴露为 **27 个 MCP 工具**；`hive_status` 一次调用回答"我到底连上没有"。Claude Code、Claude Desktop、Cursor、Codex/ChatGPT、Droid、DSH、Hermes 即插即用，身份体系与 HTTP API 完全相同（[配置](docs/mcp.md)） |
 | 防呆设计 | 启动自检（数据目录可写 / 配置可读 / 端口占用 / 数据库异常——可关闭、双语、附下一步）；总览页健康横幅只在异常时出现；离线 Agent 先给排查原因再给修复入口；明文密钥丢失一键轮换修复；技术报错统一翻译成中英"人话"+ 下一步动作，绝不静默失败 |
@@ -65,6 +67,19 @@
 | 桌面工作台 | 八面板深色界面：总览、用量、知识库、技能库、用户记忆、Agent 交流、错误报告、操作日志；各面板空状态自带模块说明与引导动作 |
 | 设置中心 | 5 套主题色卡 + 字号三档（即时生效）、数据与备份（快照/恢复/维护）、通知偏好、Agent 管理、自动更新 |
 | 运维 | 备份与恢复（`VACUUM INTO` 一致快照）、管理性删除（主密钥）、手动维护 |
+
+### LLM 接入与临时问答（新增）
+
+**设置 → LLM 接入** 一页完成：服务商预设（DeepSeek / OpenAI / Anthropic / 自定义 OpenAI
+兼容端点，自动回填地址与模型）、接口地址 / 模型 / API 密钥（掩码显示）、「测试连接」实时验证。
+外呼走 WinHTTP——TLS 用系统证书栈、代理跟随系统设置（国内访问境外 provider 常需代理，
+这里零配置）；密钥明文仅存本机数据目录的 `config/llm.json`，`MIDERHIVE_LLM_KEY`
+环境变量可在运行时覆盖。目前仅工作台自营使用，暂不经 HTTP API / MCP 暴露。
+
+**`Ctrl+Q` 临时问答**：Codex 式多轮会话流，回答逐字流式输出，Enter 发送、Shift+Enter 换行；
+每次调用照常记账（预算环/告警改按"计入预算"口径），但豁免周预算——临时问答随便问，
+不动 Agent 的预算盘。没有真实 key 也能试：`python scripts/llm_mock_server.py` 起一个本地
+双协议 mock，接口地址填 `http://127.0.0.1:8788` 即可。
 
 ## 界面预览
 

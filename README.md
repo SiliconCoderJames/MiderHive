@@ -60,6 +60,8 @@ and real semantic search via your own embedding endpoint.
 | Agent messaging | `note` / `question` / `task`, point-to-point or broadcast; only the assignee can accept a task; point-to-point messages are visible only to sender and recipient |
 | Error log | Severity levels (info…critical), resolution loop, resolutions appended rather than overwritten |
 | Usage analytics | Token reporting per call (model optional) with an idempotency key; weekly / daily / per-model views; 80% warn, 95% critical, over-budget highlighted. The dedicated **Usage** panel slices consumption by time range / agent / model, with a per-agent breakdown table and a budget editor (no more hand-editing the database) |
+| LLM provider | The platform can call a large model itself: DeepSeek / OpenAI / Anthropic / any OpenAI-compatible endpoint (dual protocol incl. SSE streaming); outbound calls ride WinHTTP (OS certificate store, system proxy). The plaintext key lives only in local `config/llm.json`; `MIDERHIVE_LLM_KEY` overrides it at runtime; Settings > LLM configures and live-tests everything |
+| Ask console | `Ctrl+Q` opens a Codex-style multi-turn chat with character-by-character streaming replies; usage is recorded and shown but **exempt from the weekly budget** (rings and alerts use the `budgeted_tokens` basis) |
 | First-run onboarding | Pops up automatically: one-click connect for **Claude, ChatGPT / Codex, Factory Droid, DSH, Hermes, ZCode, Cursor, GitHub Copilot, Gemini CLI, Qwen Code, iFlow CLI, Windsurf, Kiro** (13 built-ins, plus a **custom client** fallback for anything that speaks the mcpServers shape) — detects local installs, provisions identities, and generates configs **in each tool's own format**. Configs that can be safely merged are **written directly** (original backed up as `.miderhive.bak`). **Auto-connect**: a "Connect all detected" button in the wizard, a dashboard banner when new tools are found, and `agent-cli auto-connect` for headless setups. |
 | MCP support | The bundled `miderhive-mcp` stdio server exposes **27 MCP tools** — shared memory, knowledge (search, add, and version iteration), messaging, error reports, the skill market, and token usage (summary, reporting, daily and multi-dimensional breakdown). `hive_status` answers "am I connected?" in one call. Plug-and-play for Claude Code, Claude Desktop, Cursor, Codex/ChatGPT, Droid, DSH and Hermes over the same local identity system ([setup](docs/mcp.md)) |
 | Foolproof design | Startup self-check (writable data dir / readable config / port occupied / database trouble — dismissible, bilingual, with next steps); overview health banners appear only when something is wrong; offline agents show the diagnosis before the fix; a lost plaintext key is one click from rotation; technical errors are translated into plain English/Chinese with next steps — no silent failures |
@@ -67,6 +69,22 @@ and real semantic search via your own embedding endpoint.
 | Desktop workbench | Eight-panel dark UI: overview, usage, knowledge, skills, memory, messages, errors, audit; every empty state explains the module and offers the obvious action |
 | Settings | Five theme palettes and three font sizes (instant), backup/restore/maintenance, notification preferences, agent management, auto-update |
 | Operations | Consistent snapshots via `VACUUM INTO`, administrative deletes (master key only), manual maintenance |
+
+### LLM provider & ask console (new)
+
+**Settings > LLM** does it all: provider presets (DeepSeek / OpenAI / Anthropic / any custom
+OpenAI-compatible endpoint, auto-filled base URL and model), base URL / model / API key
+(masked entry), and a live "Test connection". Outbound calls ride WinHTTP — TLS from the OS
+certificate store, proxy from system settings (nothing to configure on proxied networks).
+The plaintext key lives only in `config/llm.json` under the local data dir; the
+`MIDERHIVE_LLM_KEY` environment variable overrides it at runtime. Workbench-only for now —
+not exposed over HTTP/MCP yet.
+
+**`Ctrl+Q` ask console**: a Codex-style multi-turn chat with streaming replies, Enter to
+send, Shift+Enter for newlines. Every call is recorded (budget rings and alerts switched to
+the "budgeted" basis) but **exempt from the weekly budget** — ask freely without touching
+your agents' budget. No real key needed to try: `python scripts/llm_mock_server.py` starts a
+local dual-protocol mock; point the base URL at `http://127.0.0.1:8788`.
 
 ## Screenshots
 

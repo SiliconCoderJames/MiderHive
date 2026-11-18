@@ -24,6 +24,28 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+### Added
+- **LLM provider support (P1)**: the platform can now call a large language model itself —
+  DeepSeek, OpenAI, Anthropic, or any OpenAI-compatible endpoint (dual protocol: OpenAI
+  `chat/completions` and Anthropic `/v1/messages`, including SSE streaming). Outbound calls
+  go through a new WinHTTP transport (TLS via the OS certificate store, system proxy/PAC for
+  free; no new dependencies). Configuration lives in `config/llm.json` (plaintext key on this
+  machine only; atomic write, corrupt-file refusal, audit never contains the key);
+  `MIDERHIVE_LLM_KEY` overrides the key at ask time. New "LLM" page in Settings with preset
+  backfill, masked key entry and a live "Test connection" button. Not yet exposed over
+  HTTP/MCP.
+- **Ask console (Ctrl+Q)**: a Codex-style multi-turn chat dialog with per-character streaming
+  replies, Enter-to-send, session token totals, and a "cancel by closing" path that
+  propagates all the way down to aborting the HTTP read. Usage is recorded (agent `user`)
+  but **exempt from the weekly budget**.
+- **Budget-exempt usage accounting (schema v3)**: `token_usage` gains a `source` column
+  (`''` = agent-reported; `llm-ask` = platform's own ask console). Budget numerators and the
+  80/95/over alert levels now use `budgeted_tokens` (total minus exempt); `/api/usage/summary`
+  additionally reports `exempt_tokens` / `budgeted_tokens`. External agents cannot create
+  exempt rows (the report endpoint ignores the field).
+- `scripts/llm_mock_server.py`: a dependency-free local mock of both protocols for manually
+  verifying the settings page and the ask console without touching a real provider.
+
 ## [1.4.0] - 2026-10-11
 
 ### Added
