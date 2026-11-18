@@ -227,13 +227,15 @@ void UsagePanel::refresh() {
     kpiAvg_->set(i18n::trs("次均消耗", "Avg per call"), ui::fmtCompact(avg),
                  i18n::trs("tokens / 调用", "tokens / call"), ui::selText());
 
-    // ---- 预算环：全局本周口径（不随窗口/筛选变化，预算与告警以周为单位）----
+    // ---- 预算环：全局本周口径（不随窗口/筛选变化，预算与告警以周为单位）。
+    // 预算口径 = budgeted_tokens（豁免的平台问答不占预算）
     ah::UsageSummary sum;
     if (platform_.usageSummary(sum, err)) {
-        ring_->setValues(sum.total_tokens, sum.budget,
+        ring_->setValues(sum.budgeted_tokens, sum.budget,
                          i18n::trs("剩余 %1", "left %1")
-                             .arg(ui::fmtCompact(qMax<qint64>(0, sum.budget - sum.total_tokens))));
-        const double ratio = sum.budget > 0 ? double(sum.total_tokens) / double(sum.budget) : 0.0;
+                             .arg(ui::fmtCompact(qMax<qint64>(0, sum.budget - sum.budgeted_tokens))));
+        const double ratio =
+            sum.budget > 0 ? double(sum.budgeted_tokens) / double(sum.budget) : 0.0;
         editBudgetBtn_->setStyleSheet(ui::th(QString(
             "padding:5px 14px; color:%1;").arg(ui::usageColor(ratio).name())));
     }

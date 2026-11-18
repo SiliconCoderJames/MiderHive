@@ -586,18 +586,25 @@ void MainWindow::updateStatusBar() {
                                .arg(i18n::trs("数据", "data"))
                                .arg(QString::fromStdString(platform_.homeDir())));
     if (platform_.usageSummary(sum, err)) {
-        double pct = sum.budget > 0 ? 100.0 * sum.total_tokens / sum.budget : 0.0;
+        // 状态栏与预算同口径：budgeted_tokens（豁免的平台问答不占预算，tooltip 说明）
+        double pct = sum.budget > 0 ? 100.0 * sum.budgeted_tokens / sum.budget : 0.0;
         QString color = sum.alert_level == "none" ? ui::ok().name()
                         : (sum.alert_level == "warn" ? ui::warn().name() : ui::danger().name());
         statusUsage_->setText(
             QString("<span style='color:%1'>%2: %3 / %4 (%5%) · %6 %7</span>")
                 .arg(color)
                 .arg(i18n::trs("本周 Token", "Weekly tokens"))
-                .arg(formatNum(sum.total_tokens))
+                .arg(formatNum(sum.budgeted_tokens))
                 .arg(formatNum(sum.budget))
                 .arg(pct, 0, 'f', 1)
                 .arg(i18n::trs("剩余", "left"))
-                .arg(formatNum(sum.budget - sum.total_tokens)));
+                .arg(formatNum(sum.budget - sum.budgeted_tokens)));
+        statusUsage_->setToolTip(
+            sum.exempt_tokens > 0
+                ? i18n::trs("计入预算 %1；另有豁免 %2（平台临时问答，不占预算）",
+                            "%1 budgeted; exempt %2 (ask console, not counted)")
+                      .arg(formatNum(sum.budgeted_tokens), formatNum(sum.exempt_tokens))
+                : QString());
     }
     // 导航徽标：未解决错误数附加在「错误报告」项上（图标随计数换色，不再用 emoji 前缀）
     std::vector<ah::ErrorReport> openErrors;

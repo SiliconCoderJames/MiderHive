@@ -1396,6 +1396,9 @@ inline QIcon makeIcon(const QString& kind, const QColor& color, int px,
     else if (kind == "key")  // 密钥 / 接入命令
         inner = "<path d='m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4'/>"
                 "<path d='m21 2-9.6 9.6'/><circle cx='7.5' cy='15.5' r='5.5'/>";
+    else if (kind == "spark")  // LLM / 智能（Lucide sparkle）
+        inner = "<path d='M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21"
+                "l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z'/>";
     else if (kind == "gear")
         inner = "<path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 "
                 "2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 "

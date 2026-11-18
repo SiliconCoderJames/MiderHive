@@ -30,6 +30,7 @@
 #include <QShowEvent>
 
 #include <iterator>
+#include <thread>
 #include <tuple>
 
 #include "gui_util.h"
@@ -41,9 +42,9 @@ namespace {
 // 下载页链接（更新检查与下载由 ui::UpdateChecker 负责，那里用 release 资产的 latest.json）
 constexpr const char* kRepoPage = "https://github.com/SiliconCoderJames/MiderHive/releases";
 
-// 设置导航项：kind 取自 ui::makeIcon 的图标种类
+// 设置导航项：kind 取自 ui::makeIcon 的图标种类（顺序必须与下方 navItems 一致）
 constexpr const char* kNavKinds[] = {"palette",  "database", "bell", "overview",
-                                     "plug",     "refresh",  "info"};
+                                     "plug",     "spark",    "refresh", "info"};
 }  // namespace
 
 SettingsDialog::SettingsDialog(ah::Platform& platform, QWidget* parent)
@@ -67,6 +68,7 @@ SettingsDialog::SettingsDialog(ah::Platform& platform, QWidget* parent)
         {"bell", "通知偏好", "Notifications"},
         {"overview", "Agent 管理", "Agents"},
         {"plug", "Agent API", "Agent API"},
+        {"spark", "LLM 接入", "LLM"},
         {"refresh", "更新", "Update"},
         {"info", "关于", "About"},
     };
@@ -81,6 +83,7 @@ SettingsDialog::SettingsDialog(ah::Platform& platform, QWidget* parent)
     stack_->addWidget(buildNotifyPage());
     stack_->addWidget(buildAgentsPage());
     stack_->addWidget(buildApiPage());
+    stack_->addWidget(buildLlmPage());
     stack_->addWidget(buildUpdatePage());
     stack_->addWidget(buildAboutPage());
     root->addWidget(stack_, 1);
@@ -100,6 +103,7 @@ SettingsDialog::~SettingsDialog() {
 void SettingsDialog::showEvent(QShowEvent*) {
     refreshBackupList();
     refreshAgents();
+    loadLlmConfig();
 }
 
 QLabel* SettingsDialog::thLabel(const QString& tmpl, QWidget* parent) {
@@ -120,8 +124,9 @@ void SettingsDialog::applyChrome() {
     for (std::size_t i = 0; i < swatches_.size() && i < ui::themes().size(); ++i)
         swatches_[i]->setSelected(static_cast<int>(i) == ui::themeIdx());
     for (const auto& [w, tmpl] : styledLabels_) w->setStyleSheet(ui::th(tmpl));
-    // 图标按当前主题重新着色（换主题时导航图标也要跟着变）
-    for (int i = 0; i < nav_->count() && i < 7; ++i)
+    // 图标按当前主题重新着色（换主题时导航图标也要跟着变）。
+    // 节数以 nav_->count() 为准——此前硬编码 7，新增页就会漏重涂/越界读
+    for (int i = 0; i < nav_->count() && i < static_cast<int>(std::size(kNavKinds)); ++i)
         if (auto* it = nav_->item(i))
             it->setIcon(ui::makeIcon(kNavKinds[i], ui::muted(), 16, ui::selText()));
 }
@@ -630,6 +635,173 @@ QWidget* SettingsDialog::buildAboutPage() {
     lay->addWidget(lic);
     lay->addStretch(3);
     return page;
+}
+
+// ---- LLM 接入：provider 预设 + 端点/模型/密钥 + 测试连接（worker 线程）----
+QWidget* SettingsDialog::buildLlmPage() {
+    auto* page = new QWidget(stack_);
+    auto* lay = new QVBoxLayout(page);
+    lay->setContentsMargins(22, 20, 22, 20);
+    lay->setSpacing(12);
+
+    auto* title = thLabel("font-size:14px; font-weight:700; color:@text@;", page);
+    title->setText(i18n::trs("大语言模型接入", "LLM Provider"));
+    lay->addWidget(title);
+
+    auto* form = new QFormLayout;
+    form->setHorizontalSpacing(12);
+    form->setVerticalSpacing(10);
+
+    llmProviderBox_ = new QComboBox(page);
+    // 展示名与 core/llm 预设表对齐（data 存 id，保存/回填都用它）
+    const std::vector<std::tuple<const char*, const char*, const char*>> providerNames{
+        {"deepseek", "DeepSeek", "DeepSeek"},
+        {"openai", "OpenAI", "OpenAI"},
+        {"anthropic", "Anthropic", "Anthropic"},
+        {"custom", "自定义 OpenAI 兼容端点…", "Custom OpenAI-compatible…"},
+    };
+    for (const auto& [id, zh, en] : providerNames)
+        llmProviderBox_->addItem(i18n::trs(zh, en), QString::fromLatin1(id));
+    form->addRow(i18n::trs("服务商", "Provider"), llmProviderBox_);
+
+    llmProtoBox_ = new QComboBox(page);
+    llmProtoBox_->addItem(i18n::trs("OpenAI 兼容（chat/completions）",
+                                    "OpenAI-compatible (chat/completions)"));
+    llmProtoBox_->addItem(i18n::trs("Anthropic（/v1/messages）", "Anthropic (/v1/messages)"));
+    form->addRow(i18n::trs("协议", "Protocol"), llmProtoBox_);
+
+    llmUrlEdit_ = new QLineEdit(page);
+    llmUrlEdit_->setPlaceholderText(QStringLiteral("https://api.deepseek.com"));
+    form->addRow(i18n::trs("接口地址（不含方法路径）", "Base URL (no method path)"), llmUrlEdit_);
+
+    llmModelEdit_ = new QLineEdit(page);
+    llmModelEdit_->setPlaceholderText(QStringLiteral("deepseek-chat"));
+    form->addRow(i18n::trs("模型", "Model"), llmModelEdit_);
+
+    // 密钥行：密码框 + 显示/隐藏
+    llmKeyEdit_ = new QLineEdit(page);
+    llmKeyEdit_->setEchoMode(QLineEdit::Password);
+    auto* keyRow = new QWidget(page);
+    auto* keyLay = new QHBoxLayout(keyRow);
+    keyLay->setContentsMargins(0, 0, 0, 0);
+    keyLay->setSpacing(6);
+    keyLay->addWidget(llmKeyEdit_, 1);
+    auto* eyeBtn = new QToolButton(keyRow);
+    eyeBtn->setText(i18n::trs("显示", "Show"));
+    connect(eyeBtn, &QToolButton::clicked, this, [this, eyeBtn] {
+        const bool hidden = llmKeyEdit_->echoMode() == QLineEdit::Password;
+        llmKeyEdit_->setEchoMode(hidden ? QLineEdit::Normal : QLineEdit::Password);
+        eyeBtn->setText(hidden ? i18n::trs("隐藏", "Hide") : i18n::trs("显示", "Show"));
+    });
+    keyLay->addWidget(eyeBtn);
+    keyRow->setLayout(keyLay);
+    form->addRow(i18n::trs("API 密钥", "API key"), keyRow);
+    lay->addLayout(form);
+
+    auto* hint = thLabel("font-size:11px; color:@muted@;", page);
+    hint->setText(i18n::trs(
+        "密钥明文只保存在本机数据目录的 config/llm.json，不上传；环境变量 MIDERHIVE_LLM_KEY 可在运行时覆盖。"
+        "临时问答的用量会记账展示，但不计入周预算。",
+        "The key is stored in plain text only in config/llm.json under the local data dir; env "
+        "MIDERHIVE_LLM_KEY overrides it at ask time. Ask-console usage is recorded but exempt "
+        "from the weekly budget."));
+    hint->setWordWrap(true);
+    lay->addWidget(hint);
+
+    auto* btns = new QHBoxLayout;
+    llmTestBtn_ = new QPushButton(i18n::trs("测试连接", "Test connection"), page);
+    llmSaveBtn_ = new QPushButton(i18n::trs("保存", "Save"), page);
+    llmSaveBtn_->setDefault(true);
+    btns->addWidget(llmTestBtn_);
+    btns->addWidget(llmSaveBtn_);
+    btns->addStretch(1);
+    lay->addLayout(btns);
+
+    llmStatus_ = thLabel("font-size:11px; color:@muted@;", page);
+    llmStatus_->setWordWrap(true);
+    lay->addWidget(llmStatus_);
+    lay->addStretch(1);
+
+    // 预设切换：回填该 provider 的默认地址/模型/协议（非空才回填，不覆盖用户输入）
+    connect(llmProviderBox_, &QComboBox::currentIndexChanged, this, [this](int) {
+        const auto* preset = ah::llm::findPreset(
+            llmProviderBox_->currentData().toString().toStdString());
+        if (!preset) return;
+        if (preset->baseUrl && *preset->baseUrl)
+            llmUrlEdit_->setText(QString::fromUtf8(preset->baseUrl));
+        if (preset->model && *preset->model)
+            llmModelEdit_->setText(QString::fromUtf8(preset->model));
+        llmProtoBox_->setCurrentIndex(preset->protocol == ah::llm::Protocol::Anthropic ? 1 : 0);
+    });
+
+    // 测试连接：worker 线程发最小请求（不落盘、不记账），结果回 UI 线程
+    connect(llmTestBtn_, &QPushButton::clicked, this, [this] {
+        const ah::llm::LlmConfig cfg = llmFormConfig();
+        if (cfg.baseUrl.empty() || cfg.model.empty() || cfg.apiKey.empty()) {
+            llmStatus_->setText(i18n::trs("请先填好接口地址、模型与密钥。",
+                                          "Fill in the base URL, model and API key first."));
+            return;
+        }
+        llmTestBtn_->setEnabled(false);
+        llmStatus_->setText(i18n::trs("正在连接…", "Connecting…"));
+        std::thread([this, cfg] {
+            ah::llm::LlmReply r;
+            std::string err;
+            const bool ok = platform_.llmTestConfig(cfg, r, err);
+            QMetaObject::invokeMethod(
+                this,
+                [this, ok, err = QString::fromStdString(err)] {
+                    llmTestBtn_->setEnabled(true);
+                    if (ok)
+                        llmStatus_->setText(i18n::trs("连接成功，模型已应答。",
+                                                      "Connected; the model replied."));
+                    else
+                        llmStatus_->setText(err);  // 传输层/协议错误已是人话
+                },
+                Qt::QueuedConnection);
+        }).detach();
+    });
+
+    // 保存：写 config/llm.json（审计 llm.config_set）
+    connect(llmSaveBtn_, &QPushButton::clicked, this, [this] {
+        std::string err;
+        if (platform_.llmConfigSet(ah::kManagerName, llmFormConfig(), err))
+            llmStatus_->setText(i18n::trs("已保存（密钥仅存本机）。",
+                                          "Saved (the key stays on this machine)."));
+        else
+            llmStatus_->setText(QString::fromStdString(err));
+    });
+
+    return page;
+}
+
+void SettingsDialog::loadLlmConfig() {
+    ah::llm::LlmConfig cfg;
+    bool configured = false;
+    std::string err;
+    if (!platform_.llmConfigGet(cfg, configured, err)) {
+        llmStatus_->setText(QString::fromStdString(err));
+        return;
+    }
+    if (!configured) return;  // 表单保持空白，占位符即引导
+    for (int i = 0; i < llmProviderBox_->count(); ++i)
+        if (llmProviderBox_->itemData(i).toString().toStdString() == cfg.providerId)
+            llmProviderBox_->setCurrentIndex(i);  // 触发预设回填，随后覆盖为已存值
+    llmUrlEdit_->setText(QString::fromStdString(cfg.baseUrl));
+    llmModelEdit_->setText(QString::fromStdString(cfg.model));
+    llmKeyEdit_->setText(QString::fromStdString(cfg.apiKey));
+    llmProtoBox_->setCurrentIndex(cfg.protocol == ah::llm::Protocol::Anthropic ? 1 : 0);
+}
+
+ah::llm::LlmConfig SettingsDialog::llmFormConfig() const {
+    ah::llm::LlmConfig cfg;
+    cfg.providerId = llmProviderBox_->currentData().toString().toStdString();
+    cfg.protocol = llmProtoBox_->currentIndex() == 1 ? ah::llm::Protocol::Anthropic
+                                                     : ah::llm::Protocol::OpenAiCompat;
+    cfg.baseUrl = llmUrlEdit_->text().trimmed().toStdString();
+    cfg.model = llmModelEdit_->text().trimmed().toStdString();
+    cfg.apiKey = llmKeyEdit_->text().trimmed().toStdString();
+    return cfg;
 }
 
 // ---- 更新：自动检查 + 一键升级（走 release 资产的 latest.json，见 update_checker.h）----
