@@ -59,6 +59,10 @@ private:
     QComboBox* refreshBox_ = nullptr;
     QCheckBox* errorToastBox_ = nullptr;
     QTableWidget* agentsTable_ = nullptr;
+    // 接入总闸（v4）：一键断开/恢复所有普通 Agent
+    QLabel* gateStatusLabel_ = nullptr;
+    QPushButton* gateBtn_ = nullptr;
+    std::vector<ah::AgentInfo> lastAgents_;  // 「禁用/启用所选」按此判断当前态
     QLabel* latest_ = nullptr;  // 更新页状态行
     QCheckBox* autoCheckBox_ = nullptr;
     QLineEdit* mirrorEdit_ = nullptr;        // 更新镜像前缀（GitHub 直连不稳时的兜底）

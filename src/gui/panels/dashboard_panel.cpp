@@ -495,9 +495,36 @@ void DashboardPanel::fixKeyfile(const QString& name) {
     healthDirty_ = true;  // 强制下轮重建横幅（密钥条目已恢复；健康签名恰为空串，仅 clear 会撞相等）
 }
 
-void DashboardPanel::showAgentActions(const QString& name, bool online) {
+void DashboardPanel::enableAgent(const QString& name) {
+    if (QMessageBox::question(
+            this, i18n::trs("启用 Agent", "Enable agent"),
+            i18n::trs("恢复「%1」的蜂巢接入（密钥与工具配置未动，立即生效）。继续？",
+                      "Restore hive access for \"%1\" (key and tool config untouched; takes "
+                      "effect immediately). Continue?")
+                .arg(name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes)
+        return;
+    std::string err;
+    if (platform_.agentSetDisabled(ah::kManagerName, name.toStdString(), false, err)) {
+        ui::Toast::show(this, i18n::trs("已启用，蜂巢调用恢复 ✓", "Enabled — hive calls restored ✓"));
+        refresh();
+    } else {
+        QMessageBox::warning(this, i18n::trs("启用失败", "Enable failed"),
+                             ui::humanError(QString::fromStdString(err)));
+    }
+}
+
+void DashboardPanel::showAgentActions(const QString& name, bool online, bool disabled) {
     QMenu menu(this);
-    if (online) {
+    if (disabled) {
+        // 接入开关：禁用卡片先说明"为什么调用都失败"，再给一键恢复
+        menu.addAction(i18n::trs("已被禁用（接入开关）——蜂巢调用被拒绝；工具配置与密钥未动",
+                                 "disabled (connection switch) — hive calls are rejected; tool "
+                                 "config and key are untouched"))
+            ->setEnabled(false);
+        menu.addAction(i18n::trs("启用该 Agent", "Enable this agent"), this,
+                       [this, name] { enableAgent(name); });
+    } else if (online) {
         menu.addAction(i18n::trs("在线中", "online"))->setEnabled(false);
     } else {
         // 防呆：离线卡片先给"为什么离线"的具体原因，再给对应的修复入口
@@ -714,13 +741,17 @@ void DashboardPanel::refresh() {
                 const auto& a = agents[i];
                 const QString nm = QString::fromStdString(a.name);
                 const QString rawSeen = QString::fromStdString(a.last_seen_at);
-                card->setAgent(nm, QString::fromStdString(a.status),
+                const QString st = a.disabled ? QStringLiteral("disabled")
+                                              : QString::fromStdString(a.status);
+                card->setAgent(nm, st,
                                QString::fromStdString(a.role),
                                QString::fromStdString(a.current_task),
                                rawSeen.isEmpty() ? QString() : relTime(rawSeen),
                                localStamp(rawSeen));
                 const bool on = a.status == "online";
-                card->setOnActivate([this, nm, on] { showAgentActions(nm, on); });
+                card->setOnActivate([this, nm, on, dis = a.disabled] {
+                    showAgentActions(nm, on, dis);
+                });
             } else {
                 card->hide();
             }
@@ -744,10 +775,19 @@ void DashboardPanel::refresh() {
                            const QString& filterKey, const QString& filterValue) {
         auto* card = new ui::AlertCard(level, text, this);
         card->setOnClick([this, panel, filterKey, filterValue] {
-            drillTo(panel, filterKey, filterValue);
+            // 无下钻目标的面板（如总闸说明卡）保持不可点语义
+            if (!panel.isEmpty()) drillTo(panel, filterKey, filterValue);
         });
         alertCards_.push_back(card);
     };
+    // 接入总闸状态可见性：关闸是刻意动作，但总览必须能一眼看出"为什么都掉了"
+    if (platform_.agentsGateClosed())
+        addAlert("note",
+                 i18n::trs("接入总闸已关闭——普通 Agent 已断开（管理者与 zcode-agent 豁免）；"
+                           "在 设置 → Agent 管理 可重新开放",
+                           "Agent gate is closed — regular agents are disconnected (manager and "
+                           "zcode-agent exempt); reopen in Settings > Agents"),
+                 QString(), QString(), QString());
     if (budgetAlertLevel_ == "warn")
         addAlert("warn",
                  i18n::trs("Token 用量已达预算 80%，请留意消耗",

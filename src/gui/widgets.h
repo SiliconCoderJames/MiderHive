@@ -1025,9 +1025,14 @@ public:
         name_->setText(name);
         name_->setToolTip(name);
         online_ = status == "online";
+        disabled_ = status == "disabled";
         updateDot();
-        status_->setText(online_ ? i18n::trs("在线", "online") : i18n::trs("离线", "offline"));
-        status_->setStyleSheet(online_ ? pillStyle(ok()) : pillStyle(muted(), 40));
+        status_->setText(disabled_ ? i18n::trs("已禁用", "disabled")
+                         : online_  ? i18n::trs("在线", "online")
+                                    : i18n::trs("离线", "offline"));
+        status_->setStyleSheet(disabled_ ? pillStyle(note())
+                               : online_ ? pillStyle(ok())
+                                         : pillStyle(muted(), 40));
         role_->setText(role);
         role_->setToolTip(i18n::trs("角色：%1", "role: %1").arg(role));
         task_->setText(task.isEmpty() ? i18n::trs("（无当前任务）", "(no current task)") : task);
@@ -1051,13 +1056,15 @@ private:
     QLabel* seen_ = nullptr;
     QTimer* pulse_ = nullptr;
     bool online_ = false;
+    bool disabled_ = false;
     bool pulseOn_ = true;
     std::function<void()> onClick_;
     void updateDot() {
-        dot_->setText(online_ ? QString("<span style='color:%1;'>●</span>")
-                                    .arg(pulseOn_ ? ok().name() : ok().darker(150).name())
-                              : QString("<span style='color:%1;'>●</span>")
-                                    .arg(muted().name()));
+        dot_->setText(disabled_ ? QString("<span style='color:%1;'>●</span>").arg(note().name())
+                      : online_ ? QString("<span style='color:%1;'>●</span>")
+                                      .arg(pulseOn_ ? ok().name() : ok().darker(150).name())
+                                : QString("<span style='color:%1;'>●</span>")
+                                      .arg(muted().name()));
     }
 };
 

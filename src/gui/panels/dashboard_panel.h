@@ -94,5 +94,6 @@ private:
     // 事件动作 → 面板 id / 图标种类（过滤与下钻共用一张表，避免两处各写一套判断）
     static QString kindOfEvent(const QString& action, const QString& target);
     void rebuildEventStream(const std::vector<ah::AuditRecord>& records);
-    void showAgentActions(const QString& name, bool online);
+    void showAgentActions(const QString& name, bool online, bool disabled = false);
+    void enableAgent(const QString& name);  // 接入开关：从卡片菜单恢复被禁用的身份
 };

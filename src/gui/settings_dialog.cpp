@@ -325,12 +325,49 @@ QWidget* SettingsDialog::buildNotifyPage() {
     return page;
 }
 
-// ---- Agent 管理：注册列表 / 状态 / 移除 ----
+// ---- Agent 管理：注册列表 / 状态 / 移除 / 接入开关 ----
 QWidget* SettingsDialog::buildAgentsPage() {
     auto* page = new QWidget(stack_);
     auto* lay = new QVBoxLayout(page);
     lay->setContentsMargins(22, 20, 22, 20);
     lay->setSpacing(12);
+
+    // ---- 接入总闸：一键断开/恢复所有普通 Agent（平台侧拒接，即时生效）----
+    auto* gateRow = new QHBoxLayout;
+    gateStatusLabel_ = new QLabel(page);
+    gateStatusLabel_->setTextFormat(Qt::PlainText);
+    gateStatusLabel_->setWordWrap(true);
+    gateBtn_ = new QPushButton(page);
+    connect(gateBtn_, &QPushButton::clicked, this, [this] {
+        const bool closing = !platform_.agentsGateClosed();
+        if (QMessageBox::question(
+                this, i18n::trs(closing ? "关闭接入总闸" : "开放接入总闸",
+                                closing ? "Close the agent gate" : "Open the agent gate"),
+                closing
+                    ? i18n::trs(
+                          "关闭后所有普通 Agent 的蜂巢调用立即被拒（工具配置与密钥不动，随时可开放恢复）。\n"
+                          "管理者身份 zcode 与 ZCode 工具默认身份 zcode-agent 不受影响。继续？",
+                          "All regular agents' hive calls will be rejected at once (tool configs "
+                          "and keys untouched; reopen any time).\nThe manager identity zcode and "
+                          "the ZCode tool's default identity zcode-agent are exempt. Continue?")
+                    : i18n::trs("重新开放所有普通 Agent 的蜂巢接入，立即生效。继续？",
+                                "Reopen hive access for all regular agents, effective "
+                                "immediately. Continue?"),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+            return;
+        std::string err;
+        if (platform_.setAgentsGateClosed(ah::kManagerName, closing, err)) {
+            ui::Toast::show(this, closing ? i18n::trs("总闸已关闭 ✓", "Gate closed ✓")
+                                          : i18n::trs("总闸已开放 ✓", "Gate opened ✓"));
+            refreshAgents();
+        } else {
+            ui::Toast::show(this, i18n::trs("操作失败：", "Failed: ") +
+                                      QString::fromStdString(err), false);
+        }
+    });
+    gateRow->addWidget(gateStatusLabel_, 1);
+    gateRow->addWidget(gateBtn_, 0, Qt::AlignVCenter);
+    lay->addLayout(gateRow);
 
     agentsTable_ = new QTableWidget(0, 5, page);
     agentsTable_->setHorizontalHeaderLabels(
@@ -392,6 +429,62 @@ QWidget* SettingsDialog::buildAgentsPage() {
                                       QString::fromStdString(err), false);
         }
     });
+    auto* disableBtn = new QPushButton(i18n::trs("禁用/启用所选", "Disable/Enable selected"), page);
+    disableBtn->setToolTip(i18n::trs(
+        "接入开关：禁用后该 Agent 的蜂巢调用立即被拒（工具配置与密钥不动），随时可启用恢复",
+        "Connection switch: a disabled agent's hive calls are rejected at once (tool config "
+        "and key untouched); re-enable any time"));
+    connect(disableBtn, &QPushButton::clicked, this, [this] {
+        int row = agentsTable_->currentRow();
+        if (row < 0) {
+            ui::Toast::show(this, i18n::trs("请先选择一个 Agent", "Select an agent first"), false);
+            return;
+        }
+        const QString name = agentsTable_->item(row, 0)->text();
+        if (name == QString::fromLatin1(ah::kManagerName)) {
+            ui::Toast::show(this, i18n::trs("管理者不可禁用", "The manager cannot be disabled"),
+                            false);
+            return;
+        }
+        // 从上一轮列表取当前禁用态（表格状态列是本地化文案，不作判断依据）
+        bool currentlyDisabled = false;
+        bool found = false;
+        for (const auto& a : lastAgents_)
+            if (a.name == name.toStdString()) {
+                currentlyDisabled = a.disabled;
+                found = true;
+            }
+        if (!found) {
+            ui::Toast::show(this, i18n::trs("请先刷新列表", "Refresh the list first"), false);
+            return;
+        }
+        const QString confirm =
+            currentlyDisabled
+                ? i18n::trs("重新开放「%1」的蜂巢接入，立即生效。继续？",
+                            "Reopen hive access for \"%1\", effective immediately. Continue?")
+                    .arg(name)
+                : i18n::trs("禁用「%1」后其蜂巢调用立即被拒（工具配置与密钥不动，可随时启用恢复）。"
+                            "继续？",
+                            "Disabling \"%1\" rejects its hive calls at once (tool config and key "
+                            "untouched; re-enable any time). Continue?")
+                    .arg(name);
+        if (QMessageBox::question(this,
+                                  i18n::trs(currentlyDisabled ? "启用 Agent" : "禁用 Agent",
+                                            currentlyDisabled ? "Enable agent" : "Disable agent"),
+                                  confirm, QMessageBox::Yes | QMessageBox::No,
+                                  QMessageBox::No) != QMessageBox::Yes)
+            return;
+        std::string err;
+        if (platform_.agentSetDisabled(ah::kManagerName, name.toStdString(),
+                                       !currentlyDisabled, err)) {
+            ui::Toast::show(this, currentlyDisabled ? i18n::trs("已启用 ✓", "Enabled ✓")
+                                                    : i18n::trs("已禁用 ✓", "Disabled ✓"));
+            refreshAgents();
+        } else {
+            ui::Toast::show(this, i18n::trs("操作失败：", "Failed: ") +
+                                      QString::fromStdString(err), false);
+        }
+    });
     auto* rotateBtn = new QPushButton(i18n::trs("重新生成密钥", "Rotate API key"), page);
     connect(rotateBtn, &QPushButton::clicked, this, [this] {
         int row = agentsTable_->currentRow();
@@ -437,6 +530,7 @@ QWidget* SettingsDialog::buildAgentsPage() {
     row->addWidget(refreshBtn);
     row->addWidget(onboardBtn);
     row->addWidget(connectBtn);
+    row->addWidget(disableBtn);
     row->addWidget(rotateBtn);
     row->addWidget(removeBtn);
     row->addStretch(1);
@@ -472,21 +566,47 @@ void SettingsDialog::refreshBackupList() {
 
 void SettingsDialog::refreshAgents() {
     if (!agentsTable_) return;
+    // 接入总闸状态行 + 按钮随实际状态翻转
+    const bool gateClosed = platform_.agentsGateClosed();
+    gateStatusLabel_->setText(
+        gateClosed
+            ? i18n::trs("总闸已关闭——普通 Agent 的蜂巢调用被拒绝（管理者与 zcode-agent 豁免）",
+                        "Gate closed — regular agents' hive calls are rejected (manager and "
+                        "zcode-agent exempt)")
+            : i18n::trs("总闸开放——所有已接入 Agent 可正常调用",
+                        "Gate open — all connected agents can call the hive normally"));
+    gateBtn_->setText(gateClosed ? i18n::trs("开放总闸", "Open the gate")
+                                 : i18n::trs("关闭总闸", "Close the gate"));
+
     std::vector<ah::AgentInfo> agents;
     std::string err;
     if (!platform_.listAgents(agents, err)) {
         ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
         return;
     }
+    // 选中恢复：全量重填会把选中丢掉（此前行为），按名称找回
+    QString selectedName;
+    if (agentsTable_->currentRow() >= 0 && agentsTable_->item(agentsTable_->currentRow(), 0))
+        selectedName = agentsTable_->item(agentsTable_->currentRow(), 0)->text();
     agentsTable_->setRowCount(static_cast<int>(agents.size()));
     for (size_t i = 0; i < agents.size(); ++i) {
         const auto& a = agents[i];
         setRow(agentsTable_, static_cast<int>(i),
                {QString::fromStdString(a.name), QString::fromStdString(a.role),
-                QString::fromStdString(a.status), QString::fromStdString(a.current_task),
+                a.disabled ? i18n::trs("已禁用", "disabled")
+                           : QString::fromStdString(a.status),
+                QString::fromStdString(a.current_task),
                 a.last_seen_at.empty() ? QString("—")
                                        : relTime(QString::fromStdString(a.last_seen_at))});
     }
+    if (!selectedName.isEmpty())
+        for (int i = 0; i < agentsTable_->rowCount(); ++i)
+            if (agentsTable_->item(i, 0) &&
+                agentsTable_->item(i, 0)->text() == selectedName) {
+                agentsTable_->setCurrentCell(i, 0);
+                break;
+            }
+    lastAgents_ = agents;
 }
 
 // ---- Agent API：端点清单 + 一键复制 ----
