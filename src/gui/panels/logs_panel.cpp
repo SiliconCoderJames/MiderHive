@@ -95,14 +95,21 @@ void LogsPanel::refresh() {
     // 身份下拉尽力而为：失败时下拉留空（审计列表照常刷新，失败由下方 auditList
     // 统一提示），不额外弹 toast 刷屏
     if (!platform_.listAgents(agents, err)) agents.clear();
-    QString cur = agentCombo_->currentText();
-    agentCombo_->blockSignals(true);
-    agentCombo_->clear();
-    agentCombo_->addItem(i18n::trs("全部身份", "All identities"));
-    agentCombo_->addItem("user");
-    for (const auto& a : agents) agentCombo_->addItem(QString::fromStdString(a.name));
-    agentCombo_->setCurrentText(cur);
-    agentCombo_->blockSignals(false);
+    // 仅在候选集变化时重建：每 3s 的 clear()+重填会把用户正打开的下拉菜单
+    // 强制塌掉（clear 销毁 popup）。对照 usage_panel：构造时一次性重建无此问题
+    QStringList wanted;
+    wanted << i18n::trs("全部身份", "All identities") << QStringLiteral("user");
+    for (const auto& a : agents) wanted << QString::fromStdString(a.name);
+    QStringList current;
+    for (int i = 0; i < agentCombo_->count(); ++i) current << agentCombo_->itemText(i);
+    if (wanted != current) {
+        QString cur = agentCombo_->currentText();
+        agentCombo_->blockSignals(true);
+        agentCombo_->clear();
+        for (const auto& s : wanted) agentCombo_->addItem(s);
+        agentCombo_->setCurrentText(cur);
+        agentCombo_->blockSignals(false);
+    }
 
     std::string actor;
     if (agentCombo_->currentIndex() > 0) actor = agentCombo_->currentText().toStdString();

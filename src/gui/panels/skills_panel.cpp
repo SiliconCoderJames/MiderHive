@@ -143,18 +143,28 @@ void SkillsPanel::refresh() {
     // "不过滤"这一项既是显示文案又被用来判断是否过滤：展示名与比较必须取同一个值，
     // 否则翻译后 currentText() != "全部" 会把"全部"当成真实分类去过滤（空列表）
     const QString allItem = i18n::trs("全部", "All");
-    categoryCombo_->blockSignals(true);
-    ownerCombo_->blockSignals(true);
-    categoryCombo_->clear();
-    ownerCombo_->clear();
-    categoryCombo_->addItem(allItem);
-    ownerCombo_->addItem(allItem);
-    for (const auto& c : categories) categoryCombo_->addItem(QString::fromStdString(c));
-    for (const auto& o : owners) ownerCombo_->addItem(QString::fromStdString(o));
-    categoryCombo_->setCurrentText(curCat);
-    ownerCombo_->setCurrentText(curOwner);
-    categoryCombo_->blockSignals(false);
-    ownerCombo_->blockSignals(false);
+    // 仅在候选集变化时重建：每 3s 的 clear()+重填会把用户正打开的下拉菜单强制塌掉
+    QStringList wantCat;
+    wantCat << allItem;
+    for (const auto& c : categories) wantCat << QString::fromStdString(c);
+    QStringList wantOwner;
+    wantOwner << allItem;
+    for (const auto& o : owners) wantOwner << QString::fromStdString(o);
+    QStringList curCatItems, curOwnerItems;
+    for (int i = 0; i < categoryCombo_->count(); ++i) curCatItems << categoryCombo_->itemText(i);
+    for (int i = 0; i < ownerCombo_->count(); ++i) curOwnerItems << ownerCombo_->itemText(i);
+    if (wantCat != curCatItems || wantOwner != curOwnerItems) {
+        categoryCombo_->blockSignals(true);
+        ownerCombo_->blockSignals(true);
+        categoryCombo_->clear();
+        ownerCombo_->clear();
+        for (const auto& s : wantCat) categoryCombo_->addItem(s);
+        for (const auto& s : wantOwner) ownerCombo_->addItem(s);
+        categoryCombo_->setCurrentText(curCat);
+        ownerCombo_->setCurrentText(curOwner);
+        categoryCombo_->blockSignals(false);
+        ownerCombo_->blockSignals(false);
+    }
 
     std::string cat = categoryCombo_->currentText() == allItem ? "" : categoryCombo_->currentText().toStdString();
     std::string owner = ownerCombo_->currentText() == allItem ? "" : ownerCombo_->currentText().toStdString();

@@ -23,6 +23,7 @@ private slots:
     void onCompose();
     void onReply();
     void onStatus(const QString& status);
+    void onViewFull();
 
 private:
     void renderChat();
@@ -40,6 +41,7 @@ private:
     QPushButton* acceptBtn_ = nullptr;
     QPushButton* doneBtn_ = nullptr;
     QPushButton* declineBtn_ = nullptr;
+    QPushButton* viewBtn_ = nullptr;  // 查看全文（气泡预览截断，长文从这里读）
     std::vector<ah::Message> messages_;
     std::string selectedUuid_;
 };

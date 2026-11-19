@@ -13,6 +13,10 @@
 #include "../widgets.h"
 
 namespace {
+// 气泡正文预览截断长度；超出部分用「查看全文」按钮读（截断的是**转义前**的
+// 纯文本——此前在 toHtmlEscaped+<br> 之后 .left(500)，会把标签拦腰切断）
+constexpr int kBodyPreviewChars = 500;
+
 QString kindChip(const QString& kind) {
     const auto chip = [](const QColor& c, const QString& label) {
         return QString("<span style='background:rgba(%1,%2,%3,70);color:%4;"
@@ -103,11 +107,13 @@ MessagesPanel::MessagesPanel(ah::Platform& platform, QWidget* parent)
     acceptBtn_ = new QPushButton(i18n::trs("接受任务", "Accept"), this);
     doneBtn_ = new QPushButton(i18n::trs("任务完成", "Done"), this);
     declineBtn_ = new QPushButton(i18n::trs("拒绝任务", "Decline"), this);
+    viewBtn_ = new QPushButton(i18n::trs("查看全文", "View full text"), this);
     // 动作层级：回复是主操作；"拒绝任务"用危险色，避免和一排同色按钮混在一起误点
     replyBtn_->setObjectName("primary");
     declineBtn_->setObjectName("danger");
     brow->addWidget(infoLabel_, 1);
     brow->addWidget(replyBtn_);
+    brow->addWidget(viewBtn_);
     brow->addWidget(readBtn_);
     brow->addWidget(acceptBtn_);
     brow->addWidget(doneBtn_);
@@ -115,6 +121,7 @@ MessagesPanel::MessagesPanel(ah::Platform& platform, QWidget* parent)
     layout->addLayout(brow);
 
     connect(replyBtn_, &QPushButton::clicked, this, &MessagesPanel::onReply);
+    connect(viewBtn_, &QPushButton::clicked, this, &MessagesPanel::onViewFull);
     connect(readBtn_, &QPushButton::clicked, this, [this] { onStatus("read"); });
     connect(acceptBtn_, &QPushButton::clicked, this, [this] { onStatus("accepted"); });
     connect(doneBtn_, &QPushButton::clicked, this, [this] { onStatus("done"); });
@@ -181,9 +188,13 @@ void MessagesPanel::renderChat() {
                     .arg(selected
                              ? "background:@fieldhover@; border:1px solid @accent@; border-radius:8px; padding:8px 12px;"
                              : "background:@card@; border:1px solid @line@; border-radius:8px; padding:8px 12px;")
-                    .arg(QString::fromStdString(m.body).toHtmlEscaped()
+                    .arg(QString::fromStdString(m.body).left(kBodyPreviewChars)
+                             .toHtmlEscaped()
                              .replace("\n", "<br>")
-                             .left(500));
+                         + (QString::fromStdString(m.body).size() > kBodyPreviewChars
+                                ? i18n::trs(" …（全文用「查看全文」按钮）",
+                                            " … (use \"View full text\")")
+                                : QString()));
     }
     if (html.isEmpty()) {
         ui::attachHexMotif(chat_->document());
@@ -218,6 +229,7 @@ void MessagesPanel::retranslate() {
     if (statusCombo_->count() > 0) statusCombo_->setItemText(0, i18n::trs("全部", "All"));
     composeBtn_->setText(i18n::trs("＋ 发消息 / 指派任务", "＋ Message / Assign Task"));
     replyBtn_->setText(i18n::trs("回复", "Reply"));
+    viewBtn_->setText(i18n::trs("查看全文", "View full text"));
     readBtn_->setText(i18n::trs("标记已读", "Mark Read"));
     acceptBtn_->setText(i18n::trs("接受任务", "Accept"));
     doneBtn_->setText(i18n::trs("任务完成", "Done"));
@@ -243,6 +255,8 @@ void MessagesPanel::updateActions() {
                                       "Click a message bubble to select (reply / change status)"));
     }
     replyBtn_->setEnabled(has);
+    viewBtn_->setEnabled(has && cur &&
+                         QString::fromStdString(cur->body).size() > kBodyPreviewChars);
     readBtn_->setEnabled(has && cur && cur->status == "unread" && cur->kind != "task");
     acceptBtn_->setEnabled(has && cur && cur->kind == "task" && cur->status == "pending");
     doneBtn_->setEnabled(has && cur && cur->kind == "task" && cur->status == "accepted");
@@ -286,6 +300,30 @@ void MessagesPanel::onCompose() {
     }
     ui::Toast::show(this, i18n::trs("消息已发送 ✓", "Message sent ✓"));
     refresh();
+}
+
+void MessagesPanel::onViewFull() {
+    const ah::Message* cur = nullptr;
+    for (const auto& m : messages_)
+        if (m.uuid == selectedUuid_) cur = &m;
+    if (!cur) return;
+    // 按值拷贝：查看器 exec 的模态事件循环里 3s 刷新会重建 messages_
+    // （同 onReply 的 workbench-1 纪律）
+    const ah::Message target = *cur;
+    QDialog dlg(this);
+    dlg.setWindowTitle(i18n::trs("全文: %1", "Full text: %1")
+                           .arg(QString::fromStdString(target.subject)));
+    dlg.resize(780, 560);
+    auto* l = new QVBoxLayout(&dlg);
+    auto* view = new QPlainTextEdit(&dlg);
+    view->setReadOnly(true);
+    view->setPlainText(QString::fromStdString(target.body));
+    l->addWidget(view, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    l->addWidget(buttons);
+    dlg.exec();
 }
 
 void MessagesPanel::onReply() {

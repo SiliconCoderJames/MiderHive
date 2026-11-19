@@ -3,9 +3,11 @@
 // Agent 卡片、告警卡片、可折叠区块卡片。全部 QPainter / 原生 widget 实现，无 QML。
 #include <QBrush>
 #include <QConicalGradient>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEnterEvent>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QMouseEvent>
 #include <QFontMetrics>
@@ -882,6 +884,17 @@ private:
 class Toast : public QLabel {
 public:
     static void show(QWidget* parent, const QString& msg, bool success = true) {
+        // 失败提示节流：面板 refresh 的失败路径在 3s 轮询里反复走到这里，
+        // 持久故障（库被锁/读失败）曾以每 3s 一条的频率轰炸右下角且互相叠印，
+        // 根本读不完。相同文本 30s 内只弹一次；成功提示是用户动作的直接回执，
+        // 不节流（用户连点两次"复制"就该看到两次回执）。
+        static QHash<QString, qint64> lastErrMs;
+        if (!success) {
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            const auto it = lastErrMs.constFind(msg);
+            if (it != lastErrMs.constEnd() && now - *it < 30000) return;
+            lastErrMs.insert(msg, now);
+        }
         auto* t = new Toast(parent, msg, success);
         t->popup();
     }
@@ -901,11 +914,14 @@ private:
         QWidget* top = parentWidget();
         while (top && !top->isWindow()) top = top->parentWidget();
         if (!top) { deleteLater(); return; }
-        // 提升为顶层独立气泡，置于右下角，淡出消失
+        // 提升为顶层独立气泡，置于右下角，淡出消失。
+        // 同屏多条时向上错开叠放（此前完全叠印在同一点，同时弹出时不可读）
         setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
         setAttribute(Qt::WA_TransparentForMouseEvents);
         QPoint pos = top->pos() + QPoint(top->width() - width() - 24,
                                          top->height() - height() - 46);
+        pos.setY(pos.y() - live_ * (height() + 8));
+        ++live_;
         move(pos);
         QWidget::show();  // 显式调用基类，避免被静态 show(QString,bool) 遮蔽
         auto* fx = new QGraphicsOpacityEffect(this);
@@ -917,8 +933,14 @@ private:
         anim->setEndValue(0.0);
         anim->setEasingCurve(QEasingCurve::InQuad);
         QTimer::singleShot(1500, this, [anim] { anim->start(QAbstractAnimation::DeleteWhenStopped); });
-        QTimer::singleShot(2050, this, &QObject::deleteLater);
+        QTimer::singleShot(2050, this, [this] {
+            --live_;
+            deleteLater();
+        });
     }
+
+    // 同屏活跃 Toast 计数（GUI 单线程，进程级即可）
+    inline static int live_ = 0;
 };
 
 // ---- Agent 状态卡片：名称 + 指示灯 + 任务摘要 + 最后活跃 ----
