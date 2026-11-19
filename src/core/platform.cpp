@@ -160,9 +160,15 @@ bool Platform::initStoreLocked(std::string& err) {
     // 关键词检索的 FTS 索引：存量库在这里一次性 rebuild
     if (!knowledge_.initSearchIndex(err)) return false;
 
-    // 预算默认值（可被 settings 覆盖）
+    // 预算默认值（可被 settings 覆盖）：token 口径 + 请求数口径的模式键一并播种
     if (!db_.query("INSERT OR IGNORE INTO settings(key, value) VALUES('weekly_token_budget', ?)",
                    [](Stmt& st) { st.bind(1, kDefaultWeeklyBudget); }, nullptr, err))
+        return false;
+    if (!db_.query("INSERT OR IGNORE INTO settings(key, value) VALUES('budget_mode', ?)",
+                   [](Stmt& st) { st.bind(1, kBudgetModeTokens); }, nullptr, err))
+        return false;
+    if (!db_.query("INSERT OR IGNORE INTO settings(key, value) VALUES('weekly_request_budget', ?)",
+                   [](Stmt& st) { st.bind(1, kDefaultWeeklyRequestBudget); }, nullptr, err))
         return false;
 
     // 内置嵌入器的维度预先登记为它的 provider：384 维不准其它模型的向量混入
@@ -1053,7 +1059,9 @@ bool Platform::skillInvoke(const std::string& caller, const std::string& skillNa
         return false;
     }
     if (tokensIn > 0 || tokensOut > 0) {
-        // 用量仅做统计与告警（80%/95%/超额三级），不做硬性拦截——
+        // 用量仅做统计与告警（80%/95%/超额三级，口径随 budget_mode 切换），对
+        // Agent 上报不做硬性拦截——唯一的例外是平台自营摘要沉淀（digestRunOnce
+        // 先查预算再调 LLM，超预算自动跳过）；Agent 的消耗策略由调用方自行决定
         // 平台定位是协作与观测，Agent 的消耗策略由调用方自行决定
         bool invDup = false;
         if (!usage_.reportInTx(caller, tokensIn, tokensOut, "skill", "", skillName, "", invDup,
@@ -1349,6 +1357,54 @@ bool Platform::usageSetBudget(const std::string& actor, int64_t budget, std::str
     std::string auditErr;
     AUDIT_OR_FAIL(audit_.log(actor, "budget.set", std::string(),
                              nlohmann::json{{"budget", budget}}.dump(), auditErr),
+                  auditErr);
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
+    return true;
+}
+
+bool Platform::usageBudgetConfig(UsageBudgetConfig& out, std::string& err) {
+    std::lock_guard lock(mutex_);
+    out.mode = usage_.budgetMode(err);
+    if (out.mode.empty()) return false;
+    out.token_budget = usage_.budget(err);
+    if (out.token_budget < 0) return false;
+    out.request_budget = usage_.requestBudget(err);
+    if (out.request_budget < 0) return false;
+    return true;
+}
+
+bool Platform::usageSetBudgetConfig(const std::string& actor, const std::string& mode,
+                                    int64_t tokenBudget, int64_t requestBudget,
+                                    std::string& err) {
+    std::lock_guard lock(mutex_);
+    if (actor != "user" && !isManager(actor)) {
+        err = "only the user or zcode can change the budget";
+        return false;
+    }
+    if (mode != kBudgetModeTokens && mode != kBudgetModeRequests) {
+        err = "budget mode must be 'tokens' or 'requests'";
+        return false;
+    }
+    if (tokenBudget <= 0 || requestBudget <= 0) {
+        err = "budgets must be positive";
+        return false;
+    }
+    // 三键 + 审计同一事务：口径切换是管理操作，必须留下是谁改的
+    if (!db_.beginImmediate(err)) return false;
+    if (!usage_.setBudget(tokenBudget, err) || !usage_.setBudgetMode(mode, err) ||
+        !usage_.setRequestBudget(requestBudget, err)) {
+        db_.rollback();
+        return false;
+    }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, "budget.set", std::string(),
+                             nlohmann::json{{"mode", mode},
+                                            {"token_budget", tokenBudget},
+                                            {"request_budget", requestBudget}}.dump(),
+                             auditErr),
                   auditErr);
     if (!db_.commit(err)) {
         db_.rollback();

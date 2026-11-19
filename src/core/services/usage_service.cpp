@@ -194,6 +194,43 @@ bool UsageService::setBudget(int64_t newBudget, std::string& err) {
         [&](Stmt& st) { st.bind(1, newBudget); }, nullptr, err);
 }
 
+std::string UsageService::budgetMode(std::string& err) {
+    std::string value;
+    bool found = false;
+    if (!db_.query("SELECT value FROM settings WHERE key='budget_mode'", nullptr,
+                   [&](Stmt& st) { value = st.text(0); found = true; }, err))
+        return "";  // 读失败：空串 + err，调用方不得当 tokens 静默兜底
+    if (!found) return kBudgetModeTokens;  // 没设过 = 默认（bootstrap 已播种，双保险）
+    return value;
+}
+
+bool UsageService::setBudgetMode(const std::string& mode, std::string& err) {
+    if (mode != kBudgetModeTokens && mode != kBudgetModeRequests) {
+        err = "budget mode must be 'tokens' or 'requests'";
+        return false;
+    }
+    return db_.query(
+        "INSERT INTO settings(key, value) VALUES('budget_mode', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [&](Stmt& st) { st.bind(1, mode); }, nullptr, err);
+}
+
+int64_t UsageService::requestBudget(std::string& err) {
+    int64_t value = kDefaultWeeklyRequestBudget;
+    if (!db_.query("SELECT value FROM settings WHERE key='weekly_request_budget'", nullptr,
+                   [&](Stmt& st) { value = st.i64(0); }, err))
+        return -1;  // 读失败必须可区分（同 budget 的 -1 契约）
+    return value;
+}
+
+bool UsageService::setRequestBudget(int64_t count, std::string& err) {
+    if (count <= 0) { err = "request budget must be positive"; return false; }
+    return db_.query(
+        "INSERT INTO settings(key, value) VALUES('weekly_request_budget', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [&](Stmt& st) { st.bind(1, count); }, nullptr, err);
+}
+
 bool UsageService::summary(UsageSummary& out, std::string& err) {
     out = UsageSummary{};
     out.week_start = weekStartIso();
@@ -230,6 +267,36 @@ bool UsageService::summary(UsageSummary& out, std::string& err) {
         return false;
     out.budgeted_tokens = out.total_tokens - out.exempt_tokens;
 
+    // 周口径调用次数（requests 模式的分母）：全量 + 豁免两条，同源同口径
+    if (!db_.query(
+            "SELECT COUNT(*) FROM token_usage WHERE week_start=?",
+            [&](Stmt& st) { st.bind(1, out.week_start); },
+            [&](Stmt& st) { out.calls = st.i64(0); }, err))
+        return false;
+    if (!db_.query(
+            "SELECT COUNT(*) FROM token_usage WHERE week_start=? AND source=?",
+            [&](Stmt& st) {
+                st.bind(1, out.week_start);
+                st.bind(2, kUsageSourceLlmAsk);
+            },
+            [&](Stmt& st) { out.exempt_calls = st.i64(0); }, err))
+        return false;
+    out.budgeted_calls = out.calls - out.exempt_calls;
+
+    // 预算口径模式：读失败如实整体失败（同预算读的纪律——不能把"读不到"
+    // 静默兜底成 tokens，否则 requests 用户会突然被按 Token 口径告警）
+    std::string modeErr;
+    out.budget_mode = budgetMode(modeErr);
+    if (out.budget_mode.empty()) {
+        err = "cannot read budget_mode: " + modeErr;
+        return false;
+    }
+    out.request_budget = requestBudget(modeErr);
+    if (out.request_budget < 0) {
+        err = "cannot read weekly_request_budget: " + modeErr;
+        return false;
+    }
+
     if (!db_.query(
             "SELECT agent, SUM(tokens_in + tokens_out) AS t FROM token_usage WHERE week_start=? "
             "GROUP BY agent ORDER BY t DESC",
@@ -237,7 +304,14 @@ bool UsageService::summary(UsageSummary& out, std::string& err) {
             [&](Stmt& st) { out.per_agent.emplace_back(st.text(0), st.i64(1)); }, err))
         return false;
 
-    double ratio = out.budget > 0 ? static_cast<double>(out.budgeted_tokens) / out.budget : 0.0;
+    // 分子分母随模式切换；豁免量在两种口径下都排除
+    double ratio = 0.0;
+    if (out.budget_mode == kBudgetModeRequests)
+        ratio = out.request_budget > 0
+                    ? static_cast<double>(out.budgeted_calls) / out.request_budget
+                    : 0.0;
+    else
+        ratio = out.budget > 0 ? static_cast<double>(out.budgeted_tokens) / out.budget : 0.0;
     if (ratio > 1.0) out.alert_level = "over";
     else if (ratio >= 0.95) out.alert_level = "critical";
     else if (ratio >= 0.80) out.alert_level = "warn";

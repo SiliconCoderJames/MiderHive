@@ -436,6 +436,49 @@ static void test_platform_end_to_end() {
         CHECK(p.skillInvocations("code-review", 10, invs, err));
         CHECK(!invs.empty());  // 超额后调用仍被记录
 
+        // ---- 预算配置三键（mode + token 预算 + 请求数预算）----
+        ah::UsageBudgetConfig bcfg;
+        CHECK(p.usageBudgetConfig(bcfg, err));
+        CHECK_EQ(bcfg.mode, std::string("tokens"));  // 默认口径
+        CHECK(!p.usageSetBudgetConfig("hermes", "requests", 1'000'000, 100, err));  // 非管理者拒
+        CHECK(!p.usageSetBudgetConfig("zcode", "weekly", 1'000'000, 100, err));     // 非法模式拒
+        CHECK(!p.usageSetBudgetConfig("zcode", "requests", 0, 100, err));           // 非正数拒
+        // 切 requests 模式：alert 按周 calls 口径分级，豁免行不计入分子
+        // 本周已有若干 token 上报（若干行 = 若干次调用），精确计数用当次 summary
+        CHECK(p.usageSetBudgetConfig("zcode", "requests", 4'242'000, 2, err));
+        ah::UsageSummary reqSum;
+        CHECK(p.usageSummary(reqSum, err));
+        CHECK_EQ(reqSum.budget_mode, std::string("requests"));
+        CHECK_EQ(reqSum.request_budget, static_cast<int64_t>(2));
+        CHECK(reqSum.budgeted_calls >= static_cast<int64_t>(2));  // 此前多轮上报
+        CHECK_EQ(reqSum.budgeted_calls, reqSum.calls - reqSum.exempt_calls);
+        // 该断言不预设具体比值——只要 alert 与 calls 口径自洽即可
+        {
+            const double ratio = reqSum.request_budget > 0
+                                     ? double(reqSum.budgeted_calls) / double(reqSum.request_budget)
+                                     : 0.0;
+            const std::string expect = ratio > 1.0   ? "over"
+                                       : ratio >= 0.95 ? "critical"
+                                       : ratio >= 0.80 ? "warn"
+                                                       : "none";
+            CHECK_EQ(reqSum.alert_level, expect);
+        }
+        // 切回 tokens 模式：口径恢复（当前 424 万预算 vs 已用约 106 万 ≈ 25% → none），
+        // 断言按字段自洽计算而非硬编码档位
+        CHECK(p.usageSetBudgetConfig("zcode", "tokens", 4'242'000, 2, err));
+        CHECK(p.usageSummary(reqSum, err));
+        CHECK_EQ(reqSum.budget_mode, std::string("tokens"));
+        {
+            const double ratio = reqSum.budget > 0
+                                     ? double(reqSum.budgeted_tokens) / double(reqSum.budget)
+                                     : 0.0;
+            const std::string expect = ratio > 1.0   ? "over"
+                                       : ratio >= 0.95 ? "critical"
+                                       : ratio >= 0.80 ? "warn"
+                                                       : "none";
+            CHECK_EQ(reqSum.alert_level, expect);
+        }
+
         // 审计留痕
         step("audit");
         std::vector<ah::AuditRecord> audit;

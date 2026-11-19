@@ -660,11 +660,14 @@ void HttpServer::setupRoutes() {
             return;
         }
         // 用量汇总是三次独立的后续读取（调用记录已落库），读失败绝不能伪装成
-        // 成功数据返回——与 /api/usage/report、/api/usage/summary 同一契约
+        // 成功数据返回——与 /api/usage/report、/api/usage/summary 同一契约。
+        // remaining 随 budget_mode 切口径（此前是全仓唯一残留总量口径的点）
         UsageSummary sum;
         if (!p.usageSummary(sum, err)) { send(res, fail(500, err)); return; }
         send(res, ok(json{{"skill", req.matches[1]},
-                          {"remaining_tokens", sum.budget - sum.total_tokens},
+                          {"budget_mode", sum.budget_mode},
+                          {"remaining_tokens", sum.budget - sum.budgeted_tokens},
+                          {"remaining_requests", sum.request_budget - sum.budgeted_calls},
                           {"budget", sum.budget},
                           {"alert_level", sum.alert_level}}));
     });
@@ -876,9 +879,12 @@ void HttpServer::setupRoutes() {
         // MCP usage_report 与 usage_summary 两个工具各看到一个 remaining
         send(res, ok(json{{"week_start", sum.week_start},
                           {"budget", sum.budget},
+                          {"mode", sum.budget_mode},
                           {"used", sum.total_tokens},
                           {"budgeted_tokens", sum.budgeted_tokens},
                           {"exempt_tokens", sum.exempt_tokens},
+                          {"calls", sum.calls},
+                          {"budgeted_calls", sum.budgeted_calls},
                           {"remaining", sum.budget - sum.budgeted_tokens},
                           {"alert_level", sum.alert_level},
                           {"duplicate", duplicate}}));
@@ -895,11 +901,16 @@ void HttpServer::setupRoutes() {
             per.push_back({{"agent", name}, {"tokens", tokens}});
         send(res, ok(json{{"week_start", sum.week_start},
                           {"budget", sum.budget},
+                          {"mode", sum.budget_mode},
+                          {"request_budget", sum.request_budget},
                           {"total_in", sum.total_in},
                           {"total_out", sum.total_out},
                           {"total_tokens", sum.total_tokens},
                           {"exempt_tokens", sum.exempt_tokens},
                           {"budgeted_tokens", sum.budgeted_tokens},
+                          {"calls", sum.calls},
+                          {"exempt_calls", sum.exempt_calls},
+                          {"budgeted_calls", sum.budgeted_calls},
                           {"remaining", sum.budget - sum.budgeted_tokens},
                           {"alert_level", sum.alert_level},
                           {"per_agent", per}}));
@@ -985,26 +996,55 @@ void HttpServer::setupRoutes() {
         std::string actor;
         if (!checkAgent(req, p, actor, res)) return;
         std::string err;
-        const int64_t budget = p.usageBudget(err);
-        // 读失败如实报 500，不把 -1 当预算发出去
-        if (budget < 0) { send(res, fail(500, err.empty() ? "cannot read budget" : err)); return; }
-        send(res, ok(json{{"budget", budget}}));
+        UsageBudgetConfig cfg;
+        // 三键整体读取；读失败如实报 500，不把 -1/空串当有效配置发出去
+        if (!p.usageBudgetConfig(cfg, err)) {
+            send(res, fail(500, err.empty() ? "cannot read budget" : err));
+            return;
+        }
+        send(res, ok(json{{"budget", cfg.token_budget},
+                          {"mode", cfg.mode},
+                          {"request_budget", cfg.request_budget}}));
     });
 
     srv.Put("/api/usage/budget", [&](const httplib::Request& req, httplib::Response& res) {
         if (!checkMaster(req, p, res)) return;
         auto body = json::parse(req.body, nullptr, false);
-        if (body.is_discarded() || !body.is_object() || !body.contains("budget") ||
-            !body["budget"].is_number()) {
-            send(res, fail(400, "budget must be a number"));
+        if (body.is_discarded() || !body.is_object()) {
+            send(res, fail(400, "invalid JSON body"));
             return;
         }
+        // 向后兼容：只传 budget 时等价于旧契约（token 口径单键修改）；
+        // 传 mode/request_budget 时按三键整体更新（未提供的键保留现值）
+        UsageBudgetConfig cfg;
         std::string err;
-        if (!p.usageSetBudget(kManagerName, body["budget"].get<int64_t>(), err)) {
+        if (!p.usageBudgetConfig(cfg, err)) {
+            send(res, fail(500, err.empty() ? "cannot read budget" : err));
+            return;
+        }
+        if (body.contains("budget")) {
+            if (!body["budget"].is_number()) { send(res, fail(400, "budget must be a number")); return; }
+            cfg.token_budget = body["budget"].get<int64_t>();
+        }
+        if (body.contains("mode")) {
+            if (!body["mode"].is_string()) { send(res, fail(400, "mode must be a string")); return; }
+            cfg.mode = body["mode"].get<std::string>();
+        }
+        if (body.contains("request_budget")) {
+            if (!body["request_budget"].is_number()) {
+                send(res, fail(400, "request_budget must be a number"));
+                return;
+            }
+            cfg.request_budget = body["request_budget"].get<int64_t>();
+        }
+        if (!p.usageSetBudgetConfig(kManagerName, cfg.mode, cfg.token_budget,
+                                    cfg.request_budget, err)) {
             send(res, fail(400, err));
             return;
         }
-        send(res, ok(json{{"budget", body["budget"].get<int64_t>()}}));
+        send(res, ok(json{{"budget", cfg.token_budget},
+                          {"mode", cfg.mode},
+                          {"request_budget", cfg.request_budget}}));
     });
 
     // ---- 操作日志 ----

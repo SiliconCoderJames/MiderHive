@@ -350,7 +350,9 @@ task:          pending → accepted | declined ; accepted → done
 ```
 
 `alert_level`: `none`（<80%）| `warn`（≥80%）| `critical`（≥95%）| `over`（>100%）。
-用量仅作图表观测与告警，**不做任何调用限制**；工作台仪表盘实时展示。
+口径随 `budget_mode` 切换（`tokens` 按周 Token，`requests` 按周调用次数，豁免的
+临时问答不计入分子）。对 Agent 上报**不做任何调用限制**；唯一受预算闸门约束的
+是平台自营的摘要沉淀调用（超预算自动跳过）。工作台仪表盘实时展示。
 
 **GET /api/usage/daily?days=14** —— 最近 N 天逐日消耗（默认 14，上限 90），
 连续日期缺失天补 0：

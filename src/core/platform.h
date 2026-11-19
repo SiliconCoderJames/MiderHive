@@ -152,7 +152,8 @@ public:
                       ErrorReport& out, std::string& err);
 
     // ---- Token 用量 ----
-    // 纯观测：只统计与分级告警，不因超预算拒绝调用（历史注释曾写"超过即拒绝"，已废弃）
+    // 纯观测：对 Agent 上报只统计与分级告警，不因超预算拒绝调用（口径随
+    // budget_mode 切换；平台自营摘要沉淀是唯一受预算闸门约束的调用方）
     bool usageReport(const std::string& agent, int64_t tokensIn, int64_t tokensOut,
                      const std::string& callType, const std::string& model,
                      const std::string& referenceId, const std::string& idempotencyKey,
@@ -164,6 +165,11 @@ public:
                         UsageBreakdown& out, std::string& err);
     int64_t usageBudget(std::string& err);
     bool usageSetBudget(const std::string& actor, int64_t budget, std::string& err);
+    // 预算配置三键整体读写（mode + token 预算 + 请求数预算）：避免三键各自
+    // 漂移；写侧权限与审计照 usageSetBudget（detail 记三字段）
+    bool usageBudgetConfig(UsageBudgetConfig& out, std::string& err);
+    bool usageSetBudgetConfig(const std::string& actor, const std::string& mode,
+                              int64_t tokenBudget, int64_t requestBudget, std::string& err);
 
     // ---- LLM 接入（平台自营调用；P1：临时问答，预算豁免通道）----
     // 配置存 <home>/config/llm.json（密钥明文仅存本机，同 agents.json 纪律）；

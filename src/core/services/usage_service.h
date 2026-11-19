@@ -14,8 +14,16 @@ constexpr int64_t kDefaultWeeklyBudget = 10'000'000;  // 每周 1000 万 Token
 
 // 记账来源（token_usage.source）：'' = Agent 自报（外部唯一入口
 // /api/usage/report 不解析该字段，外部无法伪造豁免行）；
-// 'llm-ask' = 平台自营临时问答，预算豁免通道（预算口径排除，总消耗仍计入）。
+// 'llm-ask' = 平台自营临时问答，预算豁免通道（预算口径排除，总消耗仍计入）；
+// 'llm-digest' = 平台自营摘要沉淀，计入预算——预算闸门就是为它设的。
 constexpr const char* kUsageSourceLlmAsk = "llm-ask";
+constexpr const char* kUsageSourceLlmDigest = "llm-digest";
+
+// 预算口径模式（settings key budget_mode）：'tokens'（默认，按周 Token）|
+// 'requests'（按周调用次数）。二者二选一，alert 分级与预算闸门同口径。
+constexpr const char* kBudgetModeTokens = "tokens";
+constexpr const char* kBudgetModeRequests = "requests";
+constexpr int64_t kDefaultWeeklyRequestBudget = 1000;  // 每周 1000 次调用
 
 class UsageService {
 public:
@@ -47,6 +55,13 @@ public:
     // 否则"预算读不出来"会伪装成"预算就是默认值"（GUI 侧对非正值一律回退默认显示）。
     int64_t budget(std::string& err);
     bool setBudget(int64_t budget, std::string& err);
+    // 预算口径模式（tokens | requests）。**失败返回空串**且 err 置因——调用方
+    // 不得把空串当 tokens 静默兜底（同 budget 的 -1 契约）。
+    std::string budgetMode(std::string& err);
+    bool setBudgetMode(const std::string& mode, std::string& err);
+    // 周请求数预算（mode=requests 时的分母）。**失败返回 -1**（同 budget 契约）。
+    int64_t requestBudget(std::string& err);
+    bool setRequestBudget(int64_t count, std::string& err);
 
 private:
     Database& db_;

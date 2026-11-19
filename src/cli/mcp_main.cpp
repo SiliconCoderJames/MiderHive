@@ -701,7 +701,8 @@ std::vector<ToolDef> buildTools() {
                  "Report the tokens a model call consumed so the hive's budget view stays "
                  "accurate. Pass an idempotency_key to make retries safe: a repeated key is "
                  "counted once and the response reports duplicate=true. The response carries the "
-                 "live weekly balance and alert level — observation only, it never blocks you.",
+                 "live weekly balance and alert level — reporting is never blocked (only the "
+                 "platform's own digest calls are budget-gated).",
                  objSchema({{"tokens_in", prop("integer", "prompt/input tokens (>=0)")},
                             {"tokens_out", prop("integer", "completion/output tokens (>=0)")},
                             {"model", prop("string", "optional model name, e.g. claude-sonnet-4")},

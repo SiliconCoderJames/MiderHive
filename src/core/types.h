@@ -111,17 +111,31 @@ struct AuditRecord {
 
 struct UsageSummary {
     std::string week_start;
-    int64_t budget = 0;
+    std::string budget_mode;    // tokens | requests（预算分子分母随它切换）
+    int64_t budget = 0;         // mode=tokens 时的分母（周 Token 预算）
+    int64_t request_budget = 0; // mode=requests 时的分母（周调用次数预算）
     int64_t total_tokens = 0;
     // v3 豁免口径：total_tokens 含平台自营豁免调用（临时问答），预算分子与
     // 三级告警按 budgeted_tokens（= 总量 - 豁免量）算；consumers 用 budgeted
     // 判断预算，用 total 看真实总消耗
     int64_t exempt_tokens = 0;
     int64_t budgeted_tokens = 0;
+    // v4+ 请求数口径：周调用次数（每条 token_usage 行 = 1 次），豁免同口径排除
+    int64_t calls = 0;
+    int64_t exempt_calls = 0;
+    int64_t budgeted_calls = 0;
     int64_t total_in = 0;
     int64_t total_out = 0;
     std::vector<std::pair<std::string, int64_t>> per_agent;  // name, tokens
-    std::string alert_level;    // none | warn | critical | over
+    std::string alert_level;    // none | warn | critical | over（随 budget_mode 切换口径）
+};
+
+// 预算配置三元组（mode + 两套分母）：GET/PUT /api/usage/budget 与
+// usageSetBudgetConfig 的载体——读/写都整体搬运，避免三键各自漂移
+struct UsageBudgetConfig {
+    std::string mode;           // tokens | requests
+    int64_t token_budget = 0;   // mode=tokens 时的分母
+    int64_t request_budget = 0; // mode=requests 时的分母
 };
 
 struct UsageDailyPoint {
