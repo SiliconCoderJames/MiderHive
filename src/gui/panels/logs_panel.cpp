@@ -92,23 +92,28 @@ void LogsPanel::refresh() {
     // 身份下拉（含全部身份 + user + 各 Agent）
     std::vector<ah::AgentInfo> agents;
     std::string err;
-    // 身份下拉尽力而为：失败时下拉留空（审计列表照常刷新，失败由下方 auditList
-    // 统一提示），不额外弹 toast 刷屏
-    if (!platform_.listAgents(agents, err)) agents.clear();
-    // 仅在候选集变化时重建：每 3s 的 clear()+重填会把用户正打开的下拉菜单
-    // 强制塌掉（clear 销毁 popup）。对照 usage_panel：构造时一次性重建无此问题
-    QStringList wanted;
-    wanted << i18n::trs("全部身份", "All identities") << QStringLiteral("user");
-    for (const auto& a : agents) wanted << QString::fromStdString(a.name);
-    QStringList current;
-    for (int i = 0; i < agentCombo_->count(); ++i) current << agentCombo_->itemText(i);
-    if (wanted != current) {
-        QString cur = agentCombo_->currentText();
-        agentCombo_->blockSignals(true);
-        agentCombo_->clear();
-        for (const auto& s : wanted) agentCombo_->addItem(s);
-        agentCombo_->setCurrentText(cur);
-        agentCombo_->blockSignals(false);
+    // 身份下拉尽力而为：查询失败时**跳过重建**（保留上一轮候选集）——塌缩成
+    // 空列表会把用户选中的项挤丢（setCurrentText 找不到即 -1，空白且粘滞）
+    const bool agentsOk = platform_.listAgents(agents, err);
+    if (agentsOk) {
+        // 仅在候选集变化时重建：每 3s 的 clear()+重填会把用户正打开的下拉菜单
+        // 强制塌掉（clear 销毁 popup）。对照 usage_panel：构造时一次性重建无此问题
+        QStringList wanted;
+        wanted << i18n::trs("全部身份", "All identities") << QStringLiteral("user");
+        for (const auto& a : agents) wanted << QString::fromStdString(a.name);
+        QStringList current;
+        for (int i = 0; i < agentCombo_->count(); ++i) current << agentCombo_->itemText(i);
+        if (wanted != current) {
+            const QString cur = agentCombo_->currentText();
+            agentCombo_->blockSignals(true);
+            agentCombo_->clear();
+            for (const auto& s : wanted) agentCombo_->addItem(s);
+            // 按 index 恢复：setCurrentText 找不到文本会置 -1（空白）——
+            // 找不到时回到"全部身份"而不是留下一个无意义的空选中态
+            const int idx = agentCombo_->findText(cur);
+            agentCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+            agentCombo_->blockSignals(false);
+        }
     }
 
     std::string actor;

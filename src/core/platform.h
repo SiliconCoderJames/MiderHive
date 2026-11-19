@@ -161,14 +161,20 @@ public:
     bool llmConfigGet(ah::llm::LlmConfig& out, bool& configured, std::string& err);
     // 保存配置并审计 llm.config_set（detail 绝不含密钥）；损坏的旧文件拒写不覆盖
     bool llmConfigSet(const std::string& actor, const ah::llm::LlmConfig& cfg, std::string& err);
-    // 用给定配置发一条最小请求（不落盘、不记账）；设置页「测试连接」用
-    bool llmTestConfig(const ah::llm::LlmConfig& cfg, ah::llm::LlmReply& out, std::string& err);
-    // 临时问答：按已存配置调一次模型（onDelta 可空=非流式），豁免记账
-    // （source=llm-ask）+ 审计 llm.ask（问题截断入 detail，绝无密钥）。
-    // 网络调用不持锁。返回 true 时 out 有效；err 非空但 out.text 非空 = 记账失败
-    // 的警告（回复本身已成功）。
-    bool llmAsk(const std::vector<ah::llm::LlmMessage>& history,
-                const ah::llm::ChunkSink& onDelta, ah::llm::LlmReply& out, std::string& err);
+    // 临时问答两段式（替代原 llmAsk 一把梭——客户端所有权交给调用方后，
+    // GUI 才能跨线程安全地 cancel，不存在"回调指向已析构客户端"的竞态）：
+    //   1) llmAskOpen：读配置（env 覆盖密钥）→ 构造客户端。不发起网络请求；
+    //      返回 nullptr 时 err 说明原因（未配置/store 不可用）。调用方持有
+    //      客户端（建议 shared_ptr），可随时 cancel() 硬中止阻塞读。
+    //   2) complete 由调用方驱动（流式 onDelta 自定）；err 先自行清空
+    //      （stale-err 纪律）。
+    //   3) llmAskRecord：收尾豁免记账（source=llm-ask，agent="user"）+ 审计
+    //      llm.ask（最后一条 user 消息截断入 detail，绝无密钥）。返回 false =
+    //      记账失败（err 带原因；调用方已有回复时把 err 当警告展示即可）。
+    std::unique_ptr<ah::llm::LlmClient> llmAskOpen(ah::llm::LlmConfig& outCfg, std::string& err);
+    bool llmAskRecord(const std::vector<ah::llm::LlmMessage>& history,
+                      const ah::llm::LlmConfig& cfg, const ah::llm::LlmReply& reply,
+                      std::string& err);
     // 测试注入口：替换客户端构造（默认 makeClient + WinHTTP 传输）
     void setLlmClientFactory(
         std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)> f);

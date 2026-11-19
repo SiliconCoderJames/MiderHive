@@ -67,7 +67,10 @@ AskDialog::AskDialog(ah::Platform& platform, std::function<void()> openSettings,
 
 AskDialog::~AskDialog() {
     ui::removeThemeListener(themeListenerId_);
-    abort_ = true;  // 传导取消：正在读的网络块回调返回 false，worker 很快收尾
+    // 传导取消：delta 回调返回 false + transport 句柄硬中止，worker 很快收尾；
+    // 析构 join 在 UI 线程，但有了硬中止后最多等一个退出码的往返，不再冻 120s
+    abort_ = true;
+    if (activeClient_) activeClient_->cancel();
     if (worker_.joinable()) worker_.join();
 }
 
@@ -146,10 +149,14 @@ void AskDialog::send() {
     if (busy_.load()) return;
     const QString text = input_->toPlainText().trimmed();
     if (text.isEmpty()) return;
+
+    // 两段式：先在 GUI 线程拿客户端（只读配置，无网络），所有权 GUI/worker
+    // 各持一份——关窗时 GUI 侧 cancel() 硬中止阻塞读，client 存活期由
+    // worker 的 shared_ptr 副本兜底
     ah::llm::LlmConfig cfg;
-    bool configured = false;
     std::string cfgErr;
-    if (!platform_.llmConfigGet(cfg, configured, cfgErr) || !configured) {
+    auto client = platform_.llmAskOpen(cfg, cfgErr);
+    if (!client) {
         goSettings_->setVisible(true);
         input_->setEnabled(false);
         send_->setEnabled(false);
@@ -164,8 +171,10 @@ void AskDialog::send() {
     input_->clear();
     busy_ = true;
     abort_ = false;
+    streamLineOpen_ = false;
     send_->setEnabled(false);
-    streamingText_.clear();
+    activeClient_ = std::shared_ptr<ah::llm::LlmClient>(client.release());
+    std::shared_ptr<ah::llm::LlmClient> shared = activeClient_;
     appendHtml(QString("<div style='margin-top:8px; color:%1;'>%2 · %3</div>")
                    .arg(ui::muted().name(), i18n::trs("助手", "assistant"),
                         QString::fromStdString(cfg.model).toHtmlEscaped()));
@@ -175,9 +184,9 @@ void AskDialog::send() {
     const std::vector<ah::llm::LlmMessage> hist = history_;
     QPointer<AskDialog> guard(this);
     if (worker_.joinable()) worker_.join();  // 上一次已收尾（busy_ 为假才到这）
-    worker_ = std::thread([guard, pl = &platform_, hist] {
+    worker_ = std::thread([guard, pl = &platform_, hist, shared, cfg] {
+        std::string err;  // 新局部：stale-err 无从谈起（平台侧 complete 不清 err）
         ah::llm::LlmReply reply;
-        std::string err;
         auto onDelta = [guard](const char* d, std::size_t n) -> bool {
             if (!guard || guard->abort_.load()) return false;  // 取消：传导到传输层
             const QString piece = QString::fromUtf8(d, static_cast<qsizetype>(n));
@@ -186,31 +195,55 @@ void AskDialog::send() {
                 Qt::QueuedConnection);
             return true;
         };
-        const bool ok = pl->llmAsk(hist, onDelta, reply, err);
+        bool ok = true;
+        try {
+            reply = shared->complete(hist, onDelta, err);
+        } catch (const std::exception& ex) {
+            ok = false;
+            err = std::string("client error: ") + ex.what();
+        }
         const bool cancelled = err == "cancelled";
+        QString recordWarn;
+        if (ok && err.empty() && !cancelled) {
+            // 收尾记账+审计；失败如实带警告（回复本身有效，不掩蔽）
+            std::string recErr;
+            if (!pl->llmAskRecord(hist, cfg, reply, recErr))
+                recordWarn = QString::fromStdString(recErr);
+        } else {
+            ok = false;
+        }
         QMetaObject::invokeMethod(
             guard,
             [guard, ok, cancelled, errText = QString::fromStdString(err),
-             text = QString::fromStdString(reply.text), in = reply.tokensIn,
-             out = reply.tokensOut] {
-                if (guard) guard->finishAssistant(ok, cancelled, errText, text, in, out);
+             text = QString::fromStdString(reply.text), truncated = reply.truncated,
+             in = reply.tokensIn, out = reply.tokensOut, recordWarn] {
+                if (guard)
+                    guard->finishAssistant(ok, cancelled, errText, text, truncated, in, out,
+                                           recordWarn);
             },
             Qt::QueuedConnection);
     });
 }
 
 void AskDialog::appendDelta(const QString& delta) {
-    streamingText_ += delta;
     QTextCursor cur = chat_->textCursor();
     cur.movePosition(QTextCursor::End);
+    if (!streamLineOpen_) {
+        // 标题行（"助手 · 模型"）之后另起一块：否则首个 delta 会续写在标题行尾
+        // 并继承其灰色字符格式，整段回答灰贴在标题后
+        cur.insertBlock();
+        streamLineOpen_ = true;
+    }
     cur.insertText(delta);
     auto* bar = chat_->verticalScrollBar();
     bar->setValue(bar->maximum());
 }
 
 void AskDialog::finishAssistant(bool ok, bool cancelled, const QString& errText,
-                                const QString& text, qint64 in, qint64 out) {
+                                const QString& text, bool truncated, qint64 in, qint64 out,
+                                const QString& recordWarn) {
     busy_ = false;
+    activeClient_.reset();
     send_->setEnabled(inputConfigured_);
     if (!ok) {
         // 失败的提问不留在历史里（没有对应回复的多轮上下文只会污染下一次请求）
@@ -229,6 +262,19 @@ void AskDialog::finishAssistant(bool ok, bool cancelled, const QString& errText,
         return;
     }
     history_.push_back({"assistant", text.toStdString()});
+    const QString truncNote =
+        truncated ? i18n::trs("（回复因长度上限被截断）", " (truncated at length limit)")
+                  : QString();
+    if (!recordWarn.isEmpty()) {
+        // 记账失败：回复有效但账面没记上——绝不能显示"已记账"糊弄用户
+        appendHtml(QString("<div style='color:%1; margin-top:4px;'>%2：%3</div>")
+                       .arg(ui::note().name(),
+                            i18n::trs("已收到回复，但记账失败", "reply received, but accounting "
+                                      "failed"),
+                            recordWarn.toHtmlEscaped()));
+        refreshStateLine();
+        return;
+    }
     sessIn_ += in;
     sessOut_ += out;
     const QString usage =
@@ -236,15 +282,20 @@ void AskDialog::finishAssistant(bool ok, bool cancelled, const QString& errText,
             ? i18n::trs("provider 未回 usage，记账记 0", "no usage returned, recorded as 0")
             : i18n::trs("本次 in %1 / out %2", "in %1 / out %2")
                   .arg(QString::number(in), QString::number(out));
-    appendHtml(QString("<div style='color:%1; margin-top:4px;'>%2 · %3 %4 / %5 %6 · %7</div>")
+    appendHtml(QString("<div style='color:%1; margin-top:4px;'>%2%3 · %4 %5 / %6 %7 · %8</div>")
                    .arg(ui::muted().name(),
-                        i18n::trs("已记账（豁免预算）", "recorded (budget exempt)"),
+                        i18n::trs("已记账（豁免预算）", "recorded (budget exempt)"), truncNote,
                         i18n::trs("会话", "session"), i18n::trs("入", "in"),
                         i18n::trs("出", "out"), usage));
     refreshStateLine();
 }
 
 void AskDialog::closeEvent(QCloseEvent* e) {
-    if (busy_.load()) abort_ = true;  // 流式中途关窗：worker 在析构时 join
+    // 流式中途关窗：abort 走 delta 回调取消，cancel() 直接关 transport 句柄
+    // （provider 长时间不吐块时 join 不再冻结 UI）
+    if (busy_.load()) {
+        abort_ = true;
+        if (activeClient_) activeClient_->cancel();
+    }
     QDialog::closeEvent(e);
 }

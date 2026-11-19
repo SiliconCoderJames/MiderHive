@@ -2658,6 +2658,24 @@ static void test_llm_protocols() {
         res.set_content("plain-text-boom", "text/plain");
     });
 
+    // H-a 回归：OpenAI 流内 in-band error（200 状态 data:{"error":…}）——
+    // 不认它就会把错误吞成"成功 + 半截回答"
+    svr.Post("/errstream/chat/completions",
+             [](const httplib::Request&, httplib::Response& res) {
+                 std::string sse;
+                 sse += "data: {\"error\":{\"message\":\"quota blew up\"}}\n\n";
+                 res.set_content(sse, "text/event-stream");
+             });
+    // M-max_tokens 回归：Anthropic stop_reason=max_tokens（正常结束流、无 error）
+    svr.Post("/cutbase/v1/messages", [](const httplib::Request&, httplib::Response& res) {
+        std::string sse;
+        sse += "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n";
+        sse += "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n";
+        sse += "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":9}}\n\n";
+        sse += "data: {\"type\":\"message_stop\"}\n\n";
+        res.set_content(sse, "text/event-stream");
+    });
+
     const int port = svr.bind_to_any_port("127.0.0.1");
     CHECK(port > 0);
     std::thread t([&] { svr.listen_after_bind(); });
@@ -2762,6 +2780,34 @@ static void test_llm_protocols() {
         CHECK(!err.empty());
         CHECK(r.text.empty());
     }
+    // H-a 回归：OpenAI 流内 in-band error 必须上抛（此前被吞成"成功 + 半截"）
+    {
+        LlmConfig e = cfg;
+        e.baseUrl = base + "/errstream";
+        auto cli = makeClient(e);
+        std::string err;
+        LlmReply r = cli->complete(
+            {{"user", "ping"}},
+            [&](const char*, std::size_t) { return true; }, err);
+        CHECK(r.text.empty());
+        CHECK(err.find("quota blew up") != std::string::npos);
+    }
+    // M-max_tokens 回归：stop_reason=max_tokens → truncated 标志（部分文本保留）
+    {
+        LlmConfig a = cfg;
+        a.protocol = Protocol::Anthropic;
+        a.baseUrl = base + "/cutbase";
+        auto cli = makeClient(a);
+        std::string err;
+        LlmReply r = cli->complete(
+            {{"user", "ping"}},
+            [&](const char*, std::size_t) { return true; }, err);
+        CHECK(err.empty());
+        CHECK_EQ(r.text, std::string("partial"));
+        CHECK(r.truncated);
+        CHECK_EQ(r.tokensOut, static_cast<int64_t>(9));  // mock 的 message_delta usage
+        CHECK(r.usageKnown);
+    }
 
     svr.stop();
     t.join();
@@ -2786,10 +2832,14 @@ static void test_llm_platform() {
                                "WHERE name='source'"),
              static_cast<int64_t>(1));
 
-    // ---- 未配置：llmAsk 拒绝、llmConfigGet configured=false（不是错误）----
+    // ---- 未配置：llmAskOpen 拒绝、llmConfigGet configured=false（不是错误）----
     LlmReply reply;
-    CHECK(!p.llmAsk({{"user", "hi"}}, nullptr, reply, err));
-    CHECK(err.find("not configured") != std::string::npos);
+    LlmConfig openCfg;
+    {
+        auto c = p.llmAskOpen(openCfg, err);
+        CHECK(!c);
+        CHECK(err.find("not configured") != std::string::npos);
+    }
     LlmConfig cfg;
     bool configured = true;
     CHECK(p.llmConfigGet(cfg, configured, err));
@@ -2801,6 +2851,7 @@ static void test_llm_platform() {
         LlmReply reply;
         std::vector<LlmMessage>* historySink = nullptr;  // 指向测试局部变量
         std::string name() const override { return "fake"; }
+        void cancel() override {}
         LlmReply complete(const std::vector<LlmMessage>& h, const ChunkSink& onDelta,
                           std::string& e) override {
             if (historySink) *historySink = h;
@@ -2854,42 +2905,83 @@ static void test_llm_platform() {
         CHECK(allDetail.find(kKey) == std::string::npos);  // 密钥绝不入审计
     }
 
-    // ---- llmAsk：回复 + 豁免记账 + 审计（注意：err 此时带着上文"未配置"的残句，
-    // llmAsk 必须自行清空，否则会把残句误判成本次失败——stale-err 回归哨）----
-    CHECK(p.llmAsk({{"user", "问题一"}}, nullptr, reply, err));
-    CHECK_EQ(reply.text, std::string("fake-answer"));
-    CHECK_EQ(seenCfg.apiKey, kKey);  // env 未设时用文件密钥
-    CHECK_EQ(seenHistory.size(), std::size_t{1});  // 历史原样传给客户端
+    // ---- llmAskOpen+Record：回复 + 豁免记账 + 审计（err 带上文"未配置"残句——
+    // 调用方 complete 前自行清空；这里用新局部变量模拟该纪律）----
+    {
+        auto client = p.llmAskOpen(openCfg, err);
+        CHECK(static_cast<bool>(client));
+        err.clear();  // stale-err 纪律：调用方清空
+        reply = client->complete({{"user", "问题一"}}, nullptr, err);
+        CHECK(err.empty());
+        CHECK_EQ(seenCfg.apiKey, kKey);  // env 未设时用文件密钥
+        CHECK_EQ(seenHistory.size(), std::size_t{1});  // 历史原样传给客户端
+        CHECK(p.llmAskRecord({{"user", "问题一"}}, openCfg, reply, err));
+    }
     // 流式：delta 透传
-    std::string streamed;
-    CHECK(p.llmAsk({{"user", "问题二"}},
-                   [&](const char* d, std::size_t n) {
-                       streamed.append(d, n);
-                       return true;
-                   },
-                   reply, err));
-    CHECK_EQ(streamed, std::string("fake-answer"));
+    {
+        auto client = p.llmAskOpen(openCfg, err);
+        CHECK(static_cast<bool>(client));
+        err.clear();
+        std::string streamed;
+        reply = client->complete(
+            {{"user", "问题二"}},
+            [&](const char* d, std::size_t n) {
+                streamed.append(d, n);
+                return true;
+            },
+            err);
+        CHECK(err.empty());
+        CHECK_EQ(streamed, std::string("fake-answer"));
+        CHECK(p.llmAskRecord({{"user", "问题二"}}, openCfg, reply, err));
+    }
+    // H-b 回归哨：超过 200 字节的多字节中文问题（99 个"问"= 297 字节，第 200
+    // 字节恰好切在多字节字符内部）——截断若留下孤立首字节，审计 dump(strict)
+    // 会抛 type_error 穿透线程；修后必须正常记账
+    {
+        std::string longQuestion;
+        for (int i = 0; i < 99; ++i) longQuestion += "问";
+        CHECK(longQuestion.size() > 200);
+        auto client = p.llmAskOpen(openCfg, err);
+        CHECK(static_cast<bool>(client));
+        err.clear();
+        reply = client->complete({{"user", longQuestion}}, nullptr, err);
+        CHECK(err.empty());
+        CHECK(p.llmAskRecord({{"user", longQuestion}}, openCfg, reply, err));
+        // 审计行存在且 detail 是合法 UTF-8（dump 未抛即已通过 strict 校验）
+        std::vector<ah::AuditRecord> rows;
+        CHECK(p.auditList("user", "llm.ask", "", 10, rows, err));
+        CHECK(!rows.empty());
+    }
 
     // 豁免记账：source 列正确、预算口径排除
     {
         int64_t n = countRows(dbPath, "SELECT COUNT(*) FROM token_usage WHERE source='llm-ask'");
-        CHECK_EQ(n, static_cast<int64_t>(2));
+        CHECK_EQ(n, static_cast<int64_t>(3));
         n = countRows(dbPath, "SELECT COUNT(*) FROM token_usage WHERE agent='user'");
-        CHECK_EQ(n, static_cast<int64_t>(2));
+        CHECK_EQ(n, static_cast<int64_t>(3));
     }
     CHECK(p.usageSetBudget("user", 1000, err));
-    // 正常自报 900 + 豁免 300（两次各 150）→ total=1200，budgeted=900 → 90% warn
+    // 正常自报 900 + 豁免 450（三次各 150）→ total=1350，budgeted=900 → 90% warn
     bool dup = false;
     CHECK(p.usageReport("claude", 800, 100, "chat", "", "", "", dup, err));
     ah::UsageSummary sum;
     CHECK(p.usageSummary(sum, err));
-    CHECK_EQ(sum.total_tokens, static_cast<int64_t>(1200));
-    CHECK_EQ(sum.exempt_tokens, static_cast<int64_t>(300));
+    CHECK_EQ(sum.total_tokens, static_cast<int64_t>(1350));
+    CHECK_EQ(sum.exempt_tokens, static_cast<int64_t>(450));
     CHECK_EQ(sum.budgeted_tokens, static_cast<int64_t>(900));
     CHECK_EQ(sum.alert_level, std::string("warn"));  // 按预算口径而非总量（总量已超 1000）
 
-    // 审计含 llm.ask 且无密钥
+    // 审计含 llm.ask 且无密钥；问题取**最后一条** user 消息（多轮传累计 history
+    // 时首条会让每次审计都记同一句——L3 回归哨）
     {
+        auto client = p.llmAskOpen(openCfg, err);
+        CHECK(static_cast<bool>(client));
+        err.clear();
+        const std::vector<LlmMessage> multiTurn = {
+            {"user", "第一问"}, {"assistant", "答"}, {"user", "第二问"}};
+        reply = client->complete(multiTurn, nullptr, err);
+        CHECK(err.empty());
+        CHECK(p.llmAskRecord(multiTurn, openCfg, reply, err));
         std::vector<ah::AuditRecord> rows;
         CHECK(p.auditList("", "", "", 100, rows, err));
         std::string allDetail;
@@ -2900,6 +2992,8 @@ static void test_llm_platform() {
         }
         CHECK(sawAsk);
         CHECK(allDetail.find("问题一") != std::string::npos);  // 问题截断入 detail
+        CHECK(allDetail.find("第二问") != std::string::npos);  // 取的是最后一条 user 消息
+        CHECK(allDetail.find("第一问") == std::string::npos);  // 不再记首条
         CHECK(allDetail.find(kKey) == std::string::npos);
     }
 
@@ -2907,8 +3001,11 @@ static void test_llm_platform() {
     // ---- env 覆盖密钥（不落盘）----
     const std::wstring envVal = std::wstring(L"env") + L"-key" + L"-xyz";
     SetEnvironmentVariableW(L"MIDERHIVE_LLM_KEY", envVal.c_str());
-    CHECK(p.llmAsk({{"user", "问题三"}}, nullptr, reply, err));
-    CHECK_EQ(seenCfg.apiKey, std::string("env-key-xyz"));
+    {
+        auto client = p.llmAskOpen(openCfg, err);
+        CHECK(static_cast<bool>(client));
+        CHECK_EQ(seenCfg.apiKey, std::string("env-key-xyz"));
+    }
     SetEnvironmentVariableW(L"MIDERHIVE_LLM_KEY", nullptr);
 #endif
 

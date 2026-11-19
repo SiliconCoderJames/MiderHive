@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -38,7 +39,8 @@ private:
     void appendHtml(const QString& html);
     void appendDelta(const QString& delta);
     void finishAssistant(bool ok, bool cancelled, const QString& errText,
-                         const QString& text, qint64 in, qint64 out);
+                         const QString& text, bool truncated, qint64 in, qint64 out,
+                         const QString& recordWarn);
     void retheme();
 
     ah::Platform& platform_;
@@ -49,7 +51,11 @@ private:
     QPushButton* goSettings_ = nullptr;
     QLabel* stateLine_ = nullptr;
     std::vector<ah::llm::LlmMessage> history_;
-    QString streamingText_;  // 当前正在流式生成的回复（UI 侧累积）
+    // 在途请求的客户端：GUI 与 worker 各持一份 shared_ptr——关窗时 GUI 侧
+    // cancel()（transport 硬中止阻塞读），client 存活期由 worker 的副本兜底，
+    // 不存在"回调指向已析构客户端"的竞态
+    std::shared_ptr<ah::llm::LlmClient> activeClient_;
+    bool streamLineOpen_ = false;  // 流式正文首 delta 前需要另起一行
     qint64 sessIn_ = 0, sessOut_ = 0;
     bool inputConfigured_ = false;
     std::thread worker_;

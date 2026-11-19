@@ -812,10 +812,15 @@ void HttpServer::setupRoutes() {
         }
         UsageSummary sum;
         if (!p.usageSummary(sum, err)) { send(res, fail(500, err)); return; }
+        // remaining 与 alert_level 同口径（budgeted：豁免的平台问答不占预算）——
+        // 此前 used/remaining 用总量口径而告警已切预算口径，同一响应自相矛盾，
+        // MCP usage_report 与 usage_summary 两个工具各看到一个 remaining
         send(res, ok(json{{"week_start", sum.week_start},
                           {"budget", sum.budget},
                           {"used", sum.total_tokens},
-                          {"remaining", sum.budget - sum.total_tokens},
+                          {"budgeted_tokens", sum.budgeted_tokens},
+                          {"exempt_tokens", sum.exempt_tokens},
+                          {"remaining", sum.budget - sum.budgeted_tokens},
                           {"alert_level", sum.alert_level},
                           {"duplicate", duplicate}}));
     });

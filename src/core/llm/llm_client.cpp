@@ -73,17 +73,40 @@ std::string jsonStr(const json& j, const char* key) {
     return {};
 }
 int64_t jsonInt(const json& j, const char* key) {
-    if (j.is_object() && j.contains(key) && j[key].is_number_integer())
-        return j[key].get<int64_t>();
+    if (j.is_object() && j.contains(key) && j[key].is_number()) {
+        // 个别 provider 把 token 数发成浮点（12.0）：放宽为数值并截断
+        return static_cast<int64_t>(j[key].get<double>());
+    }
     return -1;
+}
+
+// 从 error 对象提取人话消息；message 缺失时兜底整个对象的 dump（replace 模式，
+// 防服务端发非法 UTF-8 时 dump 抛异常）
+std::string errorMessage(const json& e) {
+    if (e.is_object() || e.is_string()) {
+        const std::string m = jsonStr(e, "message");
+        if (!m.empty()) return m;
+        if (e.is_string()) return e.get<std::string>();
+    }
+    return e.dump(2, ' ', false, nlohmann::detail::error_handler_t::replace);
 }
 
 std::string truncateUtf8(std::string s, size_t maxBytes) {
     if (s.size() <= maxBytes) return s;
     s.resize(maxBytes);
-    // 别把多字节字符截一半：回退到码点边界
-    while (!s.empty() && (s.back() & 0xC0) == 0x80) s.pop_back();
-    if (!s.empty() && (s.back() & 0x80) == 0x80) s.pop_back();
+    // 回退不完整的多字节序列：先弹续字节，再处理"声明的序列长度超过剩余字节"
+    // 的孤立首字节（此前只弹续字节，会留下残缺首字节 → 非法 UTF-8，
+    // 经 json::dump(strict) 会抛异常，经 QString::fromUtf8 出 U+FFFD）
+    while (!s.empty()) {
+        const unsigned char c = static_cast<unsigned char>(s.back());
+        if ((c & 0xC0) == 0x80) { s.pop_back(); continue; }  // 续字节
+        size_t need = 1;
+        if ((c & 0xE0) == 0xC0) need = 2;
+        else if ((c & 0xF0) == 0xE0) need = 3;
+        else if ((c & 0xF8) == 0xF0) need = 4;
+        if (need > s.size()) s.pop_back();  // 序列被切断，弹掉孤立首字节
+        break;
+    }
     return s + "...";
 }
 
@@ -129,6 +152,8 @@ public:
 
     std::string name() const override { return "openai-compat:" + cfg_.providerId; }
 
+    void cancel() override { transport_->cancel(); }
+
     LlmReply complete(const std::vector<LlmMessage>& history, const ChunkSink& onDelta,
                       std::string& err) override {
         LlmReply out;
@@ -156,11 +181,21 @@ public:
 
         LlmReply acc;
         bool cancelled = false;
+        std::string streamErr;  // 流内 in-band error（200 状态下 data:{"error":…}）
         SseFeeder feeder;
         auto onData = [&](const std::string& data) {
+            if (cancelled) return;  // 取消后同块剩余事件不再派发（契约：false 即中止）
             if (data == "[DONE]") return;
             json j = parseBody(data);
             if (j.is_discarded() || !j.is_object()) return;
+            // 流内 error：OpenRouter/Groq/xAI/部分 vLLM 在 200 状态的 SSE 里直接
+            // 发 data:{"error":…}——不认它就会把错误吞成"成功 + 半截回答"
+            if (j.contains("error")) {
+                streamErr = errorMessage(j["error"]);
+                if (streamErr.empty()) streamErr = "provider reported a stream error";
+                cancelled = true;
+                return;
+            }
             // usage（include_usage 的末块或非流响应）：取最后一次出现的
             const auto pin = jsonInt(j.value("usage", json{}), "prompt_tokens");
             const auto pout = jsonInt(j.value("usage", json{}), "completion_tokens");
@@ -179,6 +214,8 @@ public:
                     acc.text += piece;
                     if (onDelta && !onDelta(piece.data(), piece.size())) cancelled = true;
                 }
+                // finish_reason=length：回复被 max_tokens 截断（如实标记，不掩蔽）
+                if (jsonStr(c0, "finish_reason") == "length") acc.truncated = true;
             }
         };
         auto sink = [&](const char* d, std::size_t n) -> bool {
@@ -187,11 +224,16 @@ public:
         };
 
         HttpResponse res = transport_->send(req, stream ? sink : ChunkSink{});
-        if (!res.err.empty()) { err = res.err; return out; }
+        if (!res.err.empty()) {
+            err = (res.err == "cancelled" && !streamErr.empty()) ? streamErr : res.err;
+            return out;
+        }
         if (res.status >= 400) { err = describeHttpError(res); return out; }
         if (stream) {
             // 分块已由 sink 实时喂过解析器，这里只补喂末尾无空行结尾的残帧
             feeder.flush(onData);
+            // 残帧里的 error 事件在 flush 时才派发——必须在这里再查一次
+            if (!streamErr.empty()) { err = streamErr; return out; }
         } else {
             const json j = parseBody(res.body);
             if (j.is_discarded()) { err = "provider returned a non-JSON response"; return out; }
@@ -212,6 +254,8 @@ public:
     explicit AnthropicClient(LlmConfig cfg) : cfg_(std::move(cfg)) {}
 
     std::string name() const override { return "anthropic:" + cfg_.providerId; }
+
+    void cancel() override { transport_->cancel(); }
 
     LlmReply complete(const std::vector<LlmMessage>& history, const ChunkSink& onDelta,
                       std::string& err) override {
@@ -250,6 +294,7 @@ public:
         std::string streamErr;  // 流中 error 事件的真实原因（transport 只会报 cancelled）
         SseFeeder feeder;
         auto onData = [&](const std::string& data) {
+            if (cancelled) return;  // 取消后同块剩余事件不再派发
             json j = parseBody(data);
             if (j.is_discarded() || !j.is_object()) return;
             const std::string type = jsonStr(j, "type");
@@ -280,7 +325,14 @@ public:
             }
             if (type == "message_delta") {
                 const auto pout = jsonInt(j.value("usage", json{}), "output_tokens");
-                if (pout >= 0) acc.tokensOut = pout;
+                if (pout >= 0) {
+                    acc.tokensOut = pout;
+                    acc.usageKnown = true;  // 与 message_start 对称：已知就置位
+                }
+                // stop_reason=max_tokens：回复被长度上限截断（Anthropic 正常结束
+                // 流、无 error 事件——不读它就静默腰斩）
+                if (jsonStr(j.value("delta", json{}), "stop_reason") == "max_tokens")
+                    acc.truncated = true;
                 return;
             }
             // ping / content_block_start / content_block_stop / message_stop：忽略
@@ -299,6 +351,8 @@ public:
         if (res.status >= 400) { err = describeHttpError(res); return out; }
         if (stream) {
             feeder.flush(onData);  // 同 OpenAI：分块已实时喂过，只补残帧
+            // 残帧里的 error 事件在 flush 时才派发——这里必须再查一次
+            if (!streamErr.empty()) { err = streamErr; return out; }
         } else {
             const json j = parseBody(res.body);
             if (j.is_discarded()) { err = "provider returned a non-JSON response"; return out; }

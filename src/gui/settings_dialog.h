@@ -7,6 +7,8 @@
 #include <QPointer>
 #include <QTimer>
 #include <cstddef>
+#include <functional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -27,7 +29,7 @@ class SettingsDialog : public QDialog {
     Q_OBJECT
 public:
     explicit SettingsDialog(ah::Platform& platform, QWidget* parent = nullptr);
-    ~SettingsDialog() override;
+    ~SettingsDialog() override;  // 在途的「测试连接」先硬中止再 join，防退出期 UAF
 
 protected:
     void showEvent(QShowEvent*) override;  // 每次打开刷新备份列表与 Agent 列表
@@ -74,6 +76,11 @@ private:
     QPushButton* llmTestBtn_ = nullptr;
     QPushButton* llmSaveBtn_ = nullptr;
     QLabel* llmStatus_ = nullptr;
+    // 「测试连接」在途状态：成员线程（析构 join）+ GUI 侧持有的客户端
+    // （析构先 cancel 硬中止再 join）。此前是 detached 线程 + 裸 this——
+    // 对话框 WA_DeleteOnClose 关闭后再 invokeMethod 就是 UAF（审计 H-c/M4）
+    std::thread llmTestThread_;
+    std::shared_ptr<ah::llm::LlmClient> activeTestClient_;
     ui::UpdateInfo pending_;    // 最近一次检查到的可用版本
     std::size_t themeListenerId_ = 0;
     // th() 取色控件登记表：切换主题时统一重涂

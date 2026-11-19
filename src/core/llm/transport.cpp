@@ -10,6 +10,9 @@
 // 平台守卫：非 Windows 编译为恒败桩（与 rsaVerifySha256Pkcs1 同策略）。
 #include "core/llm/transport.h"
 
+#include <atomic>
+#include <mutex>
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -35,6 +38,7 @@ public:
                   "(the transport currently ships on Windows only)";
         return out;
     }
+    void cancel() override {}
 };
 #else
 
@@ -63,6 +67,9 @@ std::string winhttpError(DWORD code) {
             return "connection dropped (12030)";
         case 12005:  // ERROR_WINHTTP_SECURE_FAILURE
             return "secure channel error (12005)";
+        case 12157:  // ERROR_WINHTTP_SECURE_CHANNEL_ERROR（最常见 TLS 错误：
+                     // 老系统缺根证书/代理 MITM/协议不匹配）
+            return "TLS handshake error (12157)";
         case 12175:  // ERROR_WINHTTP_SECURE_FAILURE (证书链/算法)
             return "TLS certificate error (12175)";
         case 12008:  // ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR
@@ -75,7 +82,19 @@ std::string winhttpError(DWORD code) {
 
 class WinHttpTransport final : public ITransport {
 public:
+    // 硬中止：从另一线程关闭请求句柄，正在阻塞的 send 立即以错误返回
+    // （MSDN：跨线程 WinHttpCloseHandle 是取消同步调用的正规手段）。
+    void cancel() override {
+        cancelled_ = true;
+        std::lock_guard lock(hm_);
+        if (hreq_) {
+            WinHttpCloseHandle(hreq_);
+            hreq_ = nullptr;  // 所有权移交给 cancel；send 线程不再重复关它
+        }
+    }
+
     HttpResponse send(const HttpRequest& req, const ChunkSink& onChunk) override {
+        cancelled_ = false;
         // ---- URL 拆解（UTF-8 → 宽；query 段并回路径，不能丢）----
         std::wstring url = toWide(req.url);
         if (url.empty()) {
@@ -149,18 +168,40 @@ public:
             WinHttpCloseHandle(session);
             return net;
         }
+        {
+            std::lock_guard lock(hm_);
+            hreq_ = request;  // cancel() 可见：从此刻起另一线程可硬中止
+        }
 
         WinHttpSetTimeouts(request, req.connectTimeoutSec * 1000, req.connectTimeoutSec * 1000,
                            req.sendTimeoutSec * 1000, req.receiveTimeoutSec * 1000);
 
-        // 头部：宽字符拼接（provider 的头值——Bearer key、协议版本——都是 ASCII）
+        // 头部：宽字符拼接。Authorization/x-api-key 是请求的命根子——任一头
+        // 转换失败（非 UTF-8）必须整单拒绝，而不是静默发一个缺头的请求
         std::wstring headers;
-        for (const auto& [k, v] : req.headers) headers += toWide(k) + L": " + toWide(v) + L"\r\n";
+        for (const auto& [k, v] : req.headers) {
+            const std::wstring wk = toWide(k), wv = toWide(v);
+            if (wk.empty() || wv.empty()) {
+                std::lock_guard lock(hm_);
+                hreq_ = nullptr;
+                WinHttpCloseHandle(request);
+                WinHttpCloseHandle(connect);
+                WinHttpCloseHandle(session);
+                HttpResponse bad;
+                bad.err = "request header is not valid UTF-8: " + k;
+                return bad;
+            }
+            headers += wk + L": " + wv + L"\r\n";
+        }
 
         HttpResponse res;
         auto bail = [&](const std::string& msg) {
             res.err = msg;
-            WinHttpCloseHandle(request);
+            {
+                std::lock_guard lock(hm_);
+                if (hreq_) { WinHttpCloseHandle(hreq_); hreq_ = nullptr; }
+                // hreq_ 已被 cancel() 关走时不要再碰那个句柄值
+            }
             WinHttpCloseHandle(connect);
             WinHttpCloseHandle(session);
             return res;
@@ -172,41 +213,56 @@ public:
             req.body.empty() ? WINHTTP_NO_REQUEST_DATA
                              : reinterpret_cast<LPVOID>(const_cast<char*>(req.body.data())),
             static_cast<DWORD>(req.body.size()), static_cast<DWORD>(req.body.size()), 0);
-        if (!ok) return bail(winhttpError(GetLastError()));
-        if (!WinHttpReceiveResponse(request, nullptr)) return bail(winhttpError(GetLastError()));
+        if (!ok) return bail(cancelled_ ? "cancelled" : winhttpError(GetLastError()));
+        if (!WinHttpReceiveResponse(request, nullptr))
+            return bail(cancelled_ ? "cancelled" : winhttpError(GetLastError()));
 
         DWORD status = 0;
         DWORD size = sizeof(status);
         if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                  WINHTTP_HEADER_NAME_BY_INDEX, &status, &size,
                                  WINHTTP_NO_HEADER_INDEX))
-            return bail(winhttpError(GetLastError()));
+            return bail(cancelled_ ? "cancelled" : winhttpError(GetLastError()));
         res.status = static_cast<long>(status);
 
         // ---- 读体：2xx 且调用方要流式 → 逐块回调；错误响应只缓冲（无需流式）----
+        constexpr size_t kMaxBodyBytes = 32 * 1024 * 1024;  // 32MB：防慢滴端点无限吃内存
         const bool stream = status >= 200 && status < 300 && static_cast<bool>(onChunk);
         for (;;) {
             DWORD avail = 0;
-            if (!WinHttpQueryDataAvailable(request, &avail)) return bail(winhttpError(GetLastError()));
+            if (!WinHttpQueryDataAvailable(request, &avail))
+                return bail(cancelled_ ? "cancelled" : winhttpError(GetLastError()));
             if (avail == 0) break;
             std::string chunk(avail, '\0');
             DWORD read = 0;
             if (!WinHttpReadData(request, chunk.data(), avail, &read))
-                return bail(winhttpError(GetLastError()));
+                return bail(cancelled_ ? "cancelled" : winhttpError(GetLastError()));
             chunk.resize(read);
             if (!chunk.empty()) {
                 res.body += chunk;
+                if (res.body.size() > kMaxBodyBytes)
+                    return bail("response body too large (>32MB) - aborting to protect memory");
                 if (stream && !onChunk(chunk.data(), chunk.size())) {
                     res.err = "cancelled";  // 调用方主动中止（如关闭对话框）
                     break;
                 }
             }
         }
-        WinHttpCloseHandle(request);
+        {
+            std::lock_guard lock(hm_);
+            if (hreq_) { WinHttpCloseHandle(hreq_); hreq_ = nullptr; }
+        }
         WinHttpCloseHandle(connect);
         WinHttpCloseHandle(session);
         return res;
     }
+
+private:
+    // cancel() 与 send() 分属两线程：句柄登记在互斥下（被 cancel 关走后
+    // send 侧不再重复关闭同一句柄值）
+    std::mutex hm_;
+    HINTERNET hreq_ = nullptr;
+    std::atomic<bool> cancelled_{false};
 };
 #endif  // _WIN32
 

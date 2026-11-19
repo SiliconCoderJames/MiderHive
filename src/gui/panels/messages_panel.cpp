@@ -17,6 +17,21 @@ namespace {
 // 纯文本——此前在 toHtmlEscaped+<br> 之后 .left(500)，会把标签拦腰切断）
 constexpr int kBodyPreviewChars = 500;
 
+// 气泡正文预览：纯文本截断（代理对安全——不把 emoji 拦腰切成孤立高位代理）
+// + 省略标记 + HTML 转义。独立成函数便于自测
+QString bubbleBody(const QString& body, bool* truncatedOut = nullptr) {
+    const bool truncated = body.size() > kBodyPreviewChars;
+    if (truncatedOut) *truncatedOut = truncated;
+    QString cut = body.left(kBodyPreviewChars);
+    if (truncated && !cut.isEmpty() && QChar::isHighSurrogate(cut.back().unicode()))
+        cut.chop(1);  // 末位是孤立高位代理：回退一个码元
+    QString out = cut.toHtmlEscaped().replace("\n", "<br>");
+    if (truncated)
+        out += i18n::trs(" …（全文用「查看全文」按钮）", " … (use \"View full text\")")
+                   .toHtmlEscaped();
+    return out;
+}
+
 QString kindChip(const QString& kind) {
     const auto chip = [](const QColor& c, const QString& label) {
         return QString("<span style='background:rgba(%1,%2,%3,70);color:%4;"
@@ -188,13 +203,7 @@ void MessagesPanel::renderChat() {
                     .arg(selected
                              ? "background:@fieldhover@; border:1px solid @accent@; border-radius:8px; padding:8px 12px;"
                              : "background:@card@; border:1px solid @line@; border-radius:8px; padding:8px 12px;")
-                    .arg(QString::fromStdString(m.body).left(kBodyPreviewChars)
-                             .toHtmlEscaped()
-                             .replace("\n", "<br>")
-                         + (QString::fromStdString(m.body).size() > kBodyPreviewChars
-                                ? i18n::trs(" …（全文用「查看全文」按钮）",
-                                            " … (use \"View full text\")")
-                                : QString()));
+                    .arg(bubbleBody(QString::fromStdString(m.body)));
     }
     if (html.isEmpty()) {
         ui::attachHexMotif(chat_->document());
@@ -254,7 +263,7 @@ void MessagesPanel::updateActions() {
         infoLabel_->setText(i18n::trs("点击消息气泡以选中（可回复 / 流转状态）",
                                       "Click a message bubble to select (reply / change status)"));
     }
-    replyBtn_->setEnabled(has);
+    replyBtn_->setEnabled(has && cur);  // 选中项已被筛掉时 cur 为空，按钮禁用
     viewBtn_->setEnabled(has && cur &&
                          QString::fromStdString(cur->body).size() > kBodyPreviewChars);
     readBtn_->setEnabled(has && cur && cur->status == "unread" && cur->kind != "task");

@@ -44,6 +44,10 @@ public:
     // 注意：状态码在流式读取前即可判——>=400 的响应绝不回调 onChunk，
     // 错误体只进 body，由上层（协议适配）翻译成人话。
     virtual HttpResponse send(const HttpRequest& req, const ChunkSink& onChunk) = 0;
+    // 硬中止：从另一线程打断正在进行的 send（WinHTTP 句柄被关闭，阻塞中的
+    // 读写立即失败）。send 之后会尽快以 err="cancelled" 返回。仅对下一次
+    // （或正在进行的那一次）send 有效。
+    virtual void cancel() = 0;
 };
 
 // Windows：WinHTTP 实现；其他平台：恒失败的桩（err 说明平台限制）。

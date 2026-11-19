@@ -131,8 +131,9 @@ void SkillsPanel::refresh() {
     // 填充筛选下拉（保留当前选择）
     std::string err;
     std::vector<ah::SkillInfo> all;
-    // 筛选下拉尽力而为：失败时下拉留空（主列表失败由下方统一提示），不重复弹 toast
-    if (!platform_.skillList("", "", all, err)) all.clear();
+    // 筛选下拉尽力而为：查询失败时**跳过重建**（保留上一轮候选集）——塌缩会把
+    // 用户选中的项挤丢（-1 空白且粘滞）；主列表失败由下方统一提示
+    const bool listOk = platform_.skillList("", "", all, err);
     std::set<std::string> categories, owners;
     for (const auto& s : all) {
         if (!s.category.empty()) categories.insert(s.category);
@@ -143,7 +144,8 @@ void SkillsPanel::refresh() {
     // "不过滤"这一项既是显示文案又被用来判断是否过滤：展示名与比较必须取同一个值，
     // 否则翻译后 currentText() != "全部" 会把"全部"当成真实分类去过滤（空列表）
     const QString allItem = i18n::trs("全部", "All");
-    // 仅在候选集变化时重建：每 3s 的 clear()+重填会把用户正打开的下拉菜单强制塌掉
+    // 仅在候选集变化时重建（分类/归属各自独立判断——一侧变化不该把另一侧
+    // 正打开的弹窗也塌掉）；每 3s 的 clear()+重填本身就会强制塌掉弹窗
     QStringList wantCat;
     wantCat << allItem;
     for (const auto& c : categories) wantCat << QString::fromStdString(c);
@@ -153,16 +155,21 @@ void SkillsPanel::refresh() {
     QStringList curCatItems, curOwnerItems;
     for (int i = 0; i < categoryCombo_->count(); ++i) curCatItems << categoryCombo_->itemText(i);
     for (int i = 0; i < ownerCombo_->count(); ++i) curOwnerItems << ownerCombo_->itemText(i);
-    if (wantCat != curCatItems || wantOwner != curOwnerItems) {
+    if (listOk && wantCat != curCatItems) {
         categoryCombo_->blockSignals(true);
-        ownerCombo_->blockSignals(true);
         categoryCombo_->clear();
-        ownerCombo_->clear();
         for (const auto& s : wantCat) categoryCombo_->addItem(s);
-        for (const auto& s : wantOwner) ownerCombo_->addItem(s);
-        categoryCombo_->setCurrentText(curCat);
-        ownerCombo_->setCurrentText(curOwner);
+        // 按 index 恢复：setCurrentText 找不到文本会置 -1（空白粘滞）
+        const int idx = categoryCombo_->findText(curCat);
+        categoryCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
         categoryCombo_->blockSignals(false);
+    }
+    if (listOk && wantOwner != curOwnerItems) {
+        ownerCombo_->blockSignals(true);
+        ownerCombo_->clear();
+        for (const auto& s : wantOwner) ownerCombo_->addItem(s);
+        const int idx = ownerCombo_->findText(curOwner);
+        ownerCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
         ownerCombo_->blockSignals(false);
     }
 

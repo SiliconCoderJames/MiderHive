@@ -34,6 +34,7 @@ struct LlmReply {
     int64_t tokensIn = 0;
     int64_t tokensOut = 0;
     bool usageKnown = false;  // provider 未回 usage 时 false——绝不编造估算
+    bool truncated = false;   // 命中 max_tokens/finish=length：回复被上游截断
 };
 
 class LlmClient {
@@ -44,6 +45,9 @@ public:
     // 返回 false 表示调用方取消。失败时 err 为人话描述且返回 {}。
     virtual LlmReply complete(const std::vector<LlmMessage>& history, const ChunkSink& onDelta,
                               std::string& err) = 0;
+    // 硬中止：从另一线程打断正在进行的网络读（complete 尽快以 err="cancelled"
+    // 返回）。complete 返回后调用无效（客户端对象随后销毁）。
+    virtual void cancel() = 0;
 };
 
 // 预设：id 供配置存储与 GUI 引用；baseUrl/model 是可编辑的默认值

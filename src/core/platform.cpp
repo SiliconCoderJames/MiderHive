@@ -123,14 +123,22 @@ bool Platform::initStoreLocked(std::string& err) {
         return false;
     }
     if (!db_.execScript(kSchemaSql, err)) return false;
-    // 存量库迁移：新增列（已存在则静默跳过）
-    db_.tryExec("ALTER TABLE agents ADD COLUMN salt TEXT NOT NULL DEFAULT '';");
-    db_.tryExec("ALTER TABLE token_usage ADD COLUMN idempotency_key TEXT;");
-    db_.tryExec("ALTER TABLE token_usage ADD COLUMN model TEXT NOT NULL DEFAULT '';");
-    db_.tryExec("ALTER TABLE skill_invocations ADD COLUMN reference_id TEXT;");
+    // 存量库迁移：新增列（已存在则静默跳过）。**返回值必须接住**——execScript
+    // 已把 user_version 盖成当前版本，ALTER 若因非重复列原因失败（BUSY/只读卷/
+    // IO 错）而静默通过，库会被打上新版本戳却缺列，之后远处才爆 no such column
+    // 且版本门形同虚设（审计 m3 的教训）
+    if (!db_.tryExec("ALTER TABLE agents ADD COLUMN salt TEXT NOT NULL DEFAULT '';"))
+        { err = "schema migration failed: ALTER agents ADD salt"; return false; }
+    if (!db_.tryExec("ALTER TABLE token_usage ADD COLUMN idempotency_key TEXT;"))
+        { err = "schema migration failed: ALTER token_usage ADD idempotency_key"; return false; }
+    if (!db_.tryExec("ALTER TABLE token_usage ADD COLUMN model TEXT NOT NULL DEFAULT '';"))
+        { err = "schema migration failed: ALTER token_usage ADD model"; return false; }
+    if (!db_.tryExec("ALTER TABLE skill_invocations ADD COLUMN reference_id TEXT;"))
+        { err = "schema migration failed: ALTER skill_invocations ADD reference_id"; return false; }
     // v3：token_usage.source——记账来源（'' = Agent 自报；'llm-ask' = 平台自营
     // 临时问答，预算豁免通道）。外部 HTTP 上报不解析该字段，豁免行只能由平台自造。
-    db_.tryExec("ALTER TABLE token_usage ADD COLUMN source TEXT NOT NULL DEFAULT '';");
+    if (!db_.tryExec("ALTER TABLE token_usage ADD COLUMN source TEXT NOT NULL DEFAULT '';"))
+        { err = "schema migration failed: ALTER token_usage ADD source"; return false; }
     // v2：记录每个版本向量所在的维度（精确清理向量行 + 诊断信息）
     db_.tryExec("ALTER TABLE knowledge_entries ADD COLUMN embedding_dim INTEGER;");
     db_.tryExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_idem "
@@ -1268,12 +1276,43 @@ bool Platform::usageSetBudget(const std::string& actor, int64_t budget, std::str
 // ---------------- LLM 接入（P1：临时问答，预算豁免通道）----------------
 
 namespace {
-// 审计 detail 里的用户输入截断（≤200 字节，不截断多字节字符的中间）
+// 审计 detail 里的用户输入截断（≤200 字节）。必须保证输出是**合法 UTF-8**：
+// 此前只弹续字节，会留下"声明的序列长度超过剩余字节"的孤立首字节——非法
+// UTF-8 经 nlohmann::dump(strict) 抛 type_error.316，异常穿透 worker 线程
+// 直接 std::terminate 整进程（中文提问 ≥68 字即可触发）。
 std::string truncateForAudit(const std::string& s) {
     if (s.size() <= 200) return s;
     std::string out = s.substr(0, 200);
-    while (!out.empty() && (out.back() & 0xC0) == 0x80) out.pop_back();
+    while (!out.empty()) {
+        const unsigned char c = static_cast<unsigned char>(out.back());
+        if ((c & 0xC0) == 0x80) { out.pop_back(); continue; }  // 续字节
+        size_t need = 1;
+        if ((c & 0xE0) == 0xC0) need = 2;
+        else if ((c & 0xF0) == 0xE0) need = 3;
+        else if ((c & 0xF8) == 0xF0) need = 4;
+        if (need > out.size()) out.pop_back();  // 序列被切断，弹掉孤立首字节
+        break;
+    }
     return out + "...";
+}
+
+// base_url 进审计前的脱敏：剥 userinfo（user:pass@）与 query 段（部分网关把
+// 密钥放 URL 里）+ 限长，防审计日志变成凭据藏身处
+std::string sanitizeUrlForAudit(const std::string& url) {
+    std::string out = url;
+    const size_t scheme = out.find("://");
+    if (scheme != std::string::npos) {
+        const size_t authorityStart = scheme + 3;
+        const size_t slash = out.find('/', authorityStart);
+        const size_t at = out.find('@', authorityStart);
+        if (at != std::string::npos && (slash == std::string::npos || at < slash)) {
+            out.erase(authorityStart, at - authorityStart + 1);
+            out.insert(authorityStart, "***@");
+        }
+    }
+    const size_t q = out.find('?');
+    if (q != std::string::npos) out = out.substr(0, q) + "?…";
+    return out;
 }
 }  // namespace
 
@@ -1351,81 +1390,73 @@ bool Platform::llmConfigSet(const std::string& actor, const ah::llm::LlmConfig& 
         fs::rename(fsPath(tmp), fsPath(path), ec);
         if (ec) { err = "cannot replace " + path + ": " + ec.message(); return false; }
     }
-    // 审计留痕，detail 绝不含密钥
+    // 审计留痕，detail 绝不含密钥（base_url 过脱敏：剥 userinfo/query + 限长）
     std::string aerr;
     auditStep(actor, "llm.config_set", cfg.providerId,
               nlohmann::json{{"provider", cfg.providerId},
                              {"protocol", proto},
-                             {"base_url", cfg.baseUrl},
+                             {"base_url", sanitizeUrlForAudit(cfg.baseUrl)},
                              {"model", cfg.model}}.dump(),
               aerr);
     return true;
 }
 
-bool Platform::llmTestConfig(const ah::llm::LlmConfig& cfg, ah::llm::LlmReply& out,
-                             std::string& err) {
-    // 用调用方给定的配置（通常是设置页里还没保存的表单值）发一条最小请求
-    auto client = llmClientFactory_ ? llmClientFactory_(cfg) : ah::llm::makeClient(cfg);
-    err.clear();  // 同 llmAsk：err 残留文本会被误判成本次失败
-    out = client->complete({ah::llm::LlmMessage{"user", "ping"}}, nullptr, err);
-    if (!err.empty()) return false;
-    std::lock_guard lock(mutex_);
-    if (refuseIfUnusable(err)) return false;
-    std::string aerr;
-    auditStep(ah::kManagerName, "llm.test", cfg.providerId,
-              nlohmann::json{{"model", cfg.model}, {"usage_known", out.usageKnown}}.dump(), aerr);
-    return true;
-}
-
-bool Platform::llmAsk(const std::vector<ah::llm::LlmMessage>& history,
-                      const ah::llm::ChunkSink& onDelta, ah::llm::LlmReply& out, std::string& err) {
+std::unique_ptr<ah::llm::LlmClient> Platform::llmAskOpen(ah::llm::LlmConfig& outCfg,
+                                                         std::string& err) {
     ah::llm::LlmConfig cfg;
+    std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)> factory;
     {
         std::lock_guard lock(mutex_);
         bool configured = false;
-        if (!llmConfigGetLocked(cfg, configured, err)) return false;
+        if (!llmConfigGetLocked(cfg, configured, err)) return nullptr;
         if (!configured) {
             err = "LLM provider is not configured yet (Settings > LLM)";
-            return false;
+            return nullptr;
         }
-        if (refuseIfUnusable(err)) return false;
+        if (refuseIfUnusable(err)) return nullptr;
         // env 覆盖密钥：CI/无头场景可不落盘注入
         const std::string envKey = envOr({"MIDERHIVE_LLM_KEY"});
         if (!envKey.empty()) cfg.apiKey = envKey;
+        // 工厂在锁内拷贝到局部：锁外调用不构成与 setLlmClientFactory 的竞态
+        factory = llmClientFactory_;
     }
-    auto client = llmClientFactory_ ? llmClientFactory_(cfg) : ah::llm::makeClient(cfg);
-    // 网络调用不持锁（秒级耗时；mutex_ 只护 SQLite/内存状态）。
-    // err 先清空：调用方的 err 可能带着上一次操作的残留文本，complete 不清 err，
-    // 否则"上次失败的残句"会被误判成本次调用失败（stale-err，实测踩过）。
-    err.clear();
-    ah::llm::LlmReply reply = client->complete(history, onDelta, err);
-    if (!err.empty()) return false;
-    out = reply;
-    // 记账（豁免通道 source=llm-ask：预算口径排除此行）+ 审计。记账失败不掩蔽
-    // 已拿到的回复，但必须如实带出警告（err 非空 + out 有效）。
+    auto client = factory ? factory(cfg) : ah::llm::makeClient(cfg);
+    outCfg = cfg;
+    return client;
+}
+
+bool Platform::llmAskRecord(const std::vector<ah::llm::LlmMessage>& history,
+                            const ah::llm::LlmConfig& cfg, const ah::llm::LlmReply& reply,
+                            std::string& err) {
+    std::lock_guard lock(mutex_);
+    if (refuseIfUnusable(err)) return false;
+    // 记账（豁免通道 source=llm-ask：预算口径排除此行）+ 审计。记账失败如实
+    // 返回 false（调用方已有回复，把 err 当警告展示即可）。
     // 身份用保留名 "user"（人的控制台）——不占 agents 表，也不与 zcode 管理者
     // 身份的用量混账；审计/用量里普通 Agent 看不到这些行。
-    {
-        std::lock_guard lock(mutex_);
-        bool dup = false;
-        std::string recErr;
-        if (!usage_.report("user", reply.tokensIn, reply.tokensOut, "llm", cfg.model, "", "",
-                           dup, recErr, kUsageSourceLlmAsk)) {
-            err = "reply received, but usage accounting failed: " + recErr;
-        }
-        std::string question;
-        for (const auto& m : history) {
-            if (m.role == "user") { question = m.content; break; }
-        }
-        std::string aerr;
-        auditStep("user", "llm.ask", cfg.model,
-                  nlohmann::json{{"model", cfg.model},
-                                 {"tokens_in", reply.tokensIn},
-                                 {"tokens_out", reply.tokensOut},
-                                 {"exempt", true},
-                                 {"question", truncateForAudit(question)}}.dump(),
-                  aerr);
+    bool dup = false;
+    if (!usage_.report("user", reply.tokensIn, reply.tokensOut, "llm", cfg.model, "", "", dup,
+                       err, kUsageSourceLlmAsk))
+        return false;
+    // 问题取**最后一条** user 消息：多轮会话传的是累计 history，
+    // 首条会让每次审计都记同一句（失真）
+    std::string question;
+    for (auto it = history.rbegin(); it != history.rend(); ++it) {
+        if (it->role == "user") { question = it->content; break; }
     }
+    std::string aerr;
+    // dump 用 replace 错误处理器：question 若混入非法 UTF-8（截断残留/畸形输入），
+    // strict 默认会抛 type_error 穿透 worker 线程 std::terminate——replace 把
+    // 坏字节换成 U+FFFD，审计永远可写
+    auditStep("user", "llm.ask", cfg.model,
+              nlohmann::json{{"model", cfg.model},
+                             {"tokens_in", reply.tokensIn},
+                             {"tokens_out", reply.tokensOut},
+                             {"exempt", true},
+                             {"truncated", reply.truncated},
+                             {"question", truncateForAudit(question)}}.dump(
+                  2, ' ', false, nlohmann::detail::error_handler_t::replace),
+              aerr);
     return true;
 }
 

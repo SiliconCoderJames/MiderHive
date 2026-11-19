@@ -885,18 +885,41 @@ class Toast : public QLabel {
 public:
     static void show(QWidget* parent, const QString& msg, bool success = true) {
         // 失败提示节流：面板 refresh 的失败路径在 3s 轮询里反复走到这里，
-        // 持久故障（库被锁/读失败）曾以每 3s 一条的频率轰炸右下角且互相叠印，
-        // 根本读不完。相同文本 30s 内只弹一次；成功提示是用户动作的直接回执，
-        // 不节流（用户连点两次"复制"就该看到两次回执）。
-        static QHash<QString, qint64> lastErrMs;
+        // 持久故障（库被锁）曾以每 3s 一条的频率轰炸右下角且互相叠印，
+        // 根本读不完。相同文本 30s 内只弹一次，但**被吞的次数要可观测**——
+        // 下次真正弹出时附"期间已静默 N 次"，间歇性失败不再无声消失。
+        // 成功提示是用户动作的直接回执，不节流（连点两次"复制"就该看到两次）。
+        struct ErrStamp {
+            qint64 ms = 0;
+            int suppressed = 0;
+        };
+        static QHash<QString, ErrStamp> lastErr;
         if (!success) {
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
-            const auto it = lastErrMs.constFind(msg);
-            if (it != lastErrMs.constEnd() && now - *it < 30000) return;
-            lastErrMs.insert(msg, now);
+            const auto it = lastErr.constFind(msg);
+            if (it != lastErr.constEnd() && now - it->ms < 30000) {
+                ++lastErr[msg].suppressed;
+                return;
+            }
+            QString shown = msg;
+            const auto rec = lastErr.constFind(msg);
+            if (rec != lastErr.constEnd() && rec->suppressed > 0)
+                shown += i18n::trs("（期间已静默 %1 次）", " (%1 similar suppressed)")
+                             .arg(rec->suppressed);
+            lastErr[msg] = {now, 0};
+            if (lastErr.size() > 128) lastErr.clear();  // 长会话卫生：防无限增长
+            auto* t = new Toast(parent, shown, success);
+            t->popup();
+            return;
         }
         auto* t = new Toast(parent, msg, success);
         t->popup();
+    }
+    ~Toast() override {
+        // 计数与销毁路径解耦：父窗口提前销毁（对话框关闭/主题切换重建面板）
+        // 会让 2050ms 定时器连同 --live_ 一起蒸发，计数永久失衡 → 叠放偏移
+        // 无限上漂，气泡全部弹到屏幕外。析构里减，覆盖所有死亡路径
+        if (counted_) --live_;
     }
 
 private:
@@ -921,6 +944,7 @@ private:
         QPoint pos = top->pos() + QPoint(top->width() - width() - 24,
                                          top->height() - height() - 46);
         pos.setY(pos.y() - live_ * (height() + 8));
+        counted_ = true;
         ++live_;
         move(pos);
         QWidget::show();  // 显式调用基类，避免被静态 show(QString,bool) 遮蔽
@@ -933,12 +957,10 @@ private:
         anim->setEndValue(0.0);
         anim->setEasingCurve(QEasingCurve::InQuad);
         QTimer::singleShot(1500, this, [anim] { anim->start(QAbstractAnimation::DeleteWhenStopped); });
-        QTimer::singleShot(2050, this, [this] {
-            --live_;
-            deleteLater();
-        });
+        QTimer::singleShot(2050, this, [this] { deleteLater(); });
     }
 
+    bool counted_ = false;  // popup 成功登记叠放位（析构据此归还）
     // 同屏活跃 Toast 计数（GUI 单线程，进程级即可）
     inline static int live_ = 0;
 };

@@ -98,6 +98,10 @@ SettingsDialog::SettingsDialog(ah::Platform& platform, QWidget* parent)
 
 SettingsDialog::~SettingsDialog() {
     ui::removeThemeListener(themeListenerId_);
+    // 在途「测试连接」：先硬中止（transport 句柄关闭，阻塞读立即失败）再 join，
+    // 不与析构竞速；detached + 裸 this 的旧写法在 WA_DeleteOnClose 下是 UAF
+    if (activeTestClient_) activeTestClient_->cancel();
+    if (llmTestThread_.joinable()) llmTestThread_.join();
 }
 
 void SettingsDialog::showEvent(QShowEvent*) {
@@ -719,6 +723,9 @@ QWidget* SettingsDialog::buildLlmPage() {
 
     llmStatus_ = thLabel("font-size:11px; color:@muted@;", page);
     llmStatus_->setWordWrap(true);
+    // 错误文本可能含服务端原始返回体（截断的 HTML 页等）——按纯文本渲染，
+    // 防 QLabel AutoText 把它当富文本排版
+    llmStatus_->setTextFormat(Qt::PlainText);
     lay->addWidget(llmStatus_);
     lay->addStretch(1);
 
@@ -734,32 +741,49 @@ QWidget* SettingsDialog::buildLlmPage() {
         llmProtoBox_->setCurrentIndex(preset->protocol == ah::llm::Protocol::Anthropic ? 1 : 0);
     });
 
-    // 测试连接：worker 线程发最小请求（不落盘、不记账），结果回 UI 线程
+    // 测试连接：GUI 线程先拿客户端（llmAskOpen：读配置+env 覆盖，无网络），
+    // worker 发最小请求。QPointer guard + 成员线程 + GUI 侧持有的 client：
+    // 对话框（WA_DeleteOnClose）在测试中途被关闭时析构会先 cancel 再 join——
+    // detached + 裸 this 的写法在关窗后 invokeMethod 已销毁对象（审计 H-c）
     connect(llmTestBtn_, &QPushButton::clicked, this, [this] {
-        const ah::llm::LlmConfig cfg = llmFormConfig();
-        if (cfg.baseUrl.empty() || cfg.model.empty() || cfg.apiKey.empty()) {
-            llmStatus_->setText(i18n::trs("请先填好接口地址、模型与密钥。",
-                                          "Fill in the base URL, model and API key first."));
+        ah::llm::LlmConfig cfg;
+        std::string openErr;
+        auto client = platform_.llmAskOpen(cfg, openErr);
+        if (!client) {
+            // 未配置/store 不可用：直接把原因摆出来（含必填项校验的信息）
+            llmStatus_->setText(QString::fromStdString(openErr).toHtmlEscaped());
             return;
         }
         llmTestBtn_->setEnabled(false);
         llmStatus_->setText(i18n::trs("正在连接…", "Connecting…"));
-        std::thread([this, cfg] {
+        if (llmTestThread_.joinable()) llmTestThread_.join();
+        activeTestClient_ = std::shared_ptr<ah::llm::LlmClient>(client.release());
+        std::shared_ptr<ah::llm::LlmClient> shared = activeTestClient_;
+        QPointer<SettingsDialog> guard(this);
+        llmTestThread_ = std::thread([guard, shared, cfg] {
+            std::string err;  // 新局部：无 stale-err
             ah::llm::LlmReply r;
-            std::string err;
-            const bool ok = platform_.llmTestConfig(cfg, r, err);
+            bool ok = true;
+            try {
+                r = shared->complete({ah::llm::LlmMessage{"user", "ping"}}, nullptr, err);
+            } catch (const std::exception& ex) {
+                ok = false;
+                err = std::string("client error: ") + ex.what();
+            }
+            if (!err.empty()) ok = false;
             QMetaObject::invokeMethod(
-                this,
-                [this, ok, err = QString::fromStdString(err)] {
-                    llmTestBtn_->setEnabled(true);
+                guard.data(),
+                [guard, ok, err = QString::fromStdString(err)] {
+                    if (!guard) return;
+                    guard->llmTestBtn_->setEnabled(true);
                     if (ok)
-                        llmStatus_->setText(i18n::trs("连接成功，模型已应答。",
-                                                      "Connected; the model replied."));
+                        guard->llmStatus_->setText(i18n::trs("连接成功，模型已应答。",
+                                                             "Connected; the model replied."));
                     else
-                        llmStatus_->setText(err);  // 传输层/协议错误已是人话
+                        guard->llmStatus_->setText(err);  // 传输层/协议错误已是人话
                 },
                 Qt::QueuedConnection);
-        }).detach();
+        });
     });
 
     // 保存：写 config/llm.json（审计 llm.config_set）
@@ -784,9 +808,13 @@ void SettingsDialog::loadLlmConfig() {
         return;
     }
     if (!configured) return;  // 表单保持空白，占位符即引导
+    int providerIdx = -1;
     for (int i = 0; i < llmProviderBox_->count(); ++i)
         if (llmProviderBox_->itemData(i).toString().toStdString() == cfg.providerId)
-            llmProviderBox_->setCurrentIndex(i);  // 触发预设回填，随后覆盖为已存值
+            providerIdx = i;
+    // 存储里出现未知 providerId（手工编辑过 llm.json）时落到「自定义」而不是
+    // 静默停在 deepseek——否则点保存会把 provider 标签悄悄覆写成错误的预设
+    llmProviderBox_->setCurrentIndex(providerIdx >= 0 ? providerIdx : llmProviderBox_->count() - 1);
     llmUrlEdit_->setText(QString::fromStdString(cfg.baseUrl));
     llmModelEdit_->setText(QString::fromStdString(cfg.model));
     llmKeyEdit_->setText(QString::fromStdString(cfg.apiKey));
