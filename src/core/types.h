@@ -12,6 +12,7 @@ struct AgentInfo {
     std::string name;
     std::string role;           // member | zcode
     std::string status;         // online | offline（由心跳时间推断）
+    bool disabled = false;      // v4 接入开关：true = 平台侧拒接该身份的蜂巢调用
     std::string current_task;
     std::string last_seen_at;
     std::string created_at;

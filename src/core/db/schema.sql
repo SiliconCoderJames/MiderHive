@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS agents (
     api_key_hash TEXT NOT NULL,
     salt         TEXT NOT NULL DEFAULT '',         -- 加盐哈希；空串=旧格式（sha256 明钥）
     status       TEXT NOT NULL DEFAULT 'offline',
+    disabled     INTEGER NOT NULL DEFAULT 0,       -- v4：接入开关（1=平台侧拒接该身份）
     current_task TEXT,
     last_seen_at TEXT,
     created_at   TEXT NOT NULL,
@@ -195,4 +196,4 @@ CREATE INDEX IF NOT EXISTS idx_invocations_ref     ON skill_invocations(referenc
 --   >  当前值 → 库来自更新的 MiderHive，bootstrap 明确拒绝启动（否则会带着错位的
 --              schema 继续跑，那类错误要到数据被写坏时才显形）。
 -- 改 schema 时必须递增本值，并在 platform.cpp 的迁移链里补上对应步骤。
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;

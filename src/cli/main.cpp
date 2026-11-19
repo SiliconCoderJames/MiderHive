@@ -304,7 +304,10 @@ int usage() {
         "                                 密钥走环境变量 MIDERHIVE_EMBED_KEY；仅支持 http://）\n"
         "  register --name X [--role member]              注册新 Agent（需 --master-key 或环境变量）\n"
         "  heartbeat                    [--task \"...\"]                 心跳 + 当前任务\n"
-        "  agents [remove --name N]                     协作者列表 / 移除（移除需主密钥）\n"
+        "  agents [remove --name N] [disable --name N] [enable --name N]\n"
+        "                                 协作者列表 / 移除 / 禁用启用接入（管理操作需主密钥）\n"
+        "  gate close|open                全局接入总闸：一键断开/恢复所有普通 Agent\n"
+        "                                 （主密钥；管理者与 zcode-agent 豁免）\n"
         "  memory get                   [--section S]                 读取用户记忆（启动时必查）\n"
         "  memory set    --section S --key K --value V               写入用户记忆（生成新版本）\n"
         "  memory history --section S --key K                        查看某条记忆的历史版本\n"
@@ -592,8 +595,21 @@ int main(int argc, char** argv) {
         if (sub == "remove") {
             method = "POST"; path = "/api/agents/remove"; needsAgent = false;
             body = {{"name", a.opts.count("name") ? a.opts["name"] : ""}};
+        } else if (sub == "disable" || sub == "enable") {
+            // 接入开关（v4）：平台侧拒接语义，工具配置与密钥不动
+            method = "POST"; needsAgent = false;
+            path = std::string("/api/agents/") + sub;
+            body = {{"name", a.opts.count("name") ? a.opts["name"] : ""}};
         } else {
             path = "/api/agents";
+        }
+    } else if (cmd == "gate") {
+        // 全局接入总闸（主密钥）：关闭后除豁免名单（zcode / zcode-agent）外全部拒接
+        if (sub == "close" || sub == "open") {
+            method = "PUT"; path = "/api/agents-gate"; needsAgent = false;
+            body = {{"closed", sub == "close"}};
+        } else {
+            return usage();
         }
     } else if (cmd == "memory") {
         if (sub == "get") {

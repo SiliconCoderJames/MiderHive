@@ -63,7 +63,7 @@ void AgentService::heartbeat(const std::string& name, const std::string& current
 bool AgentService::listAgents(std::vector<AgentInfo>& out, std::string& err) {
     std::vector<AgentInfo> all;
     bool ok = db_.query(
-        "SELECT name, role, status, current_task, last_seen_at, created_at FROM agents ORDER BY name",
+        "SELECT name, role, status, current_task, last_seen_at, created_at, disabled FROM agents ORDER BY name",
         nullptr,
         [&](Stmt& st) {
             AgentInfo a;
@@ -73,6 +73,7 @@ bool AgentService::listAgents(std::vector<AgentInfo>& out, std::string& err) {
             a.current_task = st.isNull(3) ? std::string() : st.text(3);
             a.last_seen_at = st.isNull(4) ? std::string() : st.text(4);
             a.created_at = st.text(5);
+            a.disabled = st.i64(6) != 0;
             all.push_back(std::move(a));
         },
         err);
@@ -88,6 +89,27 @@ bool AgentService::listAgents(std::vector<AgentInfo>& out, std::string& err) {
             a.status = "online";
     }
     return true;
+}
+
+bool AgentService::setDisabled(const std::string& name, bool disabled, std::string& err) {
+    return db_.query("UPDATE agents SET disabled=?, updated_at=? WHERE name=?",
+                     [&](Stmt& st) {
+                         st.bind(1, static_cast<int64_t>(disabled ? 1 : 0));
+                         st.bind(2, nowIso());
+                         st.bind(3, name);
+                     },
+                     nullptr, err);
+}
+
+bool AgentService::isDisabled(const std::string& name) const {
+    std::string err;
+    bool disabled = false;
+    // IGNORE: 与 nameExists 同理的存在性/状态探测——查询失败按"未禁用"处理；
+    // 真正的拒绝发生在 authenticate（那里对失败路径有如实的错误上报）。
+    db_.query("SELECT disabled FROM agents WHERE name = ?",
+              [&](Stmt& st) { st.bind(1, name); },
+              [&](Stmt& st) { disabled = st.i64(0) != 0; }, err);
+    return disabled;
 }
 
 bool AgentService::removeAgent(const std::string& name, std::string& err) {

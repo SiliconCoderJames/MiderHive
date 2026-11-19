@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
 
 // 库结构版本：必须与 schema.sql 末尾的 `PRAGMA user_version` 保持一致。
 // 改 schema 时两处一起递增，并在 bootstrap 的迁移链里补上对应步骤。
-constexpr int64_t kSchemaVersion = 3;
+constexpr int64_t kSchemaVersion = 4;
 
 // ---- 审计留痕是硬契约：审计写不进去，这次写操作就算失败 ----
 // 理由：schema/README 承诺"所有写操作在 audit_log 留痕"。若让业务数据落库而审计行写不进去，
@@ -139,6 +139,11 @@ bool Platform::initStoreLocked(std::string& err) {
     // 临时问答，预算豁免通道）。外部 HTTP 上报不解析该字段，豁免行只能由平台自造。
     if (!db_.tryExec("ALTER TABLE token_usage ADD COLUMN source TEXT NOT NULL DEFAULT '';"))
         { err = "schema migration failed: ALTER token_usage ADD source"; return false; }
+    // v4：agents.disabled——接入开关（平台侧拒接语义：1 = 该身份的每次蜂巢调用
+    // 403；工具配置与密钥原样不动，重新启用毫秒级恢复）。status 列不能复用——
+    // 它被 heartbeat 无条件写 online、被 listAgents 心跳窗口推断覆写
+    if (!db_.tryExec("ALTER TABLE agents ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;"))
+        { err = "schema migration failed: ALTER agents ADD disabled"; return false; }
     // v2：记录每个版本向量所在的维度（精确清理向量行 + 诊断信息）
     db_.tryExec("ALTER TABLE knowledge_entries ADD COLUMN embedding_dim INTEGER;");
     db_.tryExec("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_idem "
@@ -390,7 +395,86 @@ bool Platform::authenticate(const std::string& agent, const std::string& apiKey)
     if (!agents_.credentialOf(agent, salt, stored, err)) return false;
     if (stored.empty()) return false;
     // 盐为空 = 旧格式哈希；非空 = sha256(salt + 明钥)。常量时间比较，避免计时侧信道
-    return constantTimeEquals(stored, sha256Hex(salt.empty() ? apiKey : salt + apiKey));
+    const bool credentialOk =
+        constantTimeEquals(stored, sha256Hex(salt.empty() ? apiKey : salt + apiKey));
+    if (!credentialOk) return false;
+    // 凭据正确仍可能被接入开关拒掉（disabled/总闸）——任何走 authenticate 的
+    // 路径都无法绕过；HTTP 层用 agentAccessDenied 把原因翻译成 403（而非让
+    // 用户误以为密钥错了）
+    return accessDeniedReasonLocked(agent).empty();
+}
+
+std::string Platform::agentAccessDenied(const std::string& name) const {
+    std::lock_guard lock(mutex_);
+    return accessDeniedReasonLocked(name);
+}
+
+std::string Platform::accessDeniedReasonLocked(const std::string& name) const {
+    // 豁免名单：管理者 + ZCode 工具默认身份（用户拍板：总闸不打断自己的
+    // ZCode 工具；自定义名的 ZCode 工具用逐 Agent 开关豁免）
+    if (isManager(name) || name == "zcode-agent") return "";
+    if (gateClosedLocked()) return "the agent gate is closed";
+    if (agents_.isDisabled(name)) return "this agent is disabled by the administrator";
+    return "";
+}
+
+bool Platform::gateClosedLocked() const {
+    // IGNORE: settings 读失败按"总闸开放"处理——能走到鉴权说明库可用
+    // （refuseIfUnusable 已在 HTTP 入口拦截），这里的失败只剩理论路径；
+    // 总闸是可用性开关，故障时宁可放行也不把用户锁在门外
+    std::string err;
+    std::string value;
+    bool found = false;
+    db_.query("SELECT value FROM settings WHERE key='agents_gate_closed'", nullptr,
+              [&](Stmt& st) { value = st.text(0); found = true; }, err);
+    return found && value == "1";
+}
+
+bool Platform::agentsGateClosed() const {
+    std::lock_guard lock(mutex_);
+    return gateClosedLocked();
+}
+
+bool Platform::agentSetDisabled(const std::string& actor, const std::string& name, bool disabled,
+                                std::string& err) {
+    std::lock_guard lock(mutex_);
+    if (!isManager(actor)) { err = "only zcode can disable agents"; return false; }
+    if (name == kManagerName) { err = "cannot disable the manager agent"; return false; }
+    if (!agents_.nameExists(name)) { err = "agent not found: " + name; return false; }
+    // 开关与留痕同事务（agentRemove 纪律）
+    if (!db_.beginImmediate(err)) return false;
+    if (!agents_.setDisabled(name, disabled, err)) { db_.rollback(); return false; }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, disabled ? "agent.disable" : "agent.enable", name,
+                             nlohmann::json{{"agent", name},
+                                            {"disabled", disabled}}.dump(),
+                             auditErr),
+                  auditErr);
+    if (!db_.commit(err)) { db_.rollback(); return false; }
+    return true;
+}
+
+bool Platform::setAgentsGateClosed(const std::string& actor, bool closed, std::string& err) {
+    std::lock_guard lock(mutex_);
+    // 总闸是管理操作，但允许从工作台（user 语义）触发——与 budget.set 同先例
+    if (actor != "user" && !isManager(actor)) {
+        err = "only the user or zcode can change the agent gate";
+        return false;
+    }
+    if (!db_.beginImmediate(err)) return false;
+    if (!db_.query(
+            "INSERT INTO settings(key, value) VALUES('agents_gate_closed', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&](Stmt& st) { st.bind(1, closed ? "1" : "0"); }, nullptr, err)) {
+        db_.rollback();
+        return false;
+    }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, closed ? "gate.close" : "gate.open", std::string(),
+                             nlohmann::json{{"closed", closed}}.dump(), auditErr),
+                  auditErr);
+    if (!db_.commit(err)) { db_.rollback(); return false; }
+    return true;
 }
 
 bool Platform::authenticateMaster(const std::string& masterKey) const {

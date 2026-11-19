@@ -178,6 +178,13 @@ static bool checkAgent(const httplib::Request& req, Platform& platform, std::str
     actor = req.get_header_value("X-Agent-Name");
     std::string key = req.get_header_value("X-Api-Key");
     if (!platform.authenticate(actor, key)) {
+        // 凭据正确但被接入开关拒掉时，authenticate 也会返回 false——用
+        // accessDenied 区分出 403 + 人话，避免误导用户去换一个本来正确的密钥
+        const std::string denied = platform.agentAccessDenied(actor);
+        if (!denied.empty()) {
+            send(res, fail(403, "connection disabled: " + denied));
+            return false;
+        }
         send(res, fail(401, "invalid agent credentials"));
         return false;
     }
@@ -236,10 +243,62 @@ void HttpServer::setupRoutes() {
             arr.push_back({{"name", a.name},
                            {"role", a.role},
                            {"status", a.status},
+                           {"disabled", a.disabled},
                            {"current_task", a.current_task},
                            {"last_seen_at", a.last_seen_at},
                            {"created_at", a.created_at}});
         send(res, ok(arr));
+    });
+
+    // ---- 接入开关（主密钥）：disable/enable 单个身份，PUT /api/agents-gate 总闸。
+    // 平台侧拒接语义：工具配置与密钥原样不动，禁用后每次调用 403（见 checkAgent）
+    srv.Post("/api/agents/disable", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!checkMaster(req, p, res)) return;
+        auto body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object() || !body.contains("name") ||
+            !body["name"].is_string()) {
+            send(res, fail(400, "name must be a string"));
+            return;
+        }
+        std::string err;
+        const std::string name = body["name"].get<std::string>();
+        if (!p.agentSetDisabled(kManagerName, name, true, err)) {
+            send(res, fail(400, err));
+            return;
+        }
+        send(res, ok(json{{"name", name}, {"disabled", true}}));
+    });
+    srv.Post("/api/agents/enable", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!checkMaster(req, p, res)) return;
+        auto body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object() || !body.contains("name") ||
+            !body["name"].is_string()) {
+            send(res, fail(400, "name must be a string"));
+            return;
+        }
+        std::string err;
+        const std::string name = body["name"].get<std::string>();
+        if (!p.agentSetDisabled(kManagerName, name, false, err)) {
+            send(res, fail(400, err));
+            return;
+        }
+        send(res, ok(json{{"name", name}, {"disabled", false}}));
+    });
+    srv.Put("/api/agents-gate", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!checkMaster(req, p, res)) return;
+        auto body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object() || !body.contains("closed") ||
+            !body["closed"].is_boolean()) {
+            send(res, fail(400, "closed must be a boolean"));
+            return;
+        }
+        std::string err;
+        const bool closed = body["closed"].get<bool>();
+        if (!p.setAgentsGateClosed(kManagerName, closed, err)) {
+            send(res, fail(400, err));
+            return;
+        }
+        send(res, ok(json{{"closed", closed}}));
     });
 
     // ---- Agent 移除（主密钥；管理者自身不可删）----

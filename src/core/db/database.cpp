@@ -42,7 +42,7 @@ void Database::close() {
 }
 
 bool Database::query(const std::string& sql, const std::function<void(Stmt&)>& bind,
-                     const std::function<void(Stmt&)>& row, std::string& err) {
+                     const std::function<void(Stmt&)>& row, std::string& err) const {
     sqlite3_stmt* raw = nullptr;
     if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &raw, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);

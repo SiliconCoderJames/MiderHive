@@ -462,6 +462,57 @@ static void test_platform_end_to_end() {
         CHECK(droidGone);
         CHECK(!p.authenticate("droid", droidKey));  // 凭据随之失效
 
+        // ---- 接入开关（v4）：逐 Agent 禁用/启用 + 全局总闸 ----
+        step("agents.gate");
+        std::string claudeKey;
+        CHECK(p.registerAgent(masterKey, "claude", "member", claudeKey, err));
+        std::string zagentKey;
+        CHECK(p.registerAgent(masterKey, "zcode-agent", "member", zagentKey, err));
+        // 逐 Agent 禁用：凭据正确也拒接；启用即恢复（密钥不变）
+        CHECK(!p.agentSetDisabled("hermes", "claude", true, err));   // 非管理者拒
+        CHECK(!p.agentSetDisabled("zcode", "zcode", true, err));     // 管理者不可禁用
+        CHECK(!p.agentSetDisabled("zcode", "ghost", true, err));     // 不存在拒
+        CHECK(p.agentSetDisabled("zcode", "claude", true, err));
+        CHECK(!p.authenticate("claude", claudeKey));                 // 凭据正确仍拒
+        CHECK(!p.agentAccessDenied("claude").empty());
+        CHECK(p.agentAccessDenied("claude").find("disabled") != std::string::npos);
+        std::vector<ah::AgentInfo> gated;
+        CHECK(p.listAgents(gated, err));
+        bool sawDisabled = false;
+        for (const auto& a : gated)
+            if (a.name == "claude") sawDisabled = a.disabled;
+        CHECK(sawDisabled);                                          // 列表带 disabled 字段
+        CHECK(p.agentSetDisabled("zcode", "claude", false, err));
+        CHECK(p.authenticate("claude", claudeKey));                  // 启用即恢复
+        CHECK(p.agentAccessDenied("claude").empty());
+        // 全局总闸：普通 member 全拒；豁免名单（zcode 管理者 / zcode-agent）放行
+        CHECK(!p.setAgentsGateClosed("hermes", true, err));          // 非管理者/非 user 拒
+        CHECK(p.setAgentsGateClosed("user", true, err));
+        CHECK(p.agentsGateClosed());
+        CHECK(!p.authenticate("claude", claudeKey));
+        CHECK(p.agentAccessDenied("claude").find("gate is closed") != std::string::npos);
+        CHECK(p.authenticate("zcode-agent", zagentKey));             // 豁免：ZCode 工具身份
+        CHECK(p.agentAccessDenied("zcode-agent").empty());
+        CHECK(p.setAgentsGateClosed("user", false, err));
+        CHECK(!p.agentsGateClosed());
+        CHECK(p.authenticate("claude", claudeKey));                  // 开闸即恢复
+        // 审计留痕
+        {
+            std::vector<ah::AuditRecord> rows;
+            CHECK(p.auditList("", "", "", 100, rows, err));
+            bool sawDisable = false, sawEnable = false, sawClose = false, sawOpen = false;
+            for (const auto& r : rows) {
+                if (r.action == "agent.disable") sawDisable = true;
+                if (r.action == "agent.enable") sawEnable = true;
+                if (r.action == "gate.close") sawClose = true;
+                if (r.action == "gate.open") sawOpen = true;
+            }
+            CHECK(sawDisable);
+            CHECK(sawEnable);
+            CHECK(sawClose);
+            CHECK(sawOpen);
+        }
+
         // ---- 加固项：保留身份 / role 白名单 / 点对点消息读隔离 ----
         step("hardening.identity");
         std::string hErr, hKey;
@@ -542,6 +593,61 @@ static void test_platform_end_to_end() {
         else if (bad->status != 401)
             std::printf("  bad-key status=%d body=%s\n", bad->status, bad->body.c_str());
         CHECK(bad && bad->status == 401);
+
+        // ---- 接入开关 HTTP 面：disable → 403 人话 → enable → 恢复；总闸 PUT ----
+        step("http.gate");
+        {
+            const std::string mk = masterKey;
+            auto dis = cli.Post("/api/agents/disable",
+                                {{"X-Master-Key", mk}},
+                                json{{"name", "claude"}}.dump(), "application/json");
+            CHECK(dis && dis->status == 200);
+            auto lst = cli.Get("/api/agents", {{"X-Agent-Name", "hermes"}, {"X-Api-Key", key}});
+            CHECK(lst && lst->status == 200);
+            bool claudeDisabled = false;
+            if (lst) {
+                auto body = json::parse(lst->body);
+                for (const auto& a : body["data"])
+                    if (a["name"] == "claude") claudeDisabled = a.value("disabled", false);
+            }
+            CHECK(claudeDisabled);
+            auto denied = cli.Get("/api/agents",
+                                  {{"X-Agent-Name", "claude"}, {"X-Api-Key", claudeKey}});
+            CHECK(denied && denied->status == 403);
+            if (denied)
+                CHECK(denied->body.find("connection disabled") != std::string::npos);
+            // 管理者身份（zcode）不受影响：claude 的密钥换到 zcode 身份不可测——
+            // 直接验证管理者端点仍可用（checkMaster 不走接入开关）
+            auto masterOk = cli.Get("/api/diagnostics", {{"X-Master-Key", mk}});
+            CHECK(masterOk && masterOk->status == 200);
+            auto en = cli.Post("/api/agents/enable",
+                               {{"X-Master-Key", mk}},
+                               json{{"name", "claude"}}.dump(), "application/json");
+            CHECK(en && en->status == 200);
+            auto again = cli.Get("/api/agents",
+                                 {{"X-Agent-Name", "claude"}, {"X-Api-Key", claudeKey}});
+            CHECK(again && again->status == 200);
+            // 总闸：close → claude 403 gate reason → open → 恢复
+            auto close = cli.Put("/api/agents-gate",
+                                 {{"X-Master-Key", mk}},
+                                 json{{"closed", true}}.dump(), "application/json");
+            CHECK(close && close->status == 200);
+            auto gatedRes = cli.Get("/api/agents",
+                                    {{"X-Agent-Name", "claude"}, {"X-Api-Key", claudeKey}});
+            CHECK(gatedRes && gatedRes->status == 403);
+            if (gatedRes)
+                CHECK(gatedRes->body.find("gate is closed") != std::string::npos);
+            auto zagent = cli.Get("/api/agents",
+                                  {{"X-Agent-Name", "zcode-agent"}, {"X-Api-Key", zagentKey}});
+            CHECK(zagent && zagent->status == 200);  // 豁免：ZCode 工具身份
+            auto open = cli.Put("/api/agents-gate",
+                                {{"X-Master-Key", mk}},
+                                json{{"closed", false}}.dump(), "application/json");
+            CHECK(open && open->status == 200);
+            auto restored = cli.Get("/api/agents",
+                                    {{"X-Agent-Name", "claude"}, {"X-Api-Key", claudeKey}});
+            CHECK(restored && restored->status == 200);
+        }
 
         // ---- 加固项：审计可见性收敛——普通 Agent 只能看自己作为主体的行 ----
         // （审计 detail 携带点对点消息的收件人/主题，全量开放会绕过消息可见性）
@@ -1728,7 +1834,7 @@ static void test_schema_version_gate() {
         std::string err;
         CHECK(p.bootstrap(err));
         p.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(4));
     }
     {
         // 旧库（version=0）：重新 bootstrap 应照常迁移并置回当前版本，重复调用幂等
@@ -1737,11 +1843,11 @@ static void test_schema_version_gate() {
         std::string err;
         CHECK(p.bootstrap(err));
         p.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(4));
         ah::Platform p2(tmp.string());
         CHECK(p2.bootstrap(err));
         p2.shutdown();
-        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
+        CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(4));
     }
     {
         // 来自更新版本的库：必须拒绝启动，且错误说明「更新版本」
@@ -1771,9 +1877,9 @@ static void test_schema_version_gate() {
             const std::string backupName = fs::path(backupPath).filename().string();
             CHECK(!p.backupRestore(backupName, err));
             CHECK(err.find("newer") != std::string::npos);
-            // 原库未被覆盖：版本仍是当前值（3）
+            // 原库未被覆盖：版本仍是当前值（4）
             p.shutdown();
-            CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(3));
+            CHECK_EQ(readVersion(dbPath), static_cast<int64_t>(4));
         }
     }
     std::error_code ec;
@@ -2118,7 +2224,7 @@ static void test_backup_restore_failure_paths() {
         CHECK(writeSchemaVersion(fs::path(bp), 1));
         CHECK(p.backupRestore(backupName, err));
         p.shutdown();
-        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(3));
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(4));
     }
     {
         ah::Platform p(tmp.string());
@@ -2201,7 +2307,7 @@ static void test_backup_restore_failure_paths() {
         // 旧库原样回来了：标记条目仍在（若是被损坏文件覆盖，这里会是 0 或读不出来）
         CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE title='恢复前写入'"),
                  1);
-        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(3));
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(4));
     }
 
     // ---- 5. 恢复中断自愈：主库缺失 + 留底还在 → 启动时自动改回，绝不静默新建空库 ----
@@ -2221,7 +2327,7 @@ static void test_backup_restore_failure_paths() {
         // 空库顶替，这里会是 0）
         CHECK_EQ(countRows(dbPath, "SELECT COUNT(*) FROM knowledge_entries WHERE title='恢复前写入'"),
                  1);
-        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(3));
+        CHECK_EQ(readSchemaVersion(dbPath), static_cast<int64_t>(4));
         // 留底已消费（改回原名），不再是悬空文件
         CHECK(!fs::exists(leftover));
         p.shutdown();

@@ -45,8 +45,10 @@ public:
     void close();
 
     // 单条语句：bind 回调填充参数（参数绑定），row 回调处理每行结果。
+    // const：SELECT 是逻辑只读（last_insert_id_ 仅 INSERT 路径写入，mutable）——
+    // 接入开关的鉴权拒接检查发生在 const 鉴权路径上，读原语必须可达
     bool query(const std::string& sql, const std::function<void(Stmt&)>& bind,
-               const std::function<void(Stmt&)>& row, std::string& err);
+               const std::function<void(Stmt&)>& row, std::string& err) const;
     // 执行脚本（建表语句；不含任何外部输入）。
     bool execScript(const std::string& sql, std::string& err);
     // 迁移用：执行语句，"duplicate column" 类错误静默吞掉并返回 true。
@@ -61,7 +63,7 @@ public:
 
 private:
     sqlite3* db_ = nullptr;
-    int64_t last_insert_id_ = 0;
+    mutable int64_t last_insert_id_ = 0;  // query(const) 内的 INSERT 副产物
 };
 
 }  // namespace ah

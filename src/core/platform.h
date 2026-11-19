@@ -45,6 +45,18 @@ public:
     bool registerAgent(const std::string& masterKey, const std::string& name, const std::string& role,
                        std::string& outApiKey, std::string& err);
     bool isManager(const std::string& name) const;
+    // 接入开关（v4）：非空 = 该身份的蜂巢调用应被拒（人话原因，随 403 下发）。
+    // 豁免：管理者 zcode 与 ZCode 工具默认身份 zcode-agent（自定义名的 ZCode
+    // 工具请用逐 Agent 开关豁免）。
+    std::string agentAccessDenied(const std::string& name) const;
+    // 禁用/启用单个身份（可逆开关：密钥与工具配置原样不动，重新启用即恢复）。
+    // 管理者不可被禁用。照 agentRemove 的管理者校验 + 同事务审计纪律。
+    bool agentSetDisabled(const std::string& actor, const std::string& name, bool disabled,
+                          std::string& err);
+    // 全局接入总闸：关闭后除豁免名单外的所有身份立即拒接。actor 允许 user 或
+    // 管理者（budget.set 先例）。
+    bool setAgentsGateClosed(const std::string& actor, bool closed, std::string& err);
+    bool agentsGateClosed() const;
     // 保留身份（user/zcode/system/master）：在鉴权里是特权主体，禁止注册占用
     static bool isReservedName(const std::string& name);
 
@@ -239,6 +251,10 @@ private:
                                bool* created = nullptr);
     // llmConfigGet 的持锁变体（llmAsk 在已持锁路径上复用）
     bool llmConfigGetLocked(ah::llm::LlmConfig& out, bool& configured, std::string& err);
+    // 接入拒接原因（须持锁）：空 = 放行；否则为随 403 下发的人话
+    std::string accessDeniedReasonLocked(const std::string& name) const;
+    // 总闸读（须持锁）：settings key agents_gate_closed == '1' 视为关闭
+    bool gateClosedLocked() const;
 
     std::string home_dir_;
     Database db_;
