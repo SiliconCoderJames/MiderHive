@@ -22,29 +22,55 @@ join the hive over HTTP or MCP.
 > `%USERPROFILE%\.miderhive`). The old `AGENTHIVE_*` / `ZCODE_*` names and the old data
 > directory are recognised and migrated automatically.
 
-## [Unreleased]
+## [1.5.0] - 2026-11-19
 
 ### Added
-- **LLM provider support (P1)**: the platform can now call a large language model itself —
+- **LLM provider support**: the platform can now call a large language model itself —
   DeepSeek, OpenAI, Anthropic, or any OpenAI-compatible endpoint (dual protocol: OpenAI
-  `chat/completions` and Anthropic `/v1/messages`, including SSE streaming). Outbound calls
-  go through a new WinHTTP transport (TLS via the OS certificate store, system proxy/PAC for
-  free; no new dependencies). Configuration lives in `config/llm.json` (plaintext key on this
-  machine only; atomic write, corrupt-file refusal, audit never contains the key);
-  `MIDERHIVE_LLM_KEY` overrides the key at ask time. New "LLM" page in Settings with preset
-  backfill, masked key entry and a live "Test connection" button. Not yet exposed over
+  `chat/completions` and Anthropic `/v1/messages`, including SSE streaming; a
+  `stop_reason=max_tokens` / `finish_reason=length` truncation is surfaced instead of
+  silently cutting the answer). Outbound calls go through a new WinHTTP transport (TLS via
+  the OS certificate store, system proxy/PAC for free, hard-cancel support, 32 MB response
+  cap; no new dependencies). Configuration lives in `config/llm.json` (plaintext key on this
+  machine only; atomic write, corrupt-file refusal, audit never contains the key and
+  `base_url` is sanitized before audit); `MIDERHIVE_LLM_KEY` overrides the key at ask time.
+  New "LLM" page in Settings with preset backfill, masked key entry and a live
+  "Test connection" button (worker thread with cancel-on-close). Not yet exposed over
   HTTP/MCP.
 - **Ask console (Ctrl+Q)**: a Codex-style multi-turn chat dialog with per-character streaming
-  replies, Enter-to-send, session token totals, and a "cancel by closing" path that
-  propagates all the way down to aborting the HTTP read. Usage is recorded (agent `user`)
-  but **exempt from the weekly budget**.
+  replies, Enter-to-send, session token totals, and a cancel path that closes the HTTP handle
+  outright — closing the window no longer waits on the provider. Usage is recorded (agent
+  `user`) but **exempt from the weekly budget**; an accounting failure is shown as a warning
+  instead of claiming "recorded".
 - **Budget-exempt usage accounting (schema v3)**: `token_usage` gains a `source` column
   (`''` = agent-reported; `llm-ask` = platform's own ask console). Budget numerators and the
   80/95/over alert levels now use `budgeted_tokens` (total minus exempt); `/api/usage/summary`
-  additionally reports `exempt_tokens` / `budgeted_tokens`. External agents cannot create
-  exempt rows (the report endpoint ignores the field).
+  and `/api/usage/report` additionally report `exempt_tokens` / `budgeted_tokens` and their
+  `remaining` uses the budgeted basis. External agents cannot create exempt rows (the report
+  endpoint ignores the field).
+- The UI speaks the existing 8 languages across the new LLM/ask surfaces (37 new keys per
+  language pack).
 - `scripts/llm_mock_server.py`: a dependency-free local mock of both protocols for manually
   verifying the settings page and the ask console without touching a real provider.
+
+### Fixed
+- **Full-tree audit of the new LLM surface (4 parallel reviews)** before release. Highs: a
+  truncated multi-byte audit string could produce invalid UTF-8 and crash the whole process
+  from the ask worker thread (any Chinese question ≥ 68 chars triggered it); in-band
+  `data:{"error":…}` events inside OpenAI-compatible streams were swallowed into a
+  "successful" half-answer; the settings "Test connection" used a detached thread that could
+  invoke into a destroyed dialog (UAF); closing the ask console mid-stream could freeze the
+  UI for up to 120 s (now a hard transport cancel); a leaked Toast stacking counter pushed
+  every later Toast off-screen after parent-window teardowns.
+- **UI review batch**: persistent-failure Toast storms are throttled (same text 30 s, with a
+  "suppressed N times" note) and stack cleanly instead of overprinting; the logs/skills
+  filter dropdowns no longer collapse mid-selection on every 3 s refresh (and a transient
+  query failure no longer wipes the candidate list); message bubbles truncate safely
+  (before HTML escaping, surrogate-pair aware) and a "View full text" action opens the full
+  body — long task assignments are readable again.
+- Schema migrations now hard-fail bootstrap when an `ALTER TABLE` fails for a reason other
+  than "column exists" — previously a failed migration could leave the database stamped with
+  the new `user_version` but missing the column, surfacing far away as "no such column".
 
 ## [1.4.0] - 2026-10-11
 
@@ -656,7 +682,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.1...v1.2.2
