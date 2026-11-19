@@ -204,6 +204,20 @@ public:
                    const std::string& sinceIso, int limit, std::vector<AuditRecord>& out,
                    std::string& err, const std::string& viewer = {});
 
+    // ---- 摘要沉淀（P2：平台自营 LLM 调用，受预算闸门约束）----
+    // 调度状态读/写：enabled + interval 供 GUI 自动摘要行与调度判断；
+    // last_run_at 是"成功才推进"的水位（同时是取料 since），last_status 供展示
+    DigestSchedule digestSchedule() const;
+    bool digestSetSchedule(const std::string& actor, bool enabled, int64_t intervalHours,
+                           std::string& err);
+    // 跑一轮摘要沉淀：预算闸门（mode 口径超预算 → skip 不调 LLM）→ 取料
+    // （audit/messages 自水位起，errors 客户端过滤）→ LLM 摘要（不持锁）→
+    // 记账 source=llm-digest（计入预算）→ 写知识条目（tag=digest）→ 推进水位。
+    // 手动触发不受 digest_enabled 限制（调度器自行判断）。cancelOut 可空。
+    // statsJson 返回 {"generated":…} / {"skipped_reason":…} 平铺统计。
+    bool digestRunOnce(const std::string& actor, std::string& statsJson, std::string& err,
+                       std::function<void()>* cancelOut = nullptr);
+
     // ---- 运维：维护 / 备份恢复 ----
     // 审计轮转（30 天或 10 万条）+ 已解决错误归档清理；有删除时 VACUUM。
     // 返回统计 JSON（deleted_audit/deleted_errors/vacuumed）。

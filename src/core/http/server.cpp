@@ -1047,6 +1047,17 @@ void HttpServer::setupRoutes() {
                           {"request_budget", cfg.request_budget}}));
     });
 
+    // ---- 摘要沉淀（主密钥）：手动触发一轮（调度器/预算闸门在 Platform 内）----
+    srv.Post("/api/digest/run", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!checkMaster(req, p, res)) return;
+        std::string stats, err;
+        if (!p.digestRunOnce(kManagerName, stats, err)) {
+            send(res, fail(500, err.empty() ? "digest failed" : err));
+            return;
+        }
+        send(res, ok(safeStoredJson(stats)));
+    });
+
     // ---- 操作日志 ----
     srv.Get("/api/audit", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor;

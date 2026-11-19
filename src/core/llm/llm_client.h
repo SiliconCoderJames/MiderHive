@@ -22,6 +22,8 @@ struct LlmConfig {
     std::string baseUrl;  // 形如 https://api.deepseek.com，不含方法路径（尾斜杠自动剥）
     std::string model;    // 如 deepseek-chat
     std::string apiKey;
+    int maxTokens = 0;    // 0 = provider 默认；>0 时随请求下发（Anthropic 本就必填，
+                          // 用它替换内置 4096；OpenAI 形状按需加字段）
 };
 
 struct LlmMessage {

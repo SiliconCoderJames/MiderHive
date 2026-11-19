@@ -2962,6 +2962,116 @@ static void test_llm_protocols() {
     t.join();
 }
 
+// ---- 摘要沉淀 digestRunOnce：预算闸门跳过 / 取料生成知识条目 / 水位推进 /
+// 记账 source=llm-digest / 审计 digest.run ----
+static void test_digest() {
+    using namespace ah::llm;
+    fs::path tmp = fs::temp_directory_path() / ("miderhive_digest_" + ah::randomHex(6));
+    fs::create_directories(tmp);
+    const std::string dbPath = (tmp / "platform.db").string();
+    std::string err;
+
+    ah::Platform p(tmp.string());
+    CHECK(p.bootstrap(err));
+
+    // Fake 工厂：固定摘要回复 + usage
+    struct FakeClient final : LlmClient {
+        std::vector<LlmMessage>* promptSink = nullptr;  // 捕获发给模型的 prompt
+        std::string name() const override { return "fake"; }
+        void cancel() override {}
+        LlmReply complete(const std::vector<LlmMessage>& h, const ChunkSink&,
+                          std::string& e) override {
+            if (promptSink) *promptSink = h;
+            LlmReply r;
+            r.text = "摘要：Agent 动态正常；无未解决错误；建议沉淀检索经验。";
+            r.tokensIn = 40;
+            r.tokensOut = 10;
+            r.usageKnown = true;
+            return r;
+        }
+    };
+    std::vector<LlmMessage> lastPrompt;
+    int fakeCalls = 0;
+    p.setLlmClientFactory([&](const LlmConfig&) {
+        ++fakeCalls;
+        auto f = std::make_unique<FakeClient>();
+        f->promptSink = &lastPrompt;
+        return f;
+    });
+
+    // 播种活动：注册两个 Agent + token 上报 + 错误 + 消息（digest 的四种取料）
+    std::string k1, k2;
+    std::string mk = readFile((tmp / "config" / "master.key").string());
+    CHECK(p.registerAgent(mk, "claude", "member", k1, err));
+    CHECK(p.registerAgent(mk, "cursor", "member", k2, err));
+    bool dup = false;
+    CHECK(p.usageReport("claude", 500, 200, "chat", "", "", "", dup, err));
+    ah::ErrorReport erOut;
+    CHECK(p.errorReport("claude", "warn", "test", "编译失败", "MSVC C2062", "", erOut, err));
+    ah::Message msg;
+    CHECK(p.messageSend("note", "claude", "", "广播", "常规通报", msg, err));
+
+    // ---- 预算耗尽：skip 不调 LLM 不花钱 ----
+    CHECK(p.usageSetBudgetConfig("zcode", "tokens", 1, 100, err));  // 预算 1 < 已耗 700
+    std::string stats;
+    CHECK(p.digestRunOnce("zcode", stats, err));
+    CHECK(stats.find("budget exhausted") != std::string::npos);
+    CHECK_EQ(fakeCalls, 0);  // 闸门拦截：LLM 一次都没调
+
+    // ---- 放开预算：取料生成知识条目 + 记账 llm-digest + 水位推进 ----
+    {
+        std::ofstream lf(ah::fsPath((tmp / "config" / "llm.json").string()), std::ios::trunc);
+        lf << R"({"provider":"fake","protocol":"openai","base_url":"http://127.0.0.1:9",)"
+              R"("model":"fake-model","api_key":"digest-test-key"})";
+    }
+    CHECK(p.usageSetBudgetConfig("zcode", "tokens", 10'000'000, 1000, err));
+    const bool ran = p.digestRunOnce("zcode", stats, err);
+    CHECK(ran);
+    CHECK(stats.find("\"generated\": true") != std::string::npos);
+    CHECK_EQ(fakeCalls, 1);
+    CHECK(lastPrompt.back().content.find("编译失败") != std::string::npos);   // 错误进料
+    CHECK(lastPrompt.back().content.find("广播") != std::string::npos);       // 消息进料
+    CHECK(lastPrompt.back().content.find("编译失败") != std::string::npos);
+    {
+        std::vector<ah::KnowledgeEntry> entries;
+        CHECK(p.knowledgeList(10, "digest", entries, err));
+        CHECK_EQ(entries.size(), std::size_t{1});
+        CHECK(entries.front().content.find("摘要") != std::string::npos);
+    }
+    int64_t digestRows =
+        countRows(dbPath, "SELECT COUNT(*) FROM token_usage WHERE source='llm-digest'");
+    CHECK_EQ(digestRows, static_cast<int64_t>(1));  // 计入预算（非豁免）
+    {
+        std::vector<ah::AuditRecord> rows;
+        CHECK(p.auditList("", "", "", 100, rows, err));
+        bool sawRun = false, sawSkip = false;
+        for (const auto& r : rows) {
+            if (r.action == "digest.run") sawRun = true;
+            if (r.action == "digest.skip") sawSkip = true;
+        }
+        CHECK(sawRun);
+        CHECK(sawSkip);
+    }
+
+    // ---- 水位推进：跨秒后再跑一轮 → 无新料 → no activity skip ----
+    // （created_at/水位同为秒级 ISO 字符串；同秒内重跑会把 >= 水位的旧料再吃一遍）
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    CHECK(p.digestRunOnce("zcode", stats, err));
+    CHECK(stats.find("no activity") != std::string::npos);
+    CHECK_EQ(fakeCalls, 1);  // 空跑不调 LLM
+
+    // ---- 调度状态读写 ----
+    CHECK(p.digestSetSchedule("user", true, 6, err));
+    const ah::DigestSchedule sched = p.digestSchedule();
+    CHECK(sched.enabled);
+    CHECK_EQ(sched.interval_hours, static_cast<int64_t>(6));
+    CHECK(!p.digestSetSchedule("claude", true, 6, err));  // 非管理者/非 user 拒
+    CHECK(!p.digestSetSchedule("user", true, 0, err));    // 间隔越界拒
+
+    p.shutdown();
+    fs::remove_all(tmp);
+}
+
 // ---- LLM 平台集成：llm.json 往返与损坏拒写、schema v3 的 source 列、
 // 豁免记账（预算口径排除）、审计脱敏（密钥绝不入审计）、env 覆盖密钥 ----
 static void test_llm_platform() {
@@ -3214,6 +3324,7 @@ int main() {
     run("llm_transport", test_llm_transport);
     run("llm_protocols", test_llm_protocols);
     run("llm_platform", test_llm_platform);
+    run("digest", test_digest);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

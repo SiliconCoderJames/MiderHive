@@ -1605,6 +1605,259 @@ void Platform::setLlmClientFactory(
     llmClientFactory_ = std::move(f);
 }
 
+// ---------------- 摘要沉淀（digest）：受预算闸门约束的自营调用 ----------------
+
+DigestSchedule Platform::digestSchedule() const {
+    std::lock_guard lock(mutex_);
+    DigestSchedule out;
+    out.enabled = false;
+    out.interval_hours = 24;
+    std::string err;
+    // IGNORE：读失败按默认值（未启用/24h）——与总闸同款可用性取舍，能走到
+    // 这里的调用路径已被 refuseIfUnusable 拦过一次
+    db_.query("SELECT value FROM settings WHERE key='digest_enabled'", nullptr,
+              [&](Stmt& st) { out.enabled = st.text(0) == "1"; }, err);
+    db_.query("SELECT value FROM settings WHERE key='digest_interval_hours'", nullptr,
+              [&](Stmt& st) { out.interval_hours = st.i64(0); }, err);
+    if (out.interval_hours <= 0) out.interval_hours = 24;
+    db_.query("SELECT value FROM settings WHERE key='digest_last_run_at'", nullptr,
+              [&](Stmt& st) { out.last_run_at = st.text(0); }, err);
+    db_.query("SELECT value FROM settings WHERE key='digest_last_status'", nullptr,
+              [&](Stmt& st) { out.last_status = st.text(0); }, err);
+    return out;
+}
+
+bool Platform::digestSetSchedule(const std::string& actor, bool enabled, int64_t intervalHours,
+                                 std::string& err) {
+    std::lock_guard lock(mutex_);
+    if (actor != "user" && !isManager(actor)) {
+        err = "only the user or zcode can change digest settings";
+        return false;
+    }
+    if (intervalHours < 1 || intervalHours > 168) {
+        err = "digest interval must be 1..168 hours";
+        return false;
+    }
+    if (!db_.beginImmediate(err)) return false;
+    bool ok = db_.query(
+        "INSERT INTO settings(key, value) VALUES('digest_enabled', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [&](Stmt& st) { st.bind(1, enabled ? "1" : "0"); }, nullptr, err);
+    if (ok)
+        ok = db_.query(
+            "INSERT INTO settings(key, value) VALUES('digest_interval_hours', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&](Stmt& st) { st.bind(1, intervalHours); }, nullptr, err);
+    if (!ok) {
+        db_.rollback();
+        return false;
+    }
+    std::string auditErr;
+    AUDIT_OR_FAIL(audit_.log(actor, "digest.config", std::string(),
+                             nlohmann::json{{"enabled", enabled},
+                                            {"interval_hours", intervalHours}}.dump(),
+                             auditErr),
+                  auditErr);
+    if (!db_.commit(err)) {
+        db_.rollback();
+        return false;
+    }
+    return true;
+}
+
+namespace {
+// 水位推进需要"最大已消费行 +1 秒"：parseIso 解析后加一秒再格式化回平台 ISO。
+// 解析失败原样返回（调用方用 max(now, 该值) 兜底）。
+std::string isoAdvanceOneSec(const std::string& iso) {
+    std::time_t t = 0;
+    if (!parseIso(iso, t)) return iso;
+    t += 1;
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    char buf[32] = "";
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
+}  // namespace
+
+bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, std::string& err,
+                             std::function<void()>* cancelOut) {
+    ah::llm::LlmConfig cfg;
+    std::string watermark;
+    // ---- 预算闸门（先查后调）：mode 口径超预算 → 跳过，不调 LLM 不花钱 ----
+    {
+        std::lock_guard lock(mutex_);
+        if (refuseIfUnusable(err)) return false;
+    }
+    UsageSummary sum;
+    if (!usageSummary(sum, err)) return false;
+    const double ratio = sum.budget_mode == kBudgetModeRequests
+                             ? (sum.request_budget > 0
+                                    ? static_cast<double>(sum.budgeted_calls) / sum.request_budget
+                                    : 0.0)
+                             : (sum.budget > 0 ? static_cast<double>(sum.budgeted_tokens)
+                                                     / sum.budget
+                                               : 0.0);
+    if (ratio >= 1.0) {
+        statsJson = nlohmann::json{{"skipped_reason", "budget exhausted"},
+                                   {"budget_mode", sum.budget_mode}}.dump();
+        std::lock_guard lock(mutex_);
+        std::string aerr;
+        auditStep(actor, "digest.skip", std::string(), statsJson, aerr);
+        return true;
+    }
+
+    // ---- 取料（锁内逐个查）：audit/messages 自水位起，errors 客户端过滤 ----
+    std::string lastRunAt, lastStatus;
+    std::vector<AuditRecord> audits;
+    std::vector<Message> msgs;
+    std::vector<ErrorReport> errs;
+    std::vector<AgentInfo> agents;
+    std::string maxCreated;  // 本轮已消费行的最大 created_at（水位推进用）
+    {
+        std::lock_guard lock(mutex_);
+        std::string qerr;
+        db_.query("SELECT value FROM settings WHERE key='digest_last_run_at'", nullptr,
+                  [&](Stmt& st) { lastRunAt = st.text(0); }, qerr);
+        db_.query("SELECT value FROM settings WHERE key='digest_last_status'", nullptr,
+                  [&](Stmt& st) { lastStatus = st.text(0); }, qerr);
+        watermark = lastRunAt.empty() ? isoDaysAgo(30) : lastRunAt;  // 审计轮转上限 30 天
+        if (!auditList("", "", watermark, 200, audits, qerr, std::string())) qerr.clear();
+        if (!messageList("", "", "", watermark, 100, msgs, qerr, std::string())) qerr.clear();
+        if (!errorList("", "", 50, errs, qerr)) qerr.clear();
+        if (!listAgents(agents, qerr)) qerr.clear();
+        // 自排除：digest 写审计用 actor="user"，且上一轮的水位推进行 created_at
+        // 恰等于新水位（>= 会命中）——不排掉的话每轮都把自己的痕迹当新活动，
+        // 自激永不停。actor=user 的行全部视为平台自营（摘要只关心 Agent 侧活动）
+        for (auto it = audits.begin(); it != audits.end();)
+            if (it->actor == "user" || it->action.rfind("digest.", 0) == 0)
+                it = audits.erase(it);
+            else
+                ++it;
+        // errorList 没有 since 参数：拉最近 50 条后按 created_at 客户端过滤
+        for (auto it = errs.begin(); it != errs.end();)
+            if (it->created_at <= watermark)
+                it = errs.erase(it);
+            else
+                ++it;
+        for (const auto& r : audits)
+            if (r.created_at > maxCreated) maxCreated = r.created_at;
+        for (const auto& m : msgs)
+            if (m.created_at > maxCreated) maxCreated = m.created_at;
+        for (const auto& e : errs)
+            if (e.created_at > maxCreated) maxCreated = e.created_at;
+    }
+    // 活动判断只看三类流（audit/messages/errors）；Agent 状态快照是 prompt
+    // 的上下文，不是活动——注册过的 Agent 恒非空，算进去会让"无活动"永假
+    const bool hasActivity = !audits.empty() || !msgs.empty() || !errs.empty();
+    if (!hasActivity) {
+        // 空跑也推进水位：防止水位永不动导致取料越积越多
+        statsJson = nlohmann::json{{"skipped_reason", "no activity"}}.dump();
+        std::lock_guard lock(mutex_);
+        std::string werr;
+        db_.query(
+            "INSERT INTO settings(key, value) VALUES('digest_last_run_at', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&](Stmt& st) { st.bind(1, nowIso()); }, nullptr, werr);
+        db_.query(
+            "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&](Stmt& st) { st.bind(1, statsJson); }, nullptr, werr);
+        return true;
+    }
+
+    // ---- 拼 prompt（中文，分节；各字段截断防单条失控）----
+    auto cut = [](const std::string& s, size_t n) {
+        return s.size() <= n ? s : s.substr(0, n) + "…";
+    };
+    std::string auditLines, msgLines, errLines, agentLines;
+    for (const auto& r : audits)
+        auditLines += cut(r.created_at, 16) + " " + cut(r.actor, 40) + " " + cut(r.action, 40) +
+                      (r.target.empty() ? "" : " → " + cut(r.target, 60)) + "\n";
+    for (const auto& m : msgs)
+        msgLines += cut(m.sender, 40) + " → " +
+                    (m.recipient.empty() ? "全员" : cut(m.recipient, 40)) + ": " +
+                    cut(m.subject, 80) + "\n";
+    for (const auto& e : errs)
+        errLines += "[" + e.severity + "] " + cut(e.title, 100) + " (" + e.status + ")\n";
+    for (const auto& a : agents)
+        agentLines += cut(a.name, 40) + " (" + a.status +
+                      (a.disabled ? ", disabled" : "") + "): " + cut(a.current_task, 80) + "\n";
+    std::string prompt =
+        "你是蜂巢协作平台的值班分析师。请把下面的蜂巢活动记录整理成一份不超过 500 字的"
+        "中文结构化摘要，分三节：『Agent 动态』（谁在做什么）、『错误与风险』（未解决"
+        "错误与建议）、『值得沉淀的知识』（可复用经验与下一步建议）。只输出摘要正文，"
+        "不要输出前后缀。\n\n== Agent 活动记录 ==\n" +
+        (auditLines.empty() ? "（无）" : auditLines) + "\n== 消息 ==\n" +
+        (msgLines.empty() ? "（无）" : msgLines) + "\n== 错误 ==\n" +
+        (errLines.empty() ? "（无）" : errLines) + "\n== Agent 状态 ==\n" +
+        (agentLines.empty() ? "（无）" : agentLines);
+
+    // ---- 调 LLM（不持锁；maxTokens 限成本）----
+    auto client = llmAskOpen(cfg, err);
+    if (!client) return false;
+    cfg.maxTokens = 1024;
+    if (cancelOut) *cancelOut = [c = client.get()] { c->cancel(); };
+    err.clear();  // stale-err 纪律
+    ah::llm::LlmReply reply = client->complete({ah::llm::LlmMessage{"user", prompt}}, nullptr,
+                                               err);
+    const bool ok = err.empty() && !reply.text.empty();
+    // ---- 收尾（持锁）：记账 + 写知识 + 水位/状态 + 审计 ----
+    {
+        std::lock_guard lock(mutex_);
+        if (!ok) {
+            // LLM 失败：水位不推进（下轮重新吃同一批料），状态如实落库供 GUI 展示
+            std::string werr;
+            const std::string status = nlohmann::json{{"error", truncateForAudit(err)}}.dump(
+                2, ' ', false, nlohmann::detail::error_handler_t::replace);
+            db_.query(
+                "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [&](Stmt& st) { st.bind(1, status); }, nullptr, werr);
+            return false;
+        }
+        bool dup = false;
+        if (!usage_.report("user", reply.tokensIn, reply.tokensOut, "llm", cfg.model, "", "",
+                           dup, err, kUsageSourceLlmDigest)) {
+            err = "digest generated, but usage accounting failed: " + err;
+        }
+        KnowledgeEntry entry;
+        const std::string title = "蜂巢摘要 " + nowIso().substr(0, 16);
+        std::string kerr;
+        const bool written = knowledgeCreate("user", title, reply.text, {"digest"}, "蜂巢摘要",
+                                             {}, "", entry, kerr);
+        // 水位推进到 max(now, 最大已消费行 +1s)：now 与本轮行同秒时（快速连跑/
+        // 测试），+1s 保证下一轮的 >= 不会重吃同一秒的行
+        std::string newWatermark = nowIso();
+        if (!maxCreated.empty()) {
+            const std::string past = isoAdvanceOneSec(maxCreated);
+            if (past > newWatermark) newWatermark = past;
+        }
+        db_.query(
+            "INSERT INTO settings(key, value) VALUES('digest_last_run_at', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&](Stmt& st) { st.bind(1, newWatermark); }, nullptr, kerr);
+        statsJson = nlohmann::json{{"generated", written},
+                                   {"tokens_in", reply.tokensIn},
+                                   {"tokens_out", reply.tokensOut},
+                                   {"truncated", reply.truncated},
+                                   {"knowledge_uuid", written ? entry.uuid : std::string()}}.dump(
+            2, ' ', false, nlohmann::detail::error_handler_t::replace);
+        db_.query(
+            "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&](Stmt& st) { st.bind(1, statsJson); }, nullptr, kerr);
+        std::string aerr;
+        auditStep(actor, "digest.run", written ? entry.uuid : std::string(), statsJson, aerr);
+        if (!written) err = "digest generated, but writing the knowledge entry failed: " + kerr;
+    }
+    return true;
+}
+
 // ---------------- 操作日志 ----------------
 
 bool Platform::auditList(const std::string& actorFilter, const std::string& actionFilter,

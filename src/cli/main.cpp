@@ -308,6 +308,8 @@ int usage() {
         "                                 协作者列表 / 移除 / 禁用启用接入（管理操作需主密钥）\n"
         "  gate close|open                全局接入总闸：一键断开/恢复所有普通 Agent\n"
         "                                 （主密钥；管理者与 zcode-agent 豁免）\n"
+        "  digest run                     手动跑一轮摘要沉淀：LLM 整理近期活动写入知识库\n"
+        "                                 （主密钥；受预算闸门约束，超预算自动跳过）\n"
         "  memory get                   [--section S]                 读取用户记忆（启动时必查）\n"
         "  memory set    --section S --key K --value V               写入用户记忆（生成新版本）\n"
         "  memory history --section S --key K                        查看某条记忆的历史版本\n"
@@ -608,6 +610,14 @@ int main(int argc, char** argv) {
         if (sub == "close" || sub == "open") {
             method = "PUT"; path = "/api/agents-gate"; needsAgent = false;
             body = {{"closed", sub == "close"}};
+        } else {
+            return usage();
+        }
+    } else if (cmd == "digest") {
+        // 摘要沉淀（主密钥）：手动跑一轮（预算闸门在 Platform 内，超预算自动跳过）
+        if (sub == "run") {
+            method = "POST"; path = "/api/digest/run"; needsAgent = false;
+            body = json::object();
         } else {
             return usage();
         }

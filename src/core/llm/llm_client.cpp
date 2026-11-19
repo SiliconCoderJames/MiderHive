@@ -165,6 +165,7 @@ public:
         for (const auto& m : history) arr.push_back(json{{"role", m.role}, {"content", m.content}});
         const bool stream = static_cast<bool>(onDelta);
         json body{{"model", cfg_.model}, {"messages", arr}};
+        if (cfg_.maxTokens > 0) body["max_tokens"] = cfg_.maxTokens;
         if (stream) {
             body["stream"] = true;
             // 主流兼容端点（OpenAI/DeepSeek/vLLM/LM Studio）都认；个别老端点
@@ -276,7 +277,8 @@ public:
         }
         const bool stream = static_cast<bool>(onDelta);
         json body{{"model", cfg_.model},
-                  {"max_tokens", 4096},  // Anthropic 必填；P1 不暴露配置
+                  // Anthropic 必填；调用方可用 cfg.maxTokens 覆盖（如摘要限成本）
+                  {"max_tokens", cfg_.maxTokens > 0 ? cfg_.maxTokens : 4096},
                   {"messages", arr}};
         if (!system.empty()) body["system"] = system;
         if (stream) body["stream"] = true;
