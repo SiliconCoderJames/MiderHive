@@ -138,6 +138,14 @@ struct UsageBudgetConfig {
     int64_t request_budget = 0; // mode=requests 时的分母
 };
 
+// 摘要沉淀调度状态（settings 四键的聚合读）：GUI 自动摘要行与调度器共用
+struct DigestSchedule {
+    bool enabled = false;        // digest_enabled
+    int64_t interval_hours = 24; // digest_interval_hours
+    std::string last_run_at;     // digest_last_run_at（成功才推进的水位）
+    std::string last_status;     // digest_last_status（JSON 统计/跳过原因）
+};
+
 struct UsageDailyPoint {
     std::string day;            // UTC 日期 YYYY-MM-DD
     int64_t tokens = 0;

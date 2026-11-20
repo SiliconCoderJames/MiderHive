@@ -21,6 +21,9 @@ public:
     void refresh() override;
     void retranslate() override;
     void focusFilter() override;
+    // 深链落地：来源面板把上下文变成这里的过滤条件（目前支持 "tag"——
+    // 自动摘要的「查看 digest」经 drillTo 到达后自动按标签过滤）
+    void applyFilter(const QString& key, const QString& value) override;
 
 private slots:
     void onSearch();

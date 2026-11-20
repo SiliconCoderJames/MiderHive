@@ -2,7 +2,9 @@
 // 态势感知工作台自定义控件：环形进度、横向/纵向柱状图、主题色卡、Toast、
 // Agent 卡片、告警卡片、可折叠区块卡片。全部 QPainter / 原生 widget 实现，无 QML。
 #include <QBrush>
+#include <QComboBox>
 #include <QConicalGradient>
+#include <QFormLayout>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -446,54 +448,116 @@ private:
     QPointer<QVariantAnimation> anim_;  // DeleteWhenStopped 会自删，用 QPointer 防悬空
 };
 
-// ---- 本周 Token 预算调整对话框：唯一的界面修改入口（总览环形图与「用量分析」共用）。
-// 此前预算只能改库或靠脚本，界面上无入口——用户找不到在哪里调。----
+// ---- 本周预算调整对话框：唯一的界面修改入口（总览环形图与「用量分析」共用）。
+// 三键整体编辑：口径模式（Token / 请求数）+ 两种分母。此前预算只能改库或靠脚本。----
 class BudgetEditDialog : public QDialog {
 public:
-    BudgetEditDialog(qint64 current, QWidget* parent = nullptr) : QDialog(parent) {
-        setWindowTitle(i18n::trs("调整本周 Token 预算", "Adjust Weekly Token Budget"));
+    BudgetEditDialog(const QString& mode, qint64 tokenBudget, qint64 requestBudget,
+                     QWidget* parent = nullptr)
+        : QDialog(parent) {
+        setWindowTitle(i18n::trs("调整本周预算", "Adjust Weekly Budget"));
         setModal(true);
-        setMinimumWidth(380);
+        setMinimumWidth(400);
         auto* lay = new QVBoxLayout(this);
         lay->setSpacing(10);
         auto* tip = new QLabel(i18n::trs(
-            "预算用于用量告警：80% 提醒、95% 严重、超出标红；只做提示，不拦截上报。",
-            "The budget drives usage alerts: 80% warn, 95% critical, over shows red. "
-            "Advisory only — reporting is never blocked."), this);
+            "口径随模式切换（80% 提醒、95% 严重、超出标红）。对 Agent 上报永不拦截；"
+            "仅平台自营摘要沉淀受预算闸门约束（超预算自动跳过）。",
+            "The mode switches the basis (80% warn, 95% critical, over shows red). Agent "
+            "reporting is never blocked; only the platform's own digest calls are budget-gated "
+            "(skipped automatically when over)."), this);
         tip->setWordWrap(true);
         tip->setStyleSheet(ui::th("color:@muted@; font-size:12px;"));
         lay->addWidget(tip);
+
+        auto* form = new QFormLayout;
+        modeBox_ = new QComboBox(this);
+        modeBox_->addItem(i18n::trs("按 Token（周）", "By tokens (weekly)"), "tokens");
+        modeBox_->addItem(i18n::trs("按调用次数（周）", "By request count (weekly)"), "requests");
+        form->addRow(i18n::trs("预算口径", "Basis"), modeBox_);
+
         spin_ = new QSpinBox(this);
         spin_->setRange(1'000, 2'000'000'000);
         spin_->setSingleStep(100'000);
         spin_->setGroupSeparatorShown(true);  // 千分位：大数字一眼读出量级
         spin_->setAccelerated(true);
-        spin_->setValue(int(qBound<qint64>(qint64(1000), current, qint64(2000000000))));
+        spin_->setValue(int(qBound<qint64>(qint64(1000), tokenBudget, qint64(2000000000))));
         spin_->setStyleSheet(ui::th("QSpinBox { font-size:15px; padding:6px 8px; }"));
-        lay->addWidget(spin_);
-        auto* presets = new QHBoxLayout;
-        auto* presetsLabel = new QLabel(i18n::trs("常用:", "Presets:"), this);
-        presetsLabel->setStyleSheet(ui::th("color:@muted@;"));
-        presets->addWidget(presetsLabel);
+        tokenRow_ = new QWidget(this);
+        auto* tokenLay = new QHBoxLayout(tokenRow_);
+        tokenLay->setContentsMargins(0, 0, 0, 0);
+        tokenLay->addWidget(spin_);
+        auto* tokenPresets = new QHBoxLayout;
+        auto* tokenPresetsLabel = new QLabel(i18n::trs("常用:", "Presets:"), this);
+        tokenPresetsLabel->setStyleSheet(ui::th("color:@muted@;"));
+        tokenPresets->addWidget(tokenPresetsLabel);
         for (qint64 p : {qint64(1'000'000), qint64(5'000'000), qint64(10'000'000),
                          qint64(50'000'000), qint64(100'000'000)}) {
             auto* b = new QPushButton(ui::fmtCompact(p), this);
             b->setCursor(Qt::PointingHandCursor);
             b->setStyleSheet(ui::th("padding:3px 12px;"));
             connect(b, &QPushButton::clicked, this, [this, p] { spin_->setValue(int(p)); });
-            presets->addWidget(b);
+            tokenPresets->addWidget(b);
         }
-        presets->addStretch(1);
-        lay->addLayout(presets);
+        tokenPresets->addStretch(1);
+        tokenLay->addLayout(tokenPresets, 1);
+        tokenRow_->setLayout(tokenLay);
+        form->addRow(i18n::trs("Token 预算", "Token budget"), tokenRow_);
+
+        reqSpin_ = new QSpinBox(this);
+        reqSpin_->setRange(1, 10'000'000);
+        reqSpin_->setSingleStep(100);
+        reqSpin_->setGroupSeparatorShown(true);
+        reqSpin_->setAccelerated(true);
+        reqSpin_->setValue(int(qBound<qint64>(qint64(1), requestBudget, qint64(10000000))));
+        reqSpin_->setStyleSheet(ui::th("QSpinBox { font-size:15px; padding:6px 8px; }"));
+        reqRow_ = new QWidget(this);
+        auto* reqLay = new QHBoxLayout(reqRow_);
+        reqLay->setContentsMargins(0, 0, 0, 0);
+        reqLay->addWidget(reqSpin_);
+        auto* reqPresets = new QHBoxLayout;
+        auto* reqPresetsLabel = new QLabel(i18n::trs("常用:", "Presets:"), this);
+        reqPresetsLabel->setStyleSheet(ui::th("color:@muted@;"));
+        reqPresets->addWidget(reqPresetsLabel);
+        for (qint64 p : {qint64(100), qint64(500), qint64(1'000), qint64(5'000),
+                         qint64(10'000)}) {
+            auto* b = new QPushButton(QString::number(p), this);
+            b->setCursor(Qt::PointingHandCursor);
+            b->setStyleSheet(ui::th("padding:3px 12px;"));
+            connect(b, &QPushButton::clicked, this, [this, p] { reqSpin_->setValue(int(p)); });
+            reqPresets->addWidget(b);
+        }
+        reqPresets->addStretch(1);
+        reqLay->addLayout(reqPresets, 1);
+        reqRow_->setLayout(reqLay);
+        form->addRow(i18n::trs("请求数预算", "Request budget"), reqRow_);
+        lay->addLayout(form);
+
         auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
         connect(bb, &QDialogButtonBox::accepted, this, &QDialog::accept);
         connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
         lay->addWidget(bb);
+
+        // 模式切换：高亮生效分母所在行（另一行保留编辑值，切换回来不丢）
+        connect(modeBox_, &QComboBox::currentIndexChanged, this, [this](int) {
+            const bool byTokens = modeBox_->currentData().toString() == "tokens";
+            tokenRow_->setStyleSheet(byTokens ? ui::th("background:@selbg@; border-radius:6px;")
+                                              : QString());
+            reqRow_->setStyleSheet(byTokens ? QString()
+                                            : ui::th("background:@selbg@; border-radius:6px;"));
+        });
+        modeBox_->setCurrentIndex(mode == "requests" ? 1 : 0);
     }
-    qint64 value() const { return spin_->value(); }
+    QString mode() const { return modeBox_->currentData().toString(); }
+    qint64 tokenBudget() const { return spin_->value(); }
+    qint64 requestBudget() const { return reqSpin_->value(); }
 
 private:
-    QSpinBox* spin_;
+    QComboBox* modeBox_ = nullptr;
+    QSpinBox* spin_ = nullptr;
+    QSpinBox* reqSpin_ = nullptr;
+    QWidget* tokenRow_ = nullptr;
+    QWidget* reqRow_ = nullptr;
 };
 
 // ---- 横向柱状图：各 Agent 用量对比，柱体平滑扫掠入场 ----

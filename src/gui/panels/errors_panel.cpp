@@ -3,6 +3,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QHash>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QMessageBox>
@@ -143,12 +144,27 @@ void ErrorsPanel::refresh() {
     table_->setRowCount(static_cast<int>(errors_.size()));
     for (size_t i = 0; i < errors_.size(); ++i) {
         const auto& e = errors_[i];
+        // 枚举本地化（展示层映射，存储仍英文枚举；对照 filters 下拉的同键先例）
+        static const QHash<QString, std::pair<const char*, const char*>> kSev{
+            {{"critical", {"严重", "critical"}},
+             {"error", {"错误", "error"}},
+             {"warning", {"警告", "warning"}},
+             {"info", {"信息", "info"}}}};
+        static const QHash<QString, std::pair<const char*, const char*>> kStatus{
+            {{"open", {"未解决", "open"}},
+             {"investigating", {"排查中", "investigating"}},
+             {"resolved", {"已解决", "resolved"}}}};
+        QString sev = QString::fromStdString(e.severity);
+        QString status = QString::fromStdString(e.status);
+        const auto sevIt = kSev.constFind(sev);
+        const auto statusIt = kStatus.constFind(status);
         setRow(table_, static_cast<int>(i),
-               {QString::fromStdString(e.severity), QString::fromStdString(e.title),
-                QString::fromStdString(e.reporter), QString::fromStdString(e.status),
+               {sevIt == kSev.cend() ? sev : i18n::trs(sevIt->first, sevIt->second),
+                QString::fromStdString(e.title), QString::fromStdString(e.reporter),
+                statusIt == kStatus.cend() ? status
+                                           : i18n::trs(statusIt->first, statusIt->second),
                 relTime(QString::fromStdString(e.created_at))});
         // 严重度着色：critical 红 / error 橙 / warning 黄 / info 灰
-        QString sev = QString::fromStdString(e.severity);
         QColor c = sev == "critical" ? ui::danger()
                                      : (sev == "error" ? ui::warn()
                                                        : (sev == "warning" ? ui::note() : ui::muted()));

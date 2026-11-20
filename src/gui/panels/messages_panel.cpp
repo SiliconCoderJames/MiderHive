@@ -46,12 +46,23 @@ QString kindChip(const QString& kind) {
     if (kind == "question") return chip(ui::warn(), i18n::trs("提问", "Q"));
     return chip(ui::accent(), i18n::trs("留言", "Note"));
 }
+// 消息状态枚举的展示层本地化（存储仍英文枚举；未知值原样回显）
+QString statusLabel(const QString& s) {
+    return s == "open"       ? i18n::trs("未读", "unread")
+           : s == "unread"   ? i18n::trs("未读", "unread")
+           : s == "read"     ? i18n::trs("已读", "read")
+           : s == "accepted" ? i18n::trs("已接受", "accepted")
+           : s == "done"     ? i18n::trs("已完成", "done")
+           : s == "declined" ? i18n::trs("已拒绝", "declined")
+                             : s.toHtmlEscaped();
+}
+
 QString statusChip(const QString& s) {
     QString color = s == "done" ? ui::ok().name()
                                  : (s == "declined" ? ui::danger().name()
                                                     : (s == "accepted" ? ui::accent().name()
                                                                        : ui::note().name()));
-    return QString("<span style='color:%1;'>● %2</span>").arg(color).arg(s.toHtmlEscaped());
+    return QString("<span style='color:%1;'>● %2</span>").arg(color).arg(statusLabel(s));
 }
 // 发送者头像圈：取首字符，颜色由名字哈希决定（固定 6 色板）
 QString avatar(const QString& sender) {
@@ -258,7 +269,7 @@ void MessagesPanel::updateActions() {
                                 .arg(i18n::trs("已选中", "Selected"))
                                 .arg(QString::fromStdString(cur->subject).toHtmlEscaped())
                                 .arg(QString::fromStdString(cur->kind))
-                                .arg(QString::fromStdString(cur->status)));
+                                .arg(statusLabel(QString::fromStdString(cur->status))));
     } else {
         infoLabel_->setText(i18n::trs("点击消息气泡以选中（可回复 / 流转状态）",
                                       "Click a message bubble to select (reply / change status)"));

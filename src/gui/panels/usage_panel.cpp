@@ -1,7 +1,9 @@
 #include "usage_panel.h"
 
 #include <algorithm>
+#include <thread>
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QGroupBox>
@@ -10,6 +12,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -61,7 +64,7 @@ UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
     connect(modelCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this](int) { if (!populate_) refresh(); });
 
-    // ---- 第一行：预算环形（含调整入口）+ 窗口 KPI ----
+    // ---- 第一行：预算环形（含调整入口）+ 自动摘要沉淀 + 窗口 KPI ----
     auto* topRow = new QHBoxLayout;
     topRow->setSpacing(14);
     budgetCard_ = new QGroupBox(i18n::trs("本周 Token 预算", "Weekly Token Budget"), this);
@@ -69,6 +72,10 @@ UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
     auto* bl = new QVBoxLayout(budgetCard_);
     bl->setContentsMargins(8, 16, 8, 8);
     bl->setSpacing(6);
+    // 口径徽标：当前生效的预算口径一眼可辨（requests 模式下标红提醒读数不同）
+    budgetModeBadge_ = new QLabel(budgetCard_);
+    budgetModeBadge_->setTextFormat(Qt::RichText);
+    bl->addWidget(budgetModeBadge_, 0, Qt::AlignLeft);
     ring_ = new ui::RingProgress(budgetCard_);
     bl->addWidget(ring_, 1);
     editBudgetBtn_ = new QPushButton(i18n::trs("调整预算", "Adjust budget"), budgetCard_);
@@ -77,6 +84,57 @@ UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
     editBudgetBtn_->setStyleSheet(ui::th("padding:5px 14px;"));
     connect(editBudgetBtn_, &QPushButton::clicked, this, &UsagePanel::onEditBudget);
     bl->addWidget(editBudgetBtn_, 0, Qt::AlignCenter);
+
+    // ---- 自动摘要沉淀（digest）：受预算闸门约束的自营调用 ----
+    auto* digestBox = new QWidget(budgetCard_);
+    auto* dl = new QVBoxLayout(digestBox);
+    dl->setContentsMargins(0, 10, 0, 0);
+    dl->setSpacing(4);
+    digestCheck_ = new QCheckBox(i18n::trs("自动摘要沉淀", "Auto digest"), digestBox);
+    digestCheck_->setToolTip(i18n::trs(
+        "定期让配置好的 LLM 把蜂巢活动整理成摘要写入知识库（计入预算，超预算自动跳过）",
+        "Periodically have the configured LLM summarize hive activity into the knowledge "
+        "base (counted against the budget; skipped automatically when over)"));
+    connect(digestCheck_, &QCheckBox::toggled, this, [this](bool on) {
+        digestHours_->setEnabled(on);
+        std::string err;
+        if (platform_.digestSetSchedule(ah::kManagerName, on,
+                                        std::max<int64_t>(1, digestHours_->value()), err)) {
+            ui::Toast::show(this, on ? i18n::trs("自动摘要已启用 ✓", "Auto digest enabled ✓")
+                                     : i18n::trs("自动摘要已停用", "Auto digest disabled"));
+        }
+    });
+    auto* digestRow = new QHBoxLayout;
+    digestHours_ = new QSpinBox(digestBox);
+    digestHours_->setRange(1, 168);
+    digestHours_->setSuffix(i18n::trs(" 小时/次", " h / run"));
+    connect(digestHours_, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
+        if (populate_) return;
+        std::string err;
+        platform_.digestSetSchedule(ah::kManagerName, digestCheck_->isChecked(), v, err);
+    });
+    digestRow->addWidget(digestHours_);
+    digestRunBtn_ = new QPushButton(i18n::trs("立即沉淀", "Run now"), digestBox);
+    digestRunBtn_->setToolTip(i18n::trs(
+        "手动跑一轮摘要（受预算闸门约束：超预算自动跳过）",
+        "Run one digest now (budget-gated: skipped automatically when over budget)"));
+    connect(digestRunBtn_, &QPushButton::clicked, this, &UsagePanel::onRunDigest);
+    digestRow->addWidget(digestRunBtn_);
+    digestViewBtn_ = new QPushButton(i18n::trs("查看 digest", "View digests"), digestBox);
+    digestViewBtn_->setToolTip(i18n::trs("跳转知识库并按 digest 标签过滤",
+                                        "Jump to the knowledge base filtered by tag digest"));
+    connect(digestViewBtn_, &QPushButton::clicked,
+            this, [this] { drillTo("knowledge", "tag", "digest"); });
+    digestRow->addWidget(digestViewBtn_);
+    digestRow->addStretch(1);
+    dl->addLayout(digestRow);
+    digestStatus_ = new QLabel(digestBox);
+    digestStatus_->setTextFormat(Qt::RichText);
+    digestStatus_->setWordWrap(true);
+    dl->addWidget(digestStatus_);
+    digestBox->setLayout(dl);
+    bl->addWidget(digestBox);
+
     topRow->addWidget(budgetCard_, 2);
 
     // KPI：窗口内消耗（输入/输出拆分）· 调用次数 · 日均
@@ -207,8 +265,11 @@ void UsagePanel::refresh() {
 
     std::string err;
     ah::UsageBreakdown bd;
-    if (!platform_.usageBreakdown(days, agent.toStdString(), model.toStdString(), bd, err))
+    if (!platform_.usageBreakdown(days, agent.toStdString(), model.toStdString(), bd, err)) {
+        // 读失败如实提示：此前静默 return，界面停留旧数据装新鲜（审计 P2 清单）
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
         return;
+    }
 
     // ---- KPI：窗口内消耗（输入/输出）· 调用次数 · 日均 ----
     kpiWindow_->set(i18n::trs("窗口内 Token", "Tokens in range"), ui::fmtCompact(bd.total_tokens),
@@ -228,16 +289,44 @@ void UsagePanel::refresh() {
                  i18n::trs("tokens / 调用", "tokens / call"), ui::selText());
 
     // ---- 预算环：全局本周口径（不随窗口/筛选变化，预算与告警以周为单位）。
-    // 预算口径 = budgeted_tokens（豁免的平台问答不占预算）
+    // 分子分母随 budget_mode 切换；徽标标明当前口径防读数误判
     ah::UsageSummary sum;
     if (platform_.usageSummary(sum, err)) {
-        ring_->setValues(sum.budgeted_tokens, sum.budget,
+        const bool byRequests = sum.budget_mode == ah::kBudgetModeRequests;
+        const qint64 used = byRequests ? sum.budgeted_calls : sum.budgeted_tokens;
+        const qint64 limit = byRequests ? sum.request_budget : sum.budget;
+        ring_->setValues(used, limit,
                          i18n::trs("剩余 %1", "left %1")
-                             .arg(ui::fmtCompact(qMax<qint64>(0, sum.budget - sum.budgeted_tokens))));
-        const double ratio =
-            sum.budget > 0 ? double(sum.budgeted_tokens) / double(sum.budget) : 0.0;
+                             .arg(ui::fmtCompact(qMax<qint64>(0, limit - used))));
+        budgetModeBadge_->setText(
+            byRequests ? QString("<span style='color:%1; font-size:10px;'>%2</span>")
+                             .arg(ui::note().name(), i18n::trs("按请求数", "by requests"))
+                       : QString("<span style='color:%1; font-size:10px;'>%2</span>")
+                             .arg(ui::muted().name(), i18n::trs("按 Token", "by tokens")));
+        const double ratio = limit > 0 ? double(used) / double(limit) : 0.0;
         editBudgetBtn_->setStyleSheet(ui::th(QString(
             "padding:5px 14px; color:%1;").arg(ui::usageColor(ratio).name())));
+        // digest 状态行：上次时间 + 统计摘要
+        const ah::DigestSchedule sched = platform_.digestSchedule();
+        digestCheck_->blockSignals(true);  // 程序性回填不触发 toggled 连锁写库
+        digestCheck_->setChecked(sched.enabled);
+        digestCheck_->blockSignals(false);
+        populate_ = true;
+        digestHours_->setValue(static_cast<int>(sched.interval_hours));
+        populate_ = false;
+        digestHours_->setEnabled(sched.enabled);
+        digestRunBtn_->setEnabled(!digestBusy_.load());
+        digestStatus_->setText(i18n::trs("上次沉淀：%1", "last run: %1")
+                                   .arg(sched.last_run_at.empty()
+                                            ? i18n::trs("从未", "never")
+                                            : relTime(QString::fromStdString(sched.last_run_at))));
+        digestStatus_->setToolTip(sched.last_status.empty()
+                                      ? QString()
+                                      : QString::fromStdString(sched.last_status));
+    } else {
+        // 读失败如实提示：此前静默 return，界面停留旧数据而状态栏照常翻新，
+        // 用户无法区分"没变化"与"读取失败"（审计 P2 清单顺带修）
+        ui::Toast::show(this, ui::humanError(QString::fromStdString(err)), false);
     }
 
     // ---- 图表：逐日 + 模型（内容不变不重绘，避免刷新闪烁）----
@@ -303,16 +392,65 @@ void UsagePanel::refresh() {
                                            : static_cast<QWidget*>(agentTable_));
 }
 
+UsagePanel::~UsagePanel() {
+    if (digestThread_.joinable()) digestThread_.join();
+}
+
+void UsagePanel::onRunDigest() {
+    if (digestBusy_.exchange(true)) return;  // 在途防重入
+    digestRunBtn_->setEnabled(false);
+    digestStatus_->setText(i18n::trs("正在沉淀…", "running…"));
+    if (digestThread_.joinable()) digestThread_.join();
+    QPointer<UsagePanel> guard(this);
+    digestThread_ = std::thread([guard, pl = &platform_] {
+        std::string stats, err;
+        const bool ok = pl->digestRunOnce(ah::kManagerName, stats, err);
+        QMetaObject::invokeMethod(
+            guard.data(),
+            [guard, ok, stats = QString::fromStdString(stats),
+             err = QString::fromStdString(err)] {
+                if (!guard) return;
+                guard->digestRunBtn_->setEnabled(true);
+                guard->digestBusy_ = false;
+                guard->refresh();
+                if (ok && stats.contains("generated")) {
+                    ui::Toast::show(guard, i18n::trs("摘要已写入知识库 ✓（tag: digest）",
+                                                     "Digest written to knowledge base ✓"));
+                } else if (ok && stats.contains("skipped_reason")) {
+                    // 主动触发必须给反馈：跳过原因（预算耗尽/无新活动）如实说明
+                    ui::Toast::show(guard,
+                                    i18n::trs("已跳过：", "Skipped: ") + stats, false);
+                } else {
+                    ui::Toast::show(guard,
+                                    ui::humanError(err.isEmpty()
+                                                       ? QStringLiteral("digest failed")
+                                                       : err),
+                                    false);
+                }
+            },
+            Qt::QueuedConnection);
+    });
+}
+
 void UsagePanel::onEditBudget() {
     std::string err;
-    const qint64 cur = platform_.usageBudget(err);
-    ui::BudgetEditDialog dlg(cur > 0 ? cur : 10'000'000, this);
+    // 三键整体编辑：先读现配置（mode + 两预算），对话框改完整体落库
+    ah::UsageBudgetConfig cfg;
+    if (!platform_.usageBudgetConfig(cfg, err)) {
+        QMessageBox::warning(this, i18n::trs("调整失败", "Adjustment failed"),
+                             QString::fromStdString(err));
+        return;
+    }
+    ui::BudgetEditDialog dlg(QString::fromStdString(cfg.mode), cfg.token_budget,
+                             cfg.request_budget, this);
     if (dlg.exec() != QDialog::Accepted) return;
-    if (platform_.usageSetBudget(ah::kManagerName, dlg.value(), err)) {
+    if (platform_.usageSetBudgetConfig(ah::kManagerName, dlg.mode().toStdString(),
+                                       dlg.tokenBudget(), dlg.requestBudget(), err)) {
         QMessageBox::information(
             this, i18n::trs("预算已更新", "Budget updated"),
-            i18n::trs("本周 Token 预算已调整为 %1。", "Weekly token budget is now %1.")
-                .arg(formatNum(dlg.value())));
+            i18n::trs("本周预算已更新（口径：%1）。", "Weekly budget updated (basis: %1).")
+                .arg(dlg.mode() == "requests" ? i18n::trs("按请求数", "by requests")
+                                              : i18n::trs("按 Token", "by tokens")));
         refresh();
     } else {
         QMessageBox::warning(this, i18n::trs("调整失败", "Adjustment failed"),
@@ -363,6 +501,19 @@ void UsagePanel::retranslate() {
     populate_ = false;
     budgetCard_->setTitle(i18n::trs("本周 Token 预算", "Weekly Token Budget"));
     editBudgetBtn_->setText(i18n::trs("调整预算", "Adjust budget"));
+    digestCheck_->setText(i18n::trs("自动摘要沉淀", "Auto digest"));
+    digestCheck_->setToolTip(i18n::trs(
+        "定期让配置好的 LLM 把蜂巢活动整理成摘要写入知识库（计入预算，超预算自动跳过）",
+        "Periodically have the configured LLM summarize hive activity into the knowledge "
+        "base (counted against the budget; skipped automatically when over)"));
+    digestHours_->setSuffix(i18n::trs(" 小时/次", " h / run"));
+    digestRunBtn_->setText(i18n::trs("立即沉淀", "Run now"));
+    digestRunBtn_->setToolTip(i18n::trs(
+        "手动跑一轮摘要（受预算闸门约束：超预算自动跳过）",
+        "Run one digest now (budget-gated: skipped automatically when over budget)"));
+    digestViewBtn_->setText(i18n::trs("查看 digest", "View digests"));
+    digestViewBtn_->setToolTip(i18n::trs("跳转知识库并按 digest 标签过滤",
+                                         "Jump to the knowledge base filtered by tag digest"));
     trendCard_->setTitle(i18n::trs("逐日消耗（随筛选）", "Daily Tokens (filtered)"));
     modelCard_->setTitle(i18n::trs("模型分布（随筛选）", "Tokens by Model (filtered)"));
     tableCard_->setTitle(i18n::trs("Agent 用量明细", "Per-Agent Breakdown"));

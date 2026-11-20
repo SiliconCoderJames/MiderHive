@@ -285,7 +285,8 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
                               "该工具会立刻掉线（重新配置后才能恢复）。\n\n继续重新签发吗？",
                               "Agent \"%1\" is online right now. Re-issuing rotates its key — "
                               "the tool will drop offline until reconfigured.\n\nRotate anyway?")
-                        .arg(agentName));
+                        .arg(agentName),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
                 if (answer != QMessageBox::Yes) return;
                 break;
             }

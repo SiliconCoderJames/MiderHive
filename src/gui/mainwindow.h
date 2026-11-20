@@ -6,7 +6,9 @@
 #include <QStackedWidget>
 #include <QTimer>
 #include <QToolButton>
+#include <atomic>
 #include <functional>
+#include <thread>
 #include <vector>
 
 #include "core/platform.h"
@@ -25,6 +27,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(ah::Platform& platform, QWidget* parent = nullptr);
+    ~MainWindow() override;  // 在途摘要沉淀先收尾（join），不与析构竞速
 
 protected:
     void closeEvent(QCloseEvent*) override;  // 关闭即隐藏到托盘，服务常驻
@@ -46,6 +49,7 @@ private:
     void setupTray();    // 系统托盘：蜂巢常驻 + 显示/退出
     void openSettings(); // ⚙ 设置对话框（复用同一实例，关闭即删）
     void openAsk();      // ✦ 临时问答对话框（复用同一实例，关闭即删）
+    void maybeRunDigest(); // 自动摘要调度检查（15 分钟节流，到期才真正跑）
     void scheduleUpdateCheck();                // 启动后的自动检查（每天一次，可关）
     void promptUpdate(const ui::UpdateInfo&);  // 发现新版本时的选择框
     // 接入引导观察：轮询 ui/onboardingPending 里的接入身份，Agent 上线即弹
@@ -80,6 +84,11 @@ private:
     QToolButton* settingsBtn_ = nullptr;
     QToolButton* askBtn_ = nullptr;
     QToolButton* langBtn_ = nullptr;
+    // 自动摘要调度：15 分钟节流检查，到期才跑（workbench 关闭不跑——headless
+    // 用 agent-cli digest run / HTTP 端点，取舍见实现注释）
+    QTimer* digestTimer_ = nullptr;
+    std::thread digestThread_;
+    std::atomic<bool> digestBusy_{false};
     QLabel* ver_ = nullptr;
     QLabel* tagline_ = nullptr;
     QPointer<SettingsDialog> settings_ = nullptr;

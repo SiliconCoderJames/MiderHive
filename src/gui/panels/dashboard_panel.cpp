@@ -99,11 +99,18 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
     editBudgetBtn_->setStyleSheet(ui::th("padding:5px 14px;"));
     connect(editBudgetBtn_, &QPushButton::clicked, this, [this] {
         std::string berr;
-        const qint64 cur = platform_.usageBudget(berr);
-        ui::BudgetEditDialog dlg(cur > 0 ? cur : 10'000'000, this);
+        ah::UsageBudgetConfig cfg;
+        if (!platform_.usageBudgetConfig(cfg, berr)) {
+            QMessageBox::warning(this, i18n::trs("调整失败", "Adjustment failed"),
+                                 QString::fromStdString(berr));
+            return;
+        }
+        ui::BudgetEditDialog dlg(QString::fromStdString(cfg.mode), cfg.token_budget,
+                                 cfg.request_budget, this);
         if (dlg.exec() != QDialog::Accepted) return;
         std::string err;
-        if (platform_.usageSetBudget(ah::kManagerName, dlg.value(), err))
+        if (platform_.usageSetBudgetConfig(ah::kManagerName, dlg.mode().toStdString(),
+                                           dlg.tokenBudget(), dlg.requestBudget(), err))
             refresh();  // 环形图与 KPI 立即反映新预算
         else
             QMessageBox::warning(this, i18n::trs("调整失败", "Adjustment failed"),
@@ -587,8 +594,12 @@ void DashboardPanel::refresh() {
     ah::UsageSummary sum;
     if (platform_.usageSummary(sum, err)) {
         // 环内不再重复"剩余"（右侧数字列已经写了），环只留百分比与 已用/总额。
-        // 预算口径用 budgeted_tokens（豁免的临时问答不占预算，总量另见 KPI）
-        ring_->setValues(sum.budgeted_tokens, sum.budget, QString());
+        // 分子分母随 budget_mode 切换（tokens → budgeted_tokens/budget；
+        // requests → budgeted_calls/request_budget），豁免量两种口径都排除
+        const bool byRequests = sum.budget_mode == ah::kBudgetModeRequests;
+        const qint64 used = byRequests ? sum.budgeted_calls : sum.budgeted_tokens;
+        const qint64 limit = byRequests ? sum.request_budget : sum.budget;
+        ring_->setValues(used, limit, QString());
         budgetAlertLevel_ = QString::fromStdString(sum.alert_level);
 
         QVector<QPair<QString, qint64>> bars;
@@ -600,9 +611,8 @@ void DashboardPanel::refresh() {
         usageChart_->setEntries(bars);
 
         // 预算卡右侧数字列：已用 / 剩余 / 占比 三行等宽数字（原来只有环内一行，信息量太低）。
-        // 口径 = budgeted_tokens：豁免的平台问答不占预算；豁免量在 tooltip 里如实带出
-        const double ratio =
-            sum.budget > 0 ? double(sum.budgeted_tokens) / double(sum.budget) : 0.0;
+        // 口径随模式切换；豁免量在 tooltip 里如实带出
+        const double ratio = limit > 0 ? double(used) / double(limit) : 0.0;
         const QColor c = ui::usageColor(ratio);
         // 注意占位符与参数一一对应：%2 是"用量语义色"，被 %3/%6/%8 三处复用；
         // 百分比必须自己作为最后一个参数填进 %8（曾把颜色串填进去，占比显示成了色值）
@@ -611,25 +621,32 @@ void DashboardPanel::refresh() {
                     "%1 <b style='color:%2'>%3</b><br>"
                     "%4 <b style='color:%5'>%6</b><br>"
                     "%7 <b style='color:%2'>%8</b></div>")
-                .arg(i18n::trs("已用", "used"), c.name(), formatNum(sum.budgeted_tokens),
+                .arg(i18n::trs("已用", "used"), c.name(), formatNum(used),
                      i18n::trs("剩余", "left"), ui::ok().name(),
-                     formatNum(qMax<qint64>(0, sum.budget - sum.budgeted_tokens)),
+                     formatNum(qMax<qint64>(0, limit - used)),
                      i18n::trs("占比", "share"))
                 .arg(QString("%1%").arg(ratio * 100, 0, 'f', 1)));
         budgetStats_->setToolTip(
-            sum.exempt_tokens > 0
-                ? i18n::trs("本周预算 %1 tokens；另豁免 %2（平台临时问答）",
-                            "weekly budget %1 tokens; exempt %2 (ask console)")
-                      .arg(formatNum(sum.budget), formatNum(sum.exempt_tokens))
-                : i18n::trs("本周预算 %1 tokens", "weekly budget %1 tokens")
-                      .arg(formatNum(sum.budget)));
+            byRequests
+                ? (sum.exempt_calls > 0
+                       ? i18n::trs("周调用预算 %1 次；另豁免 %2 次（平台临时问答）",
+                                   "weekly request budget %1; exempt %2 (ask console)")
+                             .arg(formatNum(sum.request_budget), formatNum(sum.exempt_calls))
+                       : i18n::trs("周调用预算 %1 次", "weekly request budget %1")
+                             .arg(formatNum(sum.request_budget)))
+                : (sum.exempt_tokens > 0
+                       ? i18n::trs("本周预算 %1 tokens；另豁免 %2（平台临时问答）",
+                                   "weekly budget %1 tokens; exempt %2 (ask console)")
+                             .arg(formatNum(sum.budget), formatNum(sum.exempt_tokens))
+                       : i18n::trs("本周预算 %1 tokens", "weekly budget %1 tokens")
+                             .arg(formatNum(sum.budget))));
         if (!dailySeries.isEmpty()) budgetSpark_->setSeries(dailySeries, c);
 
         // KPI：本周 Token（等宽大数字 + 14 天趋势小图 + 环比胶囊）——真实总消耗口径
         kpiTokens_->set(i18n::trs("本周 Token", "Weekly tokens"), ui::fmtCompact(sum.total_tokens),
                         i18n::trs("预算 %1 · 剩余 %2", "budget %1 · left %2")
-                            .arg(ui::fmtCompact(sum.budget),
-                                 ui::fmtCompact(qMax<qint64>(0, sum.budget - sum.budgeted_tokens))),
+                            .arg(ui::fmtCompact(byRequests ? sum.request_budget : sum.budget),
+                                 ui::fmtCompact(qMax<qint64>(0, limit - used))),
                         ui::usageColor(ratio));
         kpiTokens_->setToolTipAll(i18n::trs("本周已用 %1（计入预算 %2）（%3%）",
                                             "used %1 (%2 budgeted) (%3%)")

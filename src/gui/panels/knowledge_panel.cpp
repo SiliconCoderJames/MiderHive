@@ -246,6 +246,14 @@ void KnowledgePanel::focusFilter() {
     viewFilter_->selectAll();
 }
 
+void KnowledgePanel::applyFilter(const QString& key, const QString& value) {
+    // 深链落地（自动摘要「查看 digest」→ tag=digest）：填标签过滤并立即搜索。
+    // 未知 key 静默忽略（调用方传错不至于把面板打坏）
+    if (key != "tag" || value.isEmpty()) return;
+    tagEdit_->setText(value);
+    onSearch();
+}
+
 void KnowledgePanel::retranslate() {
     PanelBase::retranslate();
     searchEdit_->setPlaceholderText(

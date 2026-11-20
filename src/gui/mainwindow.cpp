@@ -204,6 +204,59 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
     connect(settingsSc, &QShortcut::activated, this, &MainWindow::openSettings);
     auto* askSc = new QShortcut(QKeySequence("Ctrl+Q"), this);
     connect(askSc, &QShortcut::activated, this, &MainWindow::openAsk);
+
+    // 自动摘要调度：15 分钟节流检查（启用 + 到期才真正跑 LLM）。workbench
+    // 关闭时不跑——headless 场景用 agent-cli digest run / POST /api/digest/run
+    digestTimer_ = new QTimer(this);
+    connect(digestTimer_, &QTimer::timeout, this, &MainWindow::maybeRunDigest);
+    digestTimer_->start(15 * 60 * 1000);
+}
+
+MainWindow::~MainWindow() {
+    // 在途摘要先收尾：无取消句柄面（digestRunOnce 未暴露 cancel），join 最多
+    // 等一个 LLM 超时上限——maxTokens 已限 1024，常规远短于此
+    if (digestThread_.joinable()) digestThread_.join();
+}
+
+void MainWindow::maybeRunDigest() {
+    if (digestBusy_.exchange(true)) return;
+    const ah::DigestSchedule sched = platform_.digestSchedule();
+    if (!sched.enabled) {
+        digestBusy_ = false;
+        return;
+    }
+    // 到期判断：last_run_at 为空 = 从未跑过（到期）；now ≥ last + interval = 到期
+    std::time_t last = 0;
+    bool due = true;
+    if (!sched.last_run_at.empty() && ah::parseIso(sched.last_run_at, last)) {
+        due = std::time(nullptr) >= last + sched.interval_hours * 3600;
+    }
+    if (!due) {
+        digestBusy_ = false;
+        return;
+    }
+    if (digestThread_.joinable()) digestThread_.join();
+    QPointer<MainWindow> guard(this);
+    digestThread_ = std::thread([guard, pl = &platform_] {
+        std::string stats, err;
+        const bool ok = pl->digestRunOnce(ah::kManagerName, stats, err);
+        QMetaObject::invokeMethod(
+            guard.data(),
+            [guard, ok, stats = QString::fromStdString(stats),
+             err = QString::fromStdString(err)] {
+                if (!guard) return;
+                if (ok && stats.contains("skipped_reason"))
+                    return;  // 调度触发的跳过（预算耗尽/无活动）静默——告警面已有预算横幅
+                if (ok)
+                    ui::Toast::show(guard, i18n::trs("自动摘要已写入知识库 ✓（tag: digest）",
+                                                     "Auto digest written to knowledge base ✓"));
+                else
+                    ui::Toast::show(guard, i18n::trs("自动摘要失败：", "Auto digest failed: ") +
+                                                err,
+                                    false);
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::hideEvent(QHideEvent* e) {
@@ -607,19 +660,25 @@ void MainWindow::updateStatusBar() {
                                .arg(i18n::trs("数据", "data"))
                                .arg(QString::fromStdString(platform_.homeDir())));
     if (platform_.usageSummary(sum, err)) {
-        // 状态栏与预算同口径：budgeted_tokens（豁免的平台问答不占预算，tooltip 说明）
-        double pct = sum.budget > 0 ? 100.0 * sum.budgeted_tokens / sum.budget : 0.0;
+        // 状态栏与预算同口径：分子分母随 budget_mode 切换，requests 模式加后缀
+        // 防止读数误判（豁免的平台问答不占预算，tooltip 说明）
+        const bool byRequests = sum.budget_mode == ah::kBudgetModeRequests;
+        const qint64 budgeted = byRequests ? sum.budgeted_calls : sum.budgeted_tokens;
+        const qint64 limit = byRequests ? sum.request_budget : sum.budget;
+        double pct = limit > 0 ? 100.0 * budgeted / limit : 0.0;
         QString color = sum.alert_level == "none" ? ui::ok().name()
                         : (sum.alert_level == "warn" ? ui::warn().name() : ui::danger().name());
         statusUsage_->setText(
-            QString("<span style='color:%1'>%2: %3 / %4 (%5%) · %6 %7</span>")
+            QString("<span style='color:%1'>%2: %3 / %4 (%5%) · %6 %7%8</span>")
                 .arg(color)
-                .arg(i18n::trs("本周 Token", "Weekly tokens"))
-                .arg(formatNum(sum.budgeted_tokens))
-                .arg(formatNum(sum.budget))
+                .arg(i18n::trs(byRequests ? "本周调用" : "本周 Token",
+                               byRequests ? "Weekly calls" : "Weekly tokens"))
+                .arg(formatNum(budgeted))
+                .arg(formatNum(limit))
                 .arg(pct, 0, 'f', 1)
                 .arg(i18n::trs("剩余", "left"))
-                .arg(formatNum(sum.budget - sum.budgeted_tokens)));
+                .arg(formatNum(limit - budgeted))
+                .arg(byRequests ? i18n::trs(" ·按请求数", " ·by requests") : QString()));
         statusUsage_->setToolTip(
             sum.exempt_tokens > 0
                 ? i18n::trs("计入预算 %1；另有豁免 %2（平台临时问答，不占预算）",

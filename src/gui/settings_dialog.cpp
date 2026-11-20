@@ -60,7 +60,9 @@ SettingsDialog::SettingsDialog(ah::Platform& platform, QWidget* parent)
 
     nav_ = new QListWidget(this);
     nav_->setFixedWidth(150);
-    nav_->setFocusPolicy(Qt::NoFocus);  // 去除虚线焦点框
+    // 键盘可达（审计 P2）：Tab 聚焦后方向键切换设置页。NoFocus 会把键盘用户
+    // 挡在设置页之外（主导航有 Ctrl+1..8 补偿，这里此前什么都没有）
+    nav_->setFocusPolicy(Qt::TabFocus);
     // 与主导航同一套矢量图标（原先这里是 emoji，和已经换成线性图标的主侧栏不一致）
     const std::vector<std::tuple<const char*, const char*, const char*>> navItems{
         {"palette", "外观", "Appearance"},
@@ -591,10 +593,13 @@ void SettingsDialog::refreshAgents() {
     agentsTable_->setRowCount(static_cast<int>(agents.size()));
     for (size_t i = 0; i < agents.size(); ++i) {
         const auto& a = agents[i];
+        // 状态本地化（展示层映射；存储仍英文枚举）
+        const QString status =
+            a.disabled ? i18n::trs("已禁用", "disabled")
+                       : (a.status == "online" ? i18n::trs("在线", "online")
+                                               : i18n::trs("离线", "offline"));
         setRow(agentsTable_, static_cast<int>(i),
-               {QString::fromStdString(a.name), QString::fromStdString(a.role),
-                a.disabled ? i18n::trs("已禁用", "disabled")
-                           : QString::fromStdString(a.status),
+               {QString::fromStdString(a.name), QString::fromStdString(a.role), status,
                 QString::fromStdString(a.current_task),
                 a.last_seen_at.empty() ? QString("—")
                                        : relTime(QString::fromStdString(a.last_seen_at))});
