@@ -2962,6 +2962,93 @@ static void test_llm_protocols() {
     t.join();
 }
 
+// ---- 语义关联图谱快照：节点集/边去重/无自环/similarity 换算/上限行为 ----
+static void test_knowledge_graph() {
+    fs::path tmp = fs::temp_directory_path() / ("miderhive_graph_" + ah::randomHex(6));
+    fs::create_directories(tmp);
+    std::string err;
+
+    ah::Platform p(tmp.string());
+    CHECK(p.bootstrap(err));
+
+    // 播种：3 条同主题（n-gram 嵌入高相似）+ 1 条无关主题
+    ah::KnowledgeEntry e1, e2, e3, e4;
+    CHECK(p.knowledgeCreate("tester", "sqlite-vec 向量检索用法",
+                            "用 sqlite-vec 做向量检索需要先注册扩展", {"sqlite"}, "踩坑", {}, "",
+                            e1, err));
+    CHECK(p.knowledgeCreate("tester", "sqlite-vec 向量索引注意事项",
+                            "向量索引维度必须与查询向量一致", {"sqlite"}, "踩坑", {}, "", e2,
+                            err));
+    CHECK(p.knowledgeCreate("tester", "向量检索的过滤技巧", "kNN 查询可以带标签过滤缩小召回",
+                            {"sqlite"}, "经验", {}, "", e3, err));
+    CHECK(p.knowledgeCreate("tester", "今天天气不错", "出去散步晒太阳", {}, "生活", {}, "", e4,
+                            err));
+
+    // ---- 快照：节点数 = 全部条目，边无自环无重复，similarity 范围合法 ----
+    ah::KnowledgeGraph g;
+    CHECK(p.knowledgeGraphSnapshot(200, 5, g, err));
+    CHECK_EQ(g.nodes.size(), std::size_t(4));
+    CHECK(!g.edges.empty());
+    for (const auto& e : g.edges) {
+        CHECK(e.a_uuid != e.b_uuid);                       // 无自环
+        CHECK(e.similarity > 0.0 && e.similarity <= 1.0);  // 换算后范围
+    }
+    // 边按 uuid 对去重：收集后无相邻重复（排序后相邻比较）
+    std::vector<std::pair<std::string, std::string>> pairs;
+    for (const auto& e : g.edges) pairs.push_back({e.a_uuid, e.b_uuid});
+    std::sort(pairs.begin(), pairs.end());
+    CHECK(std::adjacent_find(pairs.begin(), pairs.end()) == pairs.end());
+
+    // 度数与边一致（每条边给两端各 +1）
+    int64_t degreeSum = 0;
+    for (const auto& n : g.nodes) degreeSum += n.degree;
+    CHECK_EQ(degreeSum, static_cast<int64_t>(g.edges.size() * 2));
+
+    // 同主题（sqlite 三条）两两中至少一条边存在：n-gram 嵌入对同主题文本相似
+    std::map<std::string, std::string> title2uuid;
+    for (const auto& n : g.nodes) title2uuid[n.title] = n.uuid;
+    const std::string& u1 = title2uuid.at("sqlite-vec 向量检索用法");
+    const std::string& u2 = title2uuid.at("sqlite-vec 向量索引注意事项");
+    const std::string& u3 = title2uuid.at("向量检索的过滤技巧");
+    bool sqliteEdge = false;
+    for (const auto& e : g.edges) {
+        const std::string& a = e.a_uuid;
+        const std::string& b = e.b_uuid;
+        if ((a == u1 && b == u2) || (a == u2 && b == u1) || (a == u2 && b == u3) ||
+            (a == u3 && b == u2) || (a == u1 && b == u3) || (a == u3 && b == u1))
+            sqliteEdge = true;
+    }
+    CHECK(sqliteEdge);
+
+    // ---- 上限行为：maxNodes=2 → 只有 2 个节点，边端点都在节点集内 ----
+    ah::KnowledgeGraph g2;
+    CHECK(p.knowledgeGraphSnapshot(2, 5, g2, err));
+    CHECK_EQ(g2.nodes.size(), std::size_t(2));
+    for (const auto& e : g2.edges) {
+        bool inSet = false;
+        for (const auto& n : g2.nodes)
+            if (n.uuid == e.a_uuid || n.uuid == e.b_uuid) inSet = true;
+        CHECK(inSet);
+    }
+
+    // ---- 空库：空图合法 ----
+    {
+        fs::path tmp2 = fs::temp_directory_path() / ("miderhive_graph_empty_" + ah::randomHex(6));
+        fs::create_directories(tmp2);
+        ah::Platform p2(tmp2.string());
+        CHECK(p2.bootstrap(err));
+        ah::KnowledgeGraph g3;
+        CHECK(p2.knowledgeGraphSnapshot(200, 5, g3, err));
+        CHECK(g3.nodes.empty());
+        CHECK(g3.edges.empty());
+        p2.shutdown();
+        fs::remove_all(tmp2);
+    }
+
+    p.shutdown();
+    fs::remove_all(tmp);
+}
+
 // ---- 摘要沉淀 digestRunOnce：预算闸门跳过 / 取料生成知识条目 / 水位推进 /
 // 记账 source=llm-digest / 审计 digest.run ----
 static void test_digest() {
@@ -3325,6 +3412,7 @@ int main() {
     run("llm_protocols", test_llm_protocols);
     run("llm_platform", test_llm_platform);
     run("digest", test_digest);
+    run("knowledge_graph", test_knowledge_graph);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

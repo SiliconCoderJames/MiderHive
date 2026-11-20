@@ -23,6 +23,7 @@
 #include "ask_dialog.h"
 #include "gui_util.h"
 #include "panels/dashboard_panel.h"
+#include "panels/graph_panel.h"
 #include "panels/errors_panel.h"
 #include "panels/knowledge_panel.h"
 #include "panels/logs_panel.h"
@@ -145,6 +146,7 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
         [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new MessagesPanel(pl, parent)); },
         [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new ErrorsPanel(pl, parent)); },
         [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new LogsPanel(pl, parent)); },
+        [](ah::Platform& pl, QWidget* parent) { return static_cast<PanelBase*>(new GraphPanel(pl, parent)); },
     };
     rebuildPanels();
 
@@ -286,6 +288,7 @@ void MainWindow::buildNav() {
         {"messages", "Agent 交流", "Messaging"},
         {"errors", "错误报告", "Errors"},
         {"audit", "操作日志", "Audit"},
+        {"graph", "图谱", "Graph"},
     };
     for (const auto& it : navItems_) {
         // 图标与文字一律中性色；「错误报告」有未解决错误时由 updateStatusBar

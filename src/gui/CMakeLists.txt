@@ -10,6 +10,7 @@ add_library(miderhive_gui STATIC
     connect_dialog.cpp
     welcome_dialog.cpp
     update_checker.cpp
+    panels/graph_panel.cpp
     panels/dashboard_panel.cpp
     panels/usage_panel.cpp
     panels/knowledge_panel.cpp

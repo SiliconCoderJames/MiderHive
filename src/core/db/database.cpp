@@ -19,6 +19,12 @@ std::string Stmt::text(int col) const {
     int n = sqlite3_column_bytes(s_, col);
     return t ? std::string(reinterpret_cast<const char*>(t), n) : std::string();
 }
+std::string Stmt::blob(int col) const {
+    const void* p = sqlite3_column_blob(s_, col);
+    const int n = sqlite3_column_bytes(s_, col);
+    if (!p || n <= 0) return {};
+    return std::string(static_cast<const char*>(p), static_cast<size_t>(n));
+}
 int64_t Stmt::i64(int col) const { return sqlite3_column_int64(s_, col); }
 double Stmt::dbl(int col) const { return sqlite3_column_double(s_, col); }
 bool Stmt::isNull(int col) const { return sqlite3_column_type(s_, col) == SQLITE_NULL; }

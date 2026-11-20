@@ -24,6 +24,7 @@ public:
     int step();                    // SQLITE_ROW / SQLITE_DONE / 错误码
     void reset();
     std::string text(int col) const;
+    std::string blob(int col) const;  // 原始字节（向量列经 sqlite3_column_blob）
     int64_t i64(int col) const;
     double dbl(int col) const;
     bool isNull(int col) const;

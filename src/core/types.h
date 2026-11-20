@@ -37,6 +37,29 @@ struct KnowledgeHit {
     double score = 0.0;         // 语义距离（越小越相似）
 };
 
+// 语义关联图谱快照（Obsidian 式视图的数据面）：节点 = 最新知识条目，
+// 边 = 向量 kNN 相似（similarity = 1/(1+distance)，越大越相关）
+struct KnowledgeGraphNode {
+    std::string uuid;
+    std::string title;
+    std::string category;
+    std::string author;
+    std::string created_at;
+    std::vector<std::string> tags;
+    int64_t degree = 0;         // 关联边数（节点大小/排序依据）
+};
+
+struct KnowledgeGraphEdge {
+    std::string a_uuid;         // 字典序较小者
+    std::string b_uuid;
+    double similarity = 0.0;
+};
+
+struct KnowledgeGraph {
+    std::vector<KnowledgeGraphNode> nodes;
+    std::vector<KnowledgeGraphEdge> edges;
+};
+
 struct SkillInfo {
     std::string name;
     std::string display_name;

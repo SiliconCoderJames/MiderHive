@@ -878,6 +878,12 @@ bool Platform::knowledgeAddVersion(const std::string& author, const std::string&
     return ok;
 }
 
+bool Platform::knowledgeGraphSnapshot(size_t maxNodes, int kPerNode, KnowledgeGraph& out,
+                                      std::string& err) {
+    std::lock_guard lock(mutex_);
+    return knowledge_.graphSnapshot(maxNodes, kPerNode, out, err);
+}
+
 bool Platform::knowledgeSearchSemantic(const std::vector<float>& queryVec, int limit,
                                        const std::string& tagFilter,
                                        std::vector<KnowledgeHit>& out, std::string& err) {

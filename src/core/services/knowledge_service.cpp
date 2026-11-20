@@ -629,6 +629,88 @@ bool KnowledgeService::searchKeywordFts(const std::string& query, int limit,
     return fetchByIds(ids, out, err);
 }
 
+// 语义关联图谱快照：节点 = 最新 maxNodes 条（is_latest=1），边 = 每条以其
+// 自身向量做 kNN 的 top-(k+1) 邻居（过滤自身与快照外），uuid 对去重。
+// similarity = 1/(1+distance)：sqlite-vec 对归一化向量返回 L2 距离，
+// 1/(1+d) 保持"越大越相关"的单调性且恒在 (0,1]。
+bool KnowledgeService::graphSnapshot(size_t maxNodes, int kPerNode,
+                                     KnowledgeGraph& out, std::string& err) {
+    out = KnowledgeGraph{};
+    // 1) 最新节点 id + 各自所在维度（决定用哪张向量分表做 kNN）
+    std::vector<int64_t> ids;
+    std::map<int64_t, size_t> dimOf;
+    if (!db_.query(
+            "SELECT id, embedding_dim FROM knowledge_entries WHERE is_latest=1 "
+            "ORDER BY id DESC LIMIT ?",
+            [&](Stmt& st) { st.bind(1, static_cast<int64_t>(maxNodes)); },
+            [&](Stmt& st) {
+                const int64_t id = st.i64(0);
+                ids.push_back(id);
+                dimOf[id] = st.isNull(1) ? size_t(0) : size_t(st.i64(1));
+            },
+            err))
+        return false;
+    if (ids.empty()) return true;  // 空库 = 空图（合法，GUI 显示空状态）
+
+    // 2) 每条取自身向量 → kNN → 边（快照外的行与自身过滤）
+    std::map<std::pair<int64_t, int64_t>, double> edges;
+    for (int64_t id : ids) {
+        const size_t dim = dimOf[id];
+        if (dim == 0) continue;  // 防御：无维度记录的行不进图
+        std::vector<float> own;
+        if (!db_.query(
+                "SELECT embedding FROM " + vecTableFor(dim) + " WHERE entry_id=?",
+                [&](Stmt& st) { st.bind(1, id); },
+                [&](Stmt& st) {
+                    const std::string bytes = st.blob(0);
+                    own.assign(reinterpret_cast<const float*>(bytes.data()),
+                               reinterpret_cast<const float*>(bytes.data() + bytes.size()));
+                },
+                err))
+            return false;
+        if (own.empty()) continue;
+        std::vector<std::pair<int64_t, double>> hits;
+        if (!knnHits(dim, own, static_cast<int>(kPerNode) + 1, hits, err)) return false;
+        for (const auto& [other, dist] : hits) {
+            if (other == id) continue;                       // 去自环
+            if (dimOf.find(other) == dimOf.end()) continue;  // 快照外的行不连
+            const auto key = std::minmax(id, other);
+            // 同一对会因互为邻居各召回一次：字典序键 + map 天然去重
+            edges.emplace(key, 1.0 / (1.0 + dist));
+        }
+    }
+
+    // 3) 回填节点（fetchByIds 保序 + 500/批）与边（id → uuid）、度数统计
+    std::vector<KnowledgeEntry> entries;
+    if (!fetchByIds(ids, entries, err)) return false;
+    std::map<int64_t, size_t> degree;
+    for (const auto& [pair, sim] : edges) {
+        degree[pair.first] += 1;
+        degree[pair.second] += 1;
+    }
+    std::map<int64_t, std::string> uuidOf;
+    for (const auto& e : entries) {
+        uuidOf[e.id] = e.uuid;
+        KnowledgeGraphNode n;
+        n.uuid = e.uuid;
+        n.title = e.title;
+        n.category = e.category;
+        n.author = e.author;
+        n.created_at = e.created_at;
+        n.tags = e.tags;
+        auto it = degree.find(e.id);
+        n.degree = it == degree.end() ? 0 : it->second;
+        out.nodes.push_back(std::move(n));
+    }
+    for (const auto& [pair, sim] : edges) {
+        const auto a = uuidOf.find(pair.first);
+        const auto b = uuidOf.find(pair.second);
+        if (a == uuidOf.end() || b == uuidOf.end()) continue;
+        out.edges.push_back(KnowledgeGraphEdge{a->second, b->second, sim});
+    }
+    return true;
+}
+
 bool KnowledgeService::searchSemantic(const std::vector<float>& queryVec, int limit,
                                       const std::string& tagFilter, std::vector<KnowledgeHit>& out,
                                       std::string& err) {

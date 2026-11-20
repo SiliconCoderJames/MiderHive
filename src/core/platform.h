@@ -91,6 +91,10 @@ public:
     bool knowledgeSearch(const std::string& query, SearchMode mode, int limit,
                          const std::string& tagFilter, std::vector<KnowledgeHit>& out,
                          std::string& err);
+    // 语义关联图谱快照（Obsidian 式视图数据面）：最新 maxNodes 条为节点，
+    // 每条 kNN top-(k+1) 相似边（similarity = 1/(1+distance)）。空库返回空图。
+    bool knowledgeGraphSnapshot(size_t maxNodes, int kPerNode, KnowledgeGraph& out,
+                                std::string& err);
     // 语义检索（Agent 自带模型向量）：queryVec 的维度决定在哪个分表里检索，
     // 需与写入该条目时的维度一致。不走内置嵌入器。
     bool knowledgeSearchSemantic(const std::vector<float>& queryVec, int limit,

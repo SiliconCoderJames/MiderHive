@@ -43,6 +43,10 @@ public:
                     const std::string& embeddingProvider, KnowledgeEntry& out, std::string& err,
                     const InTxStep& inTx = {});
     bool list(int limit, const std::string& tagFilter, std::vector<KnowledgeEntry>& out, std::string& err);
+    // 语义关联图谱快照（Obsidian 式视图的数据面）：最新 maxNodes 条为节点，
+    // 每条以其自身向量做 kNN top-(kPerNode+1)，过滤自身与界外后按 uuid 对
+    // 去重成边；similarity = 1/(1+distance)。空库返回空图（合法）。
+    bool graphSnapshot(size_t maxNodes, int kPerNode, KnowledgeGraph& out, std::string& err);
     bool searchKeyword(const std::string& query, int limit, const std::string& tagFilter,
                        std::vector<KnowledgeEntry>& out, std::string& err);
     bool searchSemantic(const std::vector<float>& queryVec, int limit, const std::string& tagFilter,

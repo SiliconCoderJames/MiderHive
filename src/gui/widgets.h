@@ -1514,6 +1514,10 @@ inline QIcon makeIcon(const QString& kind, const QColor& color, int px,
     else if (kind == "spark")  // LLM / 智能（Lucide sparkle）
         inner = "<path d='M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21"
                 "l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z'/>";
+    else if (kind == "waypoints")  // 图谱（Lucide waypoints：节点连线）
+        inner = "<circle cx='5' cy='12' r='2'/><circle cx='19' cy='6' r='2'/>"
+                "<circle cx='19' cy='18' r='2'/>"
+                "<path d='M7 11L17 7M7 13l10 4'/>";
     else if (kind == "gear")
         inner = "<path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 "
                 "2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 "
