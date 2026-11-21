@@ -89,6 +89,8 @@ private:
     QTimer* digestTimer_ = nullptr;
     std::thread digestThread_;
     std::atomic<bool> digestBusy_{false};
+    std::size_t themeListenerId1_ = 0;  // applyTheme（析构成对移除）
+    std::size_t themeListenerId2_ = 0;  // applyUiPrefs（析构成对移除）
     QLabel* ver_ = nullptr;
     QLabel* tagline_ = nullptr;
     QPointer<SettingsDialog> settings_ = nullptr;

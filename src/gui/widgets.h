@@ -539,14 +539,28 @@ public:
         lay->addWidget(bb);
 
         // 模式切换：高亮生效分母所在行（另一行保留编辑值，切换回来不丢）
-        connect(modeBox_, &QComboBox::currentIndexChanged, this, [this](int) {
+        auto highlight = [this] {
             const bool byTokens = modeBox_->currentData().toString() == "tokens";
             tokenRow_->setStyleSheet(byTokens ? ui::th("background:@selbg@; border-radius:6px;")
                                               : QString());
             reqRow_->setStyleSheet(byTokens ? QString()
                                             : ui::th("background:@selbg@; border-radius:6px;"));
-        });
+        };
+        connect(modeBox_, &QComboBox::currentIndexChanged, this, highlight);
         modeBox_->setCurrentIndex(mode == "requests" ? 1 : 0);
+        highlight();  // 默认 tokens 档也要初始高亮（setCurrentIndex(0) 不发信号，审计 L9）
+        // 超大存量预算提示（审计 M3）：QSpinBox 上限 2e9（int 边界），库里的
+        // 预算若超出，打开即被钳制且保存会静默改小——如实提示而不是无声损坏
+        if (tokenBudget > 2'000'000'000) {
+            auto* warn = new QLabel(
+                i18n::trs("原预算 %1 超出编辑上限（20 亿），保存将被钳制。",
+                          "Existing budget %1 exceeds the edit cap (2B); saving clamps it.")
+                    .arg(ui::fmtCompact(tokenBudget)),
+                this);
+            warn->setWordWrap(true);
+            warn->setStyleSheet(ui::th("color:@danger@; font-size:11px;"));
+            lay->addWidget(warn);
+        }
     }
     QString mode() const { return modeBox_->currentData().toString(); }
     qint64 tokenBudget() const { return spin_->value(); }

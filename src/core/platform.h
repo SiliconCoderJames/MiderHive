@@ -1,6 +1,7 @@
 #pragma once
 // Platform：平台门面。Qt 工作台（进程内直调）与 HTTP API 层共用同一实例，
 // 内部以互斥锁串行化，保证 SQLite 与各服务线程安全。
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -186,14 +187,17 @@ public:
     // 临时问答两段式（替代原 llmAsk 一把梭——客户端所有权交给调用方后，
     // GUI 才能跨线程安全地 cancel，不存在"回调指向已析构客户端"的竞态）：
     //   1) llmAskOpen：读配置（env 覆盖密钥）→ 构造客户端。不发起网络请求；
-    //      返回 nullptr 时 err 说明原因（未配置/store 不可用）。调用方持有
-    //      客户端（建议 shared_ptr），可随时 cancel() 硬中止阻塞读。
+    //      maxTokensOverride > 0 时覆盖配置的 maxTokens（必须在构造**前**生效——
+    //      客户端构造时按值拷贝 cfg，事后改局部副本是死代码）。返回 nullptr 时
+    //      err 说明原因（未配置/store 不可用）。调用方持有客户端（建议
+    //      shared_ptr），可随时 cancel() 硬中止阻塞读。
     //   2) complete 由调用方驱动（流式 onDelta 自定）；err 先自行清空
     //      （stale-err 纪律）。
     //   3) llmAskRecord：收尾豁免记账（source=llm-ask，agent="user"）+ 审计
     //      llm.ask（最后一条 user 消息截断入 detail，绝无密钥）。返回 false =
     //      记账失败（err 带原因；调用方已有回复时把 err 当警告展示即可）。
-    std::unique_ptr<ah::llm::LlmClient> llmAskOpen(ah::llm::LlmConfig& outCfg, std::string& err);
+    std::unique_ptr<ah::llm::LlmClient> llmAskOpen(ah::llm::LlmConfig& outCfg, std::string& err,
+                                                   int maxTokensOverride = 0);
     bool llmAskRecord(const std::vector<ah::llm::LlmMessage>& history,
                       const ah::llm::LlmConfig& cfg, const ah::llm::LlmReply& reply,
                       std::string& err);
@@ -298,6 +302,8 @@ private:
     // LLM 客户端工厂（测试注入 Fake；空 = 默认 makeClient）
     std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)>
         llmClientFactory_;
+    // digest 重入闸（审计 M3）：GUI 调度器/手动按钮/HTTP 端点三路并发统一闸
+    std::atomic<bool> digestInFlight_{false};
     mutable std::recursive_mutex mutex_;
 };
 

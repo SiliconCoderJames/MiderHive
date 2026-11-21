@@ -21,9 +21,9 @@ public:
     void retranslate() override;
 
 private:
-    void rebuildSnapshot();
     void showNodeDetail(const QString& uuid);
     void clearNodeDetail();
+    void applyTagFilter();  // 视图级标签过滤（tagCombo_ 信号与 refresh 共用）
     static QString digestHintText();
 
     QGroupBox* graphCard_ = nullptr;

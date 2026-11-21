@@ -509,8 +509,10 @@ static void test_platform_end_to_end() {
         step("agents.gate");
         std::string claudeKey;
         CHECK(p.registerAgent(masterKey, "claude", "member", claudeKey, err));
+        // zcode-agent 是保留名（审计 M1）：接入向导默认身份 + 总闸豁免——允许
+        // 注册等于允许造出"开关打不到"的身份
         std::string zagentKey;
-        CHECK(p.registerAgent(masterKey, "zcode-agent", "member", zagentKey, err));
+        CHECK(!p.registerAgent(masterKey, "zcode-agent", "member", zagentKey, err));
         // 逐 Agent 禁用：凭据正确也拒接；启用即恢复（密钥不变）
         CHECK(!p.agentSetDisabled("hermes", "claude", true, err));   // 非管理者拒
         CHECK(!p.agentSetDisabled("zcode", "zcode", true, err));     // 管理者不可禁用
@@ -528,14 +530,14 @@ static void test_platform_end_to_end() {
         CHECK(p.agentSetDisabled("zcode", "claude", false, err));
         CHECK(p.authenticate("claude", claudeKey));                  // 启用即恢复
         CHECK(p.agentAccessDenied("claude").empty());
-        // 全局总闸：普通 member 全拒；豁免名单（zcode 管理者 / zcode-agent）放行
+        // 全局总闸：普通 member 全拒；管理者（zcode）放行
         CHECK(!p.setAgentsGateClosed("hermes", true, err));          // 非管理者/非 user 拒
         CHECK(p.setAgentsGateClosed("user", true, err));
         CHECK(p.agentsGateClosed());
         CHECK(!p.authenticate("claude", claudeKey));
         CHECK(p.agentAccessDenied("claude").find("gate is closed") != std::string::npos);
-        CHECK(p.authenticate("zcode-agent", zagentKey));             // 豁免：ZCode 工具身份
-        CHECK(p.agentAccessDenied("zcode-agent").empty());
+        // zcode-agent 豁免无法端到端验证（保留名不可注册）；豁免逻辑的单元面
+        // 由 accessDeniedReasonLocked 的顺序保证（disabled 压过豁免，gate 不压）
         CHECK(p.setAgentsGateClosed("user", false, err));
         CHECK(!p.agentsGateClosed());
         CHECK(p.authenticate("claude", claudeKey));                  // 开闸即恢复
@@ -680,9 +682,9 @@ static void test_platform_end_to_end() {
             CHECK(gatedRes && gatedRes->status == 403);
             if (gatedRes)
                 CHECK(gatedRes->body.find("gate is closed") != std::string::npos);
-            auto zagent = cli.Get("/api/agents",
-                                  {{"X-Agent-Name", "zcode-agent"}, {"X-Api-Key", zagentKey}});
-            CHECK(zagent && zagent->status == 200);  // 豁免：ZCode 工具身份
+            // 管理者（zcode）不受总闸影响：代理成管理操作照常可用
+            auto masterOk2 = cli.Get("/api/diagnostics", {{"X-Master-Key", mk}});
+            CHECK(masterOk2 && masterOk2->status == 200);
             auto open = cli.Put("/api/agents-gate",
                                 {{"X-Master-Key", mk}},
                                 json{{"closed", false}}.dump(), "application/json");

@@ -416,11 +416,13 @@ std::string Platform::agentAccessDenied(const std::string& name) const {
 }
 
 std::string Platform::accessDeniedReasonLocked(const std::string& name) const {
-    // 豁免名单：管理者 + ZCode 工具默认身份（用户拍板：总闸不打断自己的
-    // ZCode 工具；自定义名的 ZCode 工具用逐 Agent 开关豁免）
-    if (isManager(name) || name == "zcode-agent") return "";
-    if (gateClosedLocked()) return "the agent gate is closed";
+    // 优先级（审计 M1）：管理者恒放行 > 明确禁用（压过一切豁免——禁用
+    // zcode-agent 不能是 no-op）> zcode-agent 的总闸豁免 > 总闸。
+    // zcode-agent 的豁免只针对总闸：逐 Agent 禁用仍能管住它
+    if (isManager(name)) return "";
     if (agents_.isDisabled(name)) return "this agent is disabled by the administrator";
+    if (name == "zcode-agent") return "";
+    if (gateClosedLocked()) return "the agent gate is closed";
     return "";
 }
 
@@ -496,7 +498,10 @@ bool Platform::isManager(const std::string& name) const { return name == kManage
 // 把操作记成人类用户做的——恰好打穿"全程可追溯"这条核心承诺。
 bool Platform::isReservedName(const std::string& name) {
     const std::string n = toLower(name);
-    return n == kManagerName || n == "user" || n == "system" || n == "master";
+    // zcode-agent 也是保留名（审计 M1）：它是接入向导给 ZCode 工具的默认身份
+    // 且默认豁免于总闸——允许注册等于允许造出"开关打不到"的身份
+    return n == kManagerName || n == "user" || n == "system" || n == "master" ||
+           n == "zcode-agent";
 }
 
 bool Platform::registerAgent(const std::string& masterKey, const std::string& name,
@@ -1548,7 +1553,8 @@ bool Platform::llmConfigSet(const std::string& actor, const ah::llm::LlmConfig& 
 }
 
 std::unique_ptr<ah::llm::LlmClient> Platform::llmAskOpen(ah::llm::LlmConfig& outCfg,
-                                                         std::string& err) {
+                                                         std::string& err,
+                                                         int maxTokensOverride) {
     ah::llm::LlmConfig cfg;
     std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)> factory;
     {
@@ -1563,6 +1569,9 @@ std::unique_ptr<ah::llm::LlmClient> Platform::llmAskOpen(ah::llm::LlmConfig& out
         // env 覆盖密钥：CI/无头场景可不落盘注入
         const std::string envKey = envOr({"MIDERHIVE_LLM_KEY"});
         if (!envKey.empty()) cfg.apiKey = envKey;
+        // maxTokens 覆盖必须在构造**前**生效（客户端按值拷贝 cfg，事后改局部
+        // 副本是死代码——审计 H2）
+        if (maxTokensOverride > 0) cfg.maxTokens = maxTokensOverride;
         // 工厂在锁内拷贝到局部：锁外调用不构成与 setLlmClientFactory 的竞态
         factory = llmClientFactory_;
     }
@@ -1692,6 +1701,17 @@ std::string isoAdvanceOneSec(const std::string& iso) {
 
 bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, std::string& err,
                              std::function<void()>* cancelOut) {
+    // 重入闸（审计 M3）：GUI 调度器/手动按钮/HTTP 端点三路并发各自以为是唯一
+    // 调用方——双跑会双倍花费 + 同批料生成两条摘要。Platform 内统一闸。
+    if (digestInFlight_.exchange(true)) {
+        err = "a digest run is already in progress";
+        return false;
+    }
+    struct BusyGuard {
+        std::atomic<bool>& f;
+        ~BusyGuard() { f = false; }
+    } busyGuard{digestInFlight_};
+
     ah::llm::LlmConfig cfg;
     std::string watermark;
     // ---- 预算闸门（先查后调）：mode 口径超预算 → 跳过，不调 LLM 不花钱 ----
@@ -1724,6 +1744,7 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
     std::vector<ErrorReport> errs;
     std::vector<AgentInfo> agents;
     std::string maxCreated;  // 本轮已消费行的最大 created_at（水位推进用）
+    bool backlogTruncated = false;  // 任一流取到 cap 上限 = 疑似积压未清（审计 M2）
     {
         std::lock_guard lock(mutex_);
         std::string qerr;
@@ -1756,19 +1777,26 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
             if (m.created_at > maxCreated) maxCreated = m.created_at;
         for (const auto& e : errs)
             if (e.created_at > maxCreated) maxCreated = e.created_at;
+        // 积压检测（审计 M2）：三条流都按"最新 N 条"取，积压超限时最老的料本轮
+        // 拿不到——水位照推会让它们永久静默丢失。此处只标记：水位推到本轮
+        // **最小**已消费行（而非最大），剩余积压留给下一轮
+        if (audits.size() >= 200 || msgs.size() >= 100) backlogTruncated = true;
     }
     // 活动判断只看三类流（audit/messages/errors）；Agent 状态快照是 prompt
     // 的上下文，不是活动——注册过的 Agent 恒非空，算进去会让"无活动"永假
     const bool hasActivity = !audits.empty() || !msgs.empty() || !errs.empty();
     if (!hasActivity) {
-        // 空跑也推进水位：防止水位永不动导致取料越积越多
+        // 空跑也推进水位：防止水位永不动导致取料越积越多。**保持单调**——取
+        // max(旧水位, now)：同秒连跑时 now 可能小于旧水位（run1 已推进到
+        // maxCreated+1s），直接写 now 会让水位倒退、旧料被重吃（审计 L1）
         statsJson = nlohmann::json{{"skipped_reason", "no activity"}}.dump();
         std::lock_guard lock(mutex_);
         std::string werr;
+        const std::string now = nowIso();
         db_.query(
             "INSERT INTO settings(key, value) VALUES('digest_last_run_at', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&](Stmt& st) { st.bind(1, nowIso()); }, nullptr, werr);
+            [&](Stmt& st) { st.bind(1, now > watermark ? now : watermark); }, nullptr, werr);
         db_.query(
             "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1803,10 +1831,22 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
         (errLines.empty() ? "（无）" : errLines) + "\n== Agent 状态 ==\n" +
         (agentLines.empty() ? "（无）" : agentLines);
 
-    // ---- 调 LLM（不持锁；maxTokens 限成本）----
-    auto client = llmAskOpen(cfg, err);
-    if (!client) return false;
-    cfg.maxTokens = 1024;
+    // ---- 调 LLM（不持锁；maxTokens 限成本——必须经 llmAskOpen 参数在构造前
+    // 生效，事后改局部副本是死代码，审计 H2）----
+    auto client = llmAskOpen(cfg, err, 1024);
+    if (!client) {
+        // LLM 未配置/store 不可用：水位不动（下轮重试），但状态如实落库——
+        // 此前直接 return false，GUI 状态行显示陈旧信息（审计 L7）
+        std::lock_guard lock(mutex_);
+        std::string werr;
+        const std::string status = nlohmann::json{{"error", truncateForAudit(err)}}.dump(
+            2, ' ', false, nlohmann::detail::error_handler_t::replace);
+        db_.query(
+            "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&](Stmt& st) { st.bind(1, status); }, nullptr, werr);
+        return false;
+    }
     if (cancelOut) *cancelOut = [c = client.get()] { c->cancel(); };
     err.clear();  // stale-err 纪律
     ah::llm::LlmReply reply = client->complete({ah::llm::LlmMessage{"user", prompt}}, nullptr,
@@ -1836,12 +1876,26 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
         std::string kerr;
         const bool written = knowledgeCreate("user", title, reply.text, {"digest"}, "蜂巢摘要",
                                              {}, "", entry, kerr);
-        // 水位推进到 max(now, 最大已消费行 +1s)：now 与本轮行同秒时（快速连跑/
-        // 测试），+1s 保证下一轮的 >= 不会重吃同一秒的行
+        // 水位推进：默认到 max(now, 最大已消费行 +1s)（now 与本轮行同秒时 +1s
+        // 防下一轮 >= 重吃）。**积压保护**（审计 M2）：任一流取到 cap = 疑似
+        // 积压超限，最老的料本轮没拿到——水位只推到本轮**最小**已消费行 +1s，
+        // 剩余积压留给下一轮，不静默丢料
         std::string newWatermark = nowIso();
         if (!maxCreated.empty()) {
-            const std::string past = isoAdvanceOneSec(maxCreated);
-            if (past > newWatermark) newWatermark = past;
+            if (backlogTruncated) {
+                std::string minCreated = maxCreated;
+                for (const auto& r : audits)
+                    if (r.created_at < minCreated) minCreated = r.created_at;
+                for (const auto& m : msgs)
+                    if (m.created_at < minCreated) minCreated = m.created_at;
+                for (const auto& e : errs)
+                    if (e.created_at < minCreated) minCreated = e.created_at;
+                const std::string past = isoAdvanceOneSec(minCreated);
+                if (past < newWatermark) newWatermark = past;
+            } else {
+                const std::string past = isoAdvanceOneSec(maxCreated);
+                if (past > newWatermark) newWatermark = past;
+            }
         }
         db_.query(
             "INSERT INTO settings(key, value) VALUES('digest_last_run_at', ?) "
@@ -1851,6 +1905,7 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
                                    {"tokens_in", reply.tokensIn},
                                    {"tokens_out", reply.tokensOut},
                                    {"truncated", reply.truncated},
+                                   {"backlog_truncated", backlogTruncated},
                                    {"knowledge_uuid", written ? entry.uuid : std::string()}}.dump(
             2, ' ', false, nlohmann::detail::error_handler_t::replace);
         db_.query(
@@ -1859,7 +1914,14 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
             [&](Stmt& st) { st.bind(1, statsJson); }, nullptr, kerr);
         std::string aerr;
         auditStep(actor, "digest.run", written ? entry.uuid : std::string(), statsJson, aerr);
-        if (!written) err = "digest generated, but writing the knowledge entry failed: " + kerr;
+        if (!written) {
+            // 摘要生成但落库失败：水位已推进，该轮内容不可重试——至少把失败
+            // 如实并进 stats/err（审计 M4 的可见性部分；M4 的堆积治理入维护任务）
+            err = "digest generated, but writing the knowledge entry failed: " + kerr;
+            statsJson = nlohmann::json{{"generated", false},
+                                       {"error", truncateForAudit(kerr)}}.dump(
+                2, ' ', false, nlohmann::detail::error_handler_t::replace);
+        }
     }
     return true;
 }

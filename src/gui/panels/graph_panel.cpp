@@ -55,7 +55,15 @@ public:
     }
 
     void setGraph(const KnowledgeGraph& g) {
-        // 保留旧位置：uuid 相同的节点位置/被拖状态不动，新节点从中心附近随机展开
+        // 保留旧位置：uuid 相同的节点位置/被拖状态不动，新节点从中心附近随机展开。
+        // 拖拽/选中状态按 uuid 重映射（审计 M2）：索引在重建后语义改变，裸下标
+        // 会让"另一个节点被钉到光标上"、高亮环落错节点
+        const QString dragUuid = dragIdx_ >= 0 && dragIdx_ < nodes_.size()
+                                     ? nodes_[dragIdx_].uuid
+                                     : QString();
+        const QString selUuid = selected_ >= 0 && selected_ < nodes_.size()
+                                    ? nodes_[selected_].uuid
+                                    : QString();
         QHash<QString, QPointF> keep;
         for (const auto& n : nodes_) keep.insert(n.uuid, QPointF(n.x, n.y));
         nodes_.clear();
@@ -84,18 +92,25 @@ public:
             const auto b = byUuid_.value(QString::fromStdString(e.b_uuid), -1);
             if (a >= 0 && b >= 0) edges_.push_back({a, b, e.similarity});
         }
+        // 重映射拖拽/选中（uuid 失效即取消对应状态）
+        dragIdx_ = byUuid_.value(dragUuid, -1);
+        if (dragIdx_ >= 0) nodes_[dragIdx_].fixed = true;  // 拖拽仍在途：恢复固定态
+        selected_ = byUuid_.value(selUuid, -1);
         running_ = true;  // 新拓扑重启物理
         update();
     }
 
     void relayout() {
-        // 重新布局：位置全部重掷 + 重启物理（「重新布局」按钮）
+        // 重新布局：位置全部重掷 + 重启物理 + 视口复位（审计 L4：用户平移很远
+        // 后点重布局，节点落在视口外会看似按钮失效）
         for (auto& n : nodes_) {
             const double ang = rand01() * 6.2832;
             n.x = 300 + 200 * std::cos(ang);
             n.y = 260 + 200 * std::sin(ang);
             n.vx = n.vy = 0;
         }
+        panX_ = panY_ = 0;
+        scale_ = 1.0;
         running_ = true;
     }
 
@@ -269,6 +284,10 @@ protected:
             const QPointF w = toWorld(e->position());
             dragX_ = w.x();
             dragY_ = w.y();
+            // 拖拽中物理可能已收敛停帧（审计 H1）：不重启的话 mouseMove 只改
+            // dragX_/dragY_ 而无人应用到节点——节点视觉上脱手冻结
+            running_ = true;
+            settled_ = 0;
         } else if (panning_) {
             panX_ = panStartX_ + (e->position().x() - panStart_.x());
             panY_ = panStartY_ + (e->position().y() - panStart_.y());
@@ -376,6 +395,9 @@ GraphPanel::GraphPanel(ah::Platform& platform, QWidget* parent) : PanelBase(plat
     connect(relayoutBtn_, &QPushButton::clicked, this,
             [this] { static_cast<GraphCanvas*>(graphView_)->relayout(); });
     connect(refreshBtn_, &QPushButton::clicked, this, [this] { lastSig_.clear(); refresh(); });
+    // 标签筛选（审计 H2）：此前无任何信号连接，改选标签画面毫无反应
+    connect(tagCombo_, &QComboBox::currentIndexChanged, this,
+            [this](int) { applyTagFilter(); });
     connect(openKnowledgeBtn_, &QPushButton::clicked, this,
             [this] { drillTo("knowledge"); });
     // 节点选中：右侧详情联动
@@ -414,7 +436,9 @@ QString GraphPanel::digestHintText() {
 }
 
 void GraphPanel::refresh() {
-    // 轻量签名检查：最新条目的 created_at 没变就不重取快照（3s 轮询不重算图）
+    // 轻量签名检查：最新条目的 created_at 没变就不重取快照（3s 轮询不重算图）。
+    // 首拍（lastSig_ 空）必取一次建立基线（审计 M4：尾码拼接会让每次手动刷新
+    // 后必然多付一次 200 节点全量重取，已删）
     std::vector<ah::KnowledgeEntry> latest;
     std::string err;
     if (!platform_.knowledgeList(1, "", latest, err)) {
@@ -422,8 +446,7 @@ void GraphPanel::refresh() {
         return;
     }
     const std::string sig =
-        (latest.empty() ? std::string("empty") : latest.front().created_at) +
-        "#" + std::to_string(lastSig_.empty() ? -1 : 0);
+        latest.empty() ? std::string("empty") : latest.front().created_at;
     if (!lastSig_.empty() && sig == lastSig_) return;
     lastSig_ = sig;
     if (!platform_.knowledgeGraphSnapshot(200, 5, graph_, err)) {
@@ -432,7 +455,7 @@ void GraphPanel::refresh() {
     }
     static_cast<GraphCanvas*>(graphView_)->setGraph(graph_);
 
-    // 标签筛选下拉：从快照聚合（重建后保持现选值）
+    // 标签筛选下拉：从快照聚合（重建后保持现选值）+ 应用当前筛选
     const QString keep = tagCombo_->currentText();
     std::map<QString, int> tagCount;
     for (const auto& n : graph_.nodes)
@@ -449,23 +472,28 @@ void GraphPanel::refresh() {
     statsLabel_->setText(i18n::trs("%1 个节点 · %2 条相似边", "%1 nodes · %2 edges")
                              .arg(graph_.nodes.size())
                              .arg(graph_.edges.size()));
-    if (!tagCombo_->currentText().isEmpty() &&
-        tagCombo_->currentIndex() > 0) {
-        // 标签筛选生效中：把不在筛选里的节点从画布隐藏（数据保留，仅视图过滤）
-        const QString tag = tagCombo_->currentText();
-        std::vector<ah::KnowledgeGraphNode> kept;
-        for (const auto& n : graph_.nodes)
-            if (std::find(n.tags.begin(), n.tags.end(), tag.toStdString()) != n.tags.end())
-                kept.push_back(n);
-        ah::KnowledgeGraph filtered;
-        filtered.nodes = kept;
-        std::map<std::string, bool> keepUuid;
-        for (const auto& n : kept) keepUuid[n.uuid] = true;
-        for (const auto& e : graph_.edges)
-            if (keepUuid.count(e.a_uuid) && keepUuid.count(e.b_uuid))
-                filtered.edges.push_back(e);
-        static_cast<GraphCanvas*>(graphView_)->setGraph(filtered);
+    applyTagFilter();
+}
+
+// 视图级标签过滤（审计 H2）：独立成方法——tagCombo_ 信号与 refresh 都调它；
+// refresh 的签名早退只控制"是否重取快照"，不跳过筛选重应用
+void GraphPanel::applyTagFilter() {
+    if (tagCombo_->currentIndex() <= 0) {
+        static_cast<GraphCanvas*>(graphView_)->setGraph(graph_);
+        return;
     }
+    const QString tag = tagCombo_->currentText();
+    std::vector<ah::KnowledgeGraphNode> kept;
+    for (const auto& n : graph_.nodes)
+        if (std::find(n.tags.begin(), n.tags.end(), tag.toStdString()) != n.tags.end())
+            kept.push_back(n);
+    ah::KnowledgeGraph filtered;
+    filtered.nodes = kept;
+    std::map<std::string, bool> keepUuid;
+    for (const auto& n : kept) keepUuid[n.uuid] = true;
+    for (const auto& e : graph_.edges)
+        if (keepUuid.count(e.a_uuid) && keepUuid.count(e.b_uuid)) filtered.edges.push_back(e);
+    static_cast<GraphCanvas*>(graphView_)->setGraph(filtered);
 }
 
 void GraphPanel::showNodeDetail(const QString& uuid) {

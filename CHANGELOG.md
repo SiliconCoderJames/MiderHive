@@ -22,6 +22,50 @@ join the hive over HTTP or MCP.
 > `%USERPROFILE%\.miderhive`). The old `AGENTHIVE_*` / `ZCODE_*` names and the old data
 > directory are recognised and migrated automatically.
 
+## [1.6.0] - 2026-11-21
+
+### Added
+- **Connection switches (schema v4)**: one-click enable/disable for the platform's links to
+  agent tools — a global gate plus a per-agent switch. Platform-side rejection semantics:
+  a disabled identity's every hive call is immediately answered **403** with a plain-language
+  reason (`connection disabled: …`), while tool configs and API keys stay untouched; re-enable
+  takes effect instantly. Exempt: the manager identity `zcode` and the ZCode tool's default
+  identity `zcode-agent`. HTTP `POST /api/agents/disable|enable`, `PUT /api/agents-gate`; CLI
+  `agents disable|enable --name N`, `gate close|open`; Settings > Agents gets a gate row and a
+  Disable/Enable action; the dashboard shows a "disabled" badge with an enable action and a
+  gate-closed alert card. `agents.disabled` is a dedicated column (the `status` column is
+  heartbeat-inferred and cannot hold a disabled state).
+- **Budget by requests (dual basis)**: the weekly budget can now count tokens *or* call
+  counts — `budget_mode` (`tokens` | `requests`) plus `weekly_request_budget`, edited as one
+  three-key config in the budget dialog; alert levels switch basis accordingly (exempt ask
+  console excluded in both). `/api/usage/budget` GET/PUT expose all three keys (PUT stays
+  backward compatible: `budget`-only = legacy single-key edit); summary/report add `mode`,
+  `calls`, `budgeted_calls`; the skill-invoke response's `remaining` is now mode-aware.
+- **Auto digest (summary harvesting)**: the platform can periodically have its configured LLM
+  distill recent hive activity (audits/messages/errors since a watermark) into a ≤500-char
+  structured summary written to the knowledge base (tag `digest`). Budget-gated: when the
+  active basis is over budget the run is skipped without calling the LLM. Accounting uses
+  `source=llm-digest` (counted against the budget — the gate exists for it). Manual trigger:
+  Usage panel "Run now" (success/skip/failure all toast), `agent-cli digest run`, or
+  `POST /api/digest/run`; scheduling lives in the workbench (15-min check, workbench-closed
+  means not running).
+- **Knowledge graph view (Obsidian-style, 9th panel, Ctrl+9)**: force-directed graph where
+  nodes are the latest knowledge entries (size = degree, color = category) and edges are
+  vector-kNN similarity — MiderHive's own take on the graph view: related entries are
+  discovered by embeddings, not by hand-written links. Wheel zoom, drag-pan, drag-to-pin,
+  click for a detail pane with a jump into the knowledge base; positions are cached per uuid
+  across refreshes; tag filter and re-layout. Data plane: `knowledgeGraphSnapshot` (per-entry
+  self-vector kNN, dedup by uuid pair, similarity = 1/(1+distance)).
+- The UI speaks the existing 8 languages across the new surfaces (39+13 new keys per pack).
+
+### Fixed
+- **Full pre-release audit of all new surfaces (2 parallel reviews)** before this release;
+  findings fixed (see the audit note in the release page).
+- Small UX debts from the earlier UI review: settings navigation is keyboard-reachable;
+  agent status / error severity+status / message status enums are localized in the display
+  layer (storage stays English); usage-panel read failures toast instead of silently keeping
+  stale data; three destructive confirm dialogs default to "No".
+
 ## [1.5.0] - 2026-11-19
 
 ### Added
@@ -682,7 +726,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.2.2...v1.3.0

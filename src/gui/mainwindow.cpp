@@ -161,10 +161,10 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
 
     // 语言切换：重译铬层（导航/页头/状态栏），面板各自处理自有文案
     i18n::listeners().push_back([this] { applyLanguage(); });
-    // 主题/字号切换：重生成 QSS、重涂铬层、重建面板
-    ui::themeListeners().push_back([this] { applyTheme(); });
-    // 界面偏好（刷新频率/错误提醒）由设置对话框写入后经同一通知重读
-    ui::themeListeners().push_back([this] { applyUiPrefs(); });
+    // 主题/字号切换：重生成 QSS、重涂铬层、重建面板（成对移除——项目纪律：
+    // 监听器注册必须析构移除，审计 M6）
+    themeListenerId1_ = ui::addThemeListener([this] { applyTheme(); });
+    themeListenerId2_ = ui::addThemeListener([this] { applyUiPrefs(); });
 
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &MainWindow::onRefresh);
@@ -218,6 +218,9 @@ MainWindow::~MainWindow() {
     // 在途摘要先收尾：无取消句柄面（digestRunOnce 未暴露 cancel），join 最多
     // 等一个 LLM 超时上限——maxTokens 已限 1024，常规远短于此
     if (digestThread_.joinable()) digestThread_.join();
+    // 监听器成对移除（审计 M6）：与构造期的注册一一对应
+    ui::removeThemeListener(themeListenerId1_);
+    ui::removeThemeListener(themeListenerId2_);
 }
 
 void MainWindow::maybeRunDigest() {
@@ -242,11 +245,14 @@ void MainWindow::maybeRunDigest() {
     digestThread_ = std::thread([guard, pl = &platform_] {
         std::string stats, err;
         const bool ok = pl->digestRunOnce(ah::kManagerName, stats, err);
+        // GUI 侧 busy 复位（Platform 闸 digestInFlight_ 已在 digestRunOnce 出口复位；
+        // 这里再复位一次防御 guard 早亡分支漏掉 UI 态）
         QMetaObject::invokeMethod(
             guard.data(),
             [guard, ok, stats = QString::fromStdString(stats),
              err = QString::fromStdString(err)] {
                 if (!guard) return;
+                guard->digestBusy_ = false;
                 if (ok && stats.contains("skipped_reason"))
                     return;  // 调度触发的跳过（预算耗尽/无活动）静默——告警面已有预算横幅
                 if (ok)

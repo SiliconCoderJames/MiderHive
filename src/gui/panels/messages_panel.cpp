@@ -50,6 +50,7 @@ QString kindChip(const QString& kind) {
 QString statusLabel(const QString& s) {
     return s == "open"       ? i18n::trs("未读", "unread")
            : s == "unread"   ? i18n::trs("未读", "unread")
+           : s == "pending"  ? i18n::trs("待处理", "pending")
            : s == "read"     ? i18n::trs("已读", "read")
            : s == "accepted" ? i18n::trs("已接受", "accepted")
            : s == "done"     ? i18n::trs("已完成", "done")
