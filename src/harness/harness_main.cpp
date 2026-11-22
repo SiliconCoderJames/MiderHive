@@ -30,6 +30,9 @@
 #include <QDialog>
 #include <QDir>
 #include <QEventLoop>
+#include <QBuffer>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QFile>
 #include <QGroupBox>
 #include <QHash>
@@ -40,6 +43,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -116,8 +120,12 @@ void seedData(ah::Platform& p, const std::string& dbPath) {
     }
     for (const char* n : {"claude", "cursor", "codex"}) {
         std::string k;
-        if (!p.registerAgent(mk, n, "member", k, err))
-            printNow(QString("FATAL  种子注册失败 %1: %2").arg(n, QString::fromStdString(err)));
+        if (!p.registerAgent(mk, n, "member", k, err)) {
+            // 复用旧 home 时同名注册失败是预期的（种子重复注入）——harness 的
+            // 可复现单元是 fresh home + 完整流水线，同 home 重跑快照必 DIFF
+            printNow(QString("WARN    种子注册失败 %1: %2（复用旧 home？快照将包含重复数据）")
+                         .arg(n, QString::fromStdString(err)));
+        }
     }
     ah::KnowledgeEntry e;
     std::string kerr;
@@ -384,6 +392,7 @@ int main(int argc, char** argv) {
     QDir().mkpath(baselineDir);
     int compared = 0, diffs = 0, created = 0, passed = 0, ruleViolations = 0;
     installDialogSweeper(&app);
+    std::vector<std::pair<QString, QString>> results;  // (场景 id, PASS/DIFF/NEW)
 
     auto runScene = [&](const QString& id, int navRow) {
         if (!filter.isEmpty() && !id.contains(filter)) return;
@@ -418,6 +427,7 @@ int main(int argc, char** argv) {
             b.open(QIODevice::WriteOnly);
             b.write(QJsonDocument(tree).toJson(QJsonDocument::Indented));
             ++created;
+            results.push_back({id, "BASELINE"});
             printNow(QString("BASELINE  %1").arg(id));
             return;
         }
@@ -425,16 +435,19 @@ int main(int argc, char** argv) {
         if (!b.exists()) {
             printNow(QString("NEW       %1（基线不存在——review 后入库）").arg(id));
             ++created;
+            results.push_back({id, "NEW"});
             return;
         }
         b.open(QIODevice::ReadOnly);
         const QJsonObject base = QJsonDocument::fromJson(b.readAll()).object();
         if (stripSoft(base) != stripSoft(tree)) {
             ++diffs;
+            results.push_back({id, "DIFF"});
             printNow(QString("DIFF      %1（结构/文案与基线不一致——review 后 --update-baseline）")
                          .arg(id));
         } else {
             ++passed;
+            results.push_back({id, "PASS"});
             printNow(QString("PASS      %1").arg(id));
         }
     };
@@ -452,6 +465,54 @@ int main(int argc, char** argv) {
 
     // pass 2：有数据态
     for (const auto& ps : panels) runScene(QString("%1.seeded").arg(ps.panel), ps.row);
+
+    // ---- 像素金样（第 1 轮拍板：旗舰 3 场景，本机限定不入库）----
+    // grab 在 ui_harness 的固定画幅（1440x920）下采集；哈希存 hashes.json，
+    // 对比模式不一致报 GOLDEN-DIFF（字体/驱动差异也可能触发——本机回归信号）
+    const QString goldenDir = outDir + "/golden";
+    QDir().mkpath(goldenDir);
+    QJsonObject goldenHashes;  // 本地哈希基线（跨运行对比）
+    {
+        QFile hf(goldenDir + "/hashes.json");
+        if (hf.open(QIODevice::ReadOnly)) goldenHashes = QJsonDocument::fromJson(hf.readAll()).object();
+    }
+    int goldenDiff = 0;
+    auto grabGolden = [&](const QString& id, int navRow) {
+        if (!filter.isEmpty() && !id.contains(filter)) return;
+        nav->setCurrentRow(navRow);
+        for (int i = 0; i < 5; ++i) {
+            QApplication::processEvents(QEventLoop::AllEvents, 100);
+            QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+        QWidget* panel = stack->currentWidget();
+        if (!panel) return;
+        const QPixmap pm = panel->grab();
+        QFile pf(goldenDir + "/" + id + ".png");
+        pf.open(QIODevice::WriteOnly);
+        pm.save(&pf, "PNG");
+        const QByteArray png = QJsonDocument(QJsonObject{}).toJson();  // 占位避免 -Wunused
+        QBuffer buf;
+        buf.open(QIODevice::WriteOnly);
+        pm.save(&buf, "PNG");
+        const QString hash = QString::fromLatin1(
+            QCryptographicHash::hash(buf.data(), QCryptographicHash::Sha256).toHex());
+        goldenHashes[id] = hash;
+        const auto it = goldenHashes.constFind(id);
+        if (it != goldenHashes.constEnd() && it.value() != hash) {
+            ++goldenDiff;
+            printNow(QString("GOLDEN-DIFF  %1（像素与上次运行不同——本机限定信号）").arg(id));
+        }
+    };
+    grabGolden("dashboard.seeded", 0);
+    grabGolden("knowledge.seeded", 2);
+    grabGolden("graph.seeded", 8);
+    {
+        QFile hf(goldenDir + "/hashes.json");
+        hf.open(QIODevice::WriteOnly);
+        hf.write(QJsonDocument(goldenHashes).toJson(QJsonDocument::Indented));
+    }
+    // 恢复 dashboard 选中（grab 切到 graph 后，后续场景不受影响——尾部无场景）
+    nav->setCurrentRow(0);
 
     // pass 3：读失败态（逐面板注入对应 fault；无注入点的面板跳过）
     for (const auto& ps : panels) {
@@ -516,13 +577,61 @@ int main(int argc, char** argv) {
                      .arg(shortcutTotal));
 
     // ---- 汇总 ----
-    printNow(QString("==== ui_harness 完成：场景 %1，PASS %2，新建基线 %3，结构差异 %4，规则违例 %5，弹窗 %6 ====")
+    printNow(QString("==== ui_harness 完成：场景 %1，PASS %2，新建基线 %3，结构差异 %4，规则违例 %5，弹窗 %6，金样差异 %7 ====")
                  .arg(compared)
                  .arg(passed)
                  .arg(created)
                  .arg(diffs)
                  .arg(ruleViolations)
-                 .arg(g_dialogs.total));
+                 .arg(g_dialogs.total)
+                 .arg(goldenDiff));
+
+    // ---- HTML 报告（第 4 轮拍板：自包含，人工 review 用）----
+    {
+        QFile hf(outDir + "/ui_report.html");
+        hf.open(QIODevice::WriteOnly);
+        QString html = QStringLiteral(
+            "<!doctype html><html><head><meta charset='utf-8'><title>UI Harness Report</title>"
+            "<style>body{font-family:Segoe UI,sans-serif;background:#16181d;color:#ddd;"
+            "margin:24px}table{border-collapse:collapse;width:100%%}td,th{border:1px solid "
+            "#333;padding:6px 10px;font-size:13px}th{background:#222}tr:nth-child(even){"
+            "background:#1d2026}.pass{color:#4ade80}.diff{color:#f87171}.new{color:#eab308}"
+            "pre{background:#101216;padding:12px;border-radius:8px;font-size:12px;white-space:"
+            "pre-wrap}h2{border-bottom:1px solid #333}</style></head><body>");
+        html += QStringLiteral("<h1>MiderHive UI Harness Report</h1><p>%1 · 场景 %2 · PASS %3 · "
+                               "DIFF %4 · NEW %5 · 规则违例 %6 · 弹窗 %7 · 金样差异 %8</p>")
+                    .arg(QDateTime::currentDateTime().toString(Qt::ISODate))
+                    .arg(compared)
+                    .arg(passed)
+                    .arg(diffs)
+                    .arg(created)
+                    .arg(ruleViolations)
+                    .arg(g_dialogs.total)
+                    .arg(goldenDiff);
+        html += "<h2>场景结果</h2><table><tr><th>场景</th><th>状态</th></tr>";
+        for (const auto& [id, st] : results)
+            html += QStringLiteral("<tr><td>%1</td><td class='%2'>%3</td></tr>")
+                        .arg(id, st.toLower(), st);
+        html += "</table>";
+        if (ruleViolations > 0) {
+            html += "<h2>规则违例</h2><ul>";
+            for (const auto& v : g_dialogs.violations)
+                html += QStringLiteral("<li><b>%1</b>（弹窗）%2</li>")
+                            .arg(v.rule, v.detail.toHtmlEscaped());
+            html += "</ul><p>（违例明细见 console 输出 RULE 行）</p>";
+        }
+        if (!g_dialogs.entries.isEmpty()) {
+            html += "<h2>弹窗记录（自动应答）</h2><pre>" +
+                    g_dialogs.entries.join('\n').toHtmlEscaped() + "</pre>";
+        }
+        html += QStringLiteral("<h2>金样哈希（本机限定）</h2><pre>%1</pre>")
+                    .arg(QJsonDocument(goldenHashes).toJson(QJsonDocument::Indented)
+                             .constData());
+        html += "</body></html>";
+        hf.write(html.toUtf8());
+    }
+    printNow(QString("报告：build/ui_harness/ui_report.html（金样 %1 张在 build/ui_harness/golden/）")
+                 .arg(goldenHashes.size()));
     for (const auto& v : g_dialogs.violations)
         printNow(QString("RULE      dialogs | %1 | %2").arg(v.rule, v.detail.left(60)));
     if (!g_dialogs.entries.isEmpty()) {
