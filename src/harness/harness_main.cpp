@@ -27,20 +27,24 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QGroupBox>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QShortcut>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTimer>
@@ -49,6 +53,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -202,6 +207,98 @@ QJsonObject stripSoft(const QJsonObject& o) {
     return c;
 }
 
+// ---- 不变量规则集（第 1 轮拍板：rubric 式长期标准，随场景全跑；基线无关）----
+struct Violation {
+    QString rule;
+    QString detail;
+};
+
+bool hasCjk(const QString& s) {
+    for (const QChar c : s)
+        if (c.unicode() >= 0x4E00 && c.unicode() <= 0x9FFF) return true;
+    return false;
+}
+
+// R1 英文场景无 CJK 泄漏（lang-en-* 场景）
+// R4 空态场景必须有可见的空态引导（InlineEmpty/HexEmptyState 或含引导文案的空态标签）
+// R5 有数据场景可见控件数 ≥ 10（灾难性空白检测）
+std::vector<Violation> runRules(const QString& sceneId, QWidget* panel, int visibleCount,
+                                bool textEmpty) {
+    std::vector<Violation> out;
+    if (sceneId.startsWith("lang-en")) {
+        // 英文场景的 CJK 检查只对**交互 chrome**（按钮/复选/下拉/表头）——
+        // QLabel 承载用户数据（Agent 卡的 current_task、错误标题等中文数据在
+        // 英文界面显示是正确行为）；权威 CJK 判据仍是 gui_selftest 的空库扫描
+        std::function<void(QWidget*)> walk = [&](QWidget* w) {
+            QString t;
+            if (auto* x = qobject_cast<QPushButton*>(w)) t = x->text();
+            else if (auto* x = qobject_cast<QCheckBox*>(w)) t = x->text();
+            else if (auto* x = qobject_cast<QComboBox*>(w)) t = x->currentText();
+            else if (auto* x = qobject_cast<QTableWidget*>(w))
+                for (int c = 0; c < x->columnCount(); ++c)
+                    if (auto* it = x->horizontalHeaderItem(c)) t += it->text() + ' ';
+            if (hasCjk(t))
+                out.push_back({"en-cjk-leak", QString("%1=%2").arg(w->objectName(), t.left(40))});
+            for (QObject* c : w->children())
+                if (auto* cw = qobject_cast<QWidget*>(c)) walk(cw);
+        };
+        walk(panel);
+    }
+    if (sceneId.endsWith(".empty")) {
+        bool hasEmptyState = false;
+        for (QWidget* w : panel->findChildren<QWidget*>())
+            if (w->isVisible() && (w->metaObject()->className() == QStringLiteral("ah::InlineEmpty") ||
+                                   w->metaObject()->className() == QStringLiteral("ui::InlineEmpty") ||
+                                   !w->objectName().isEmpty() &&
+                                       w->objectName().contains("Empty", Qt::CaseInsensitive)))
+                hasEmptyState = true;
+        // 空态引导不是硬性全系具备（部分面板用内联文案），以"可见控件数 < 3 且无引导"
+        // 为违例——空得连引导都没有才是 UX 问题
+        if (!hasEmptyState && visibleCount < 3)
+            out.push_back({"empty-no-guide", sceneId});
+    }
+    if (sceneId.endsWith(".seeded") && visibleCount < 10 && !sceneId.startsWith("graph"))
+        out.push_back({"seeded-too-empty", QString("%1: visible=%2").arg(sceneId).arg(visibleCount)});
+    return out;
+}
+
+// ---- 弹窗自动应答器（第 3 轮拍板）：离屏下模态框不卡测试；每次弹出记录进
+// 报告（意外弹窗 = UX 审查产出）并检查默认按钮（破坏性确认默认 No 规则）----
+struct DialogLog {
+    QStringList entries;     // "scene | title | default=<text|none>"
+    int total = 0;
+    std::vector<Violation> violations;  // 破坏性确认默认非 No
+    QString currentScene;
+};
+DialogLog g_dialogs;
+
+void installDialogSweeper(QObject* root) {
+    auto* t = new QTimer(root);
+    root->connect(t, &QTimer::timeout, root, [] {
+        for (QWidget* w : QApplication::topLevelWidgets()) {
+            auto* mb = qobject_cast<QMessageBox*>(w);
+            if (!mb || !mb->isVisible()) continue;
+            ++g_dialogs.total;
+            QPushButton* def = mb->defaultButton();
+            QString defText = def ? def->text() : QStringLiteral("<none>");
+            g_dialogs.entries << QString("%1 | %2 | default=%3")
+                                     .arg(g_dialogs.currentScene, mb->windowTitle(), defText);
+            // 破坏性确认默认按钮不得是肯定项（审计规则 R3）
+            const QString t2 = mb->windowTitle();
+            if ((t2.contains("移除") || t2.contains("禁用") || t2.contains("轮换") ||
+                 t2.contains("删除") || t2.contains("Remove") || t2.contains("Disable") ||
+                 t2.contains("Rotate") || t2.contains("Delete")) &&
+                def && def != mb->button(QMessageBox::No) &&
+                mb->standardButtons() & QMessageBox::No)
+                g_dialogs.violations.push_back({"destructive-default-not-no",
+                                                QString("%1 | default=%2").arg(t2, defText)});
+            if (def) def->click();
+            else mb->close();
+        }
+    });
+    t->start(40);
+}
+
 // ---- 场景矩阵（第 2 轮拍板：核心 27）----
 struct PanelSpec {
     const char* panel;
@@ -285,10 +382,12 @@ int main(int argc, char** argv) {
 
     QDir().mkpath(outDir);
     QDir().mkpath(baselineDir);
-    int compared = 0, diffs = 0, created = 0, passed = 0;
+    int compared = 0, diffs = 0, created = 0, passed = 0, ruleViolations = 0;
+    installDialogSweeper(&app);
 
     auto runScene = [&](const QString& id, int navRow) {
         if (!filter.isEmpty() && !id.contains(filter)) return;
+        g_dialogs.currentScene = id;
         nav->setCurrentRow(navRow);
         for (int i = 0; i < 5; ++i) {
             QApplication::processEvents(QEventLoop::AllEvents, 100);
@@ -297,6 +396,18 @@ int main(int argc, char** argv) {
         QWidget* panel = stack->currentWidget();
         if (!panel) return;
         const QJsonObject tree = dumpWidget(panel);
+        // 可见控件数（规则 R5 用）
+        int visibleCount = 0;
+        std::function<void(const QJsonObject&)> countVis = [&](const QJsonObject& o) {
+            if (o["vis"].toBool()) ++visibleCount;
+            for (const auto& k : o["kids"].toArray()) countVis(k.toObject());
+        };
+        countVis(tree);
+        // 不变量规则（rubric）：违例即计入报告（不阻塞快照对比）
+        for (const auto& v : runRules(id, panel, visibleCount, tree.contains("text"))) {
+            ++ruleViolations;
+            printNow(QString("RULE      %1 | %2 | %3").arg(id, v.rule, v.detail.left(60)));
+        }
         QFile f(outDir + "/" + id + ".json");
         f.open(QIODevice::WriteOnly);
         f.write(QJsonDocument(tree).toJson(QJsonDocument::Indented));
@@ -350,15 +461,78 @@ int main(int argc, char** argv) {
         platform.setFaultInjector(ah::Platform::Fault::None);
     }
 
+    // ---- 正交抽查（第 2 轮拍板）：主题/语言/字号抽代表性场景 ----
+    // 主题 5 × dashboard/knowledge 有数据 = 10 场景（5 套色卡下无对比度灾难）
+    for (int t = 0; t < static_cast<int>(ui::themes().size()); ++t) {
+        ui::setThemeIndex(t);
+        for (int i = 0; i < 4; ++i)
+            QApplication::processEvents(QEventLoop::AllEvents, 120);  // rebuildPanels 落地
+        runScene(QString("theme-%1-dashboard.seeded").arg(t), 0);
+        runScene(QString("theme-%1-knowledge.seeded").arg(t), 2);
+    }
+    ui::setThemeIndex(0);
+    for (int i = 0; i < 4; ++i) QApplication::processEvents(QEventLoop::AllEvents, 120);
+
+    // 语言 8 × dashboard 有数据 = 8 场景（语长差异/枚举本地化可见）；
+    // lang-en-* 额外触发 R1 CJK 泄漏规则。顺序取 i18n::languages() 真实定义。
+    for (const auto& li : i18n::languages()) {
+        i18n::apply(li.lang);
+        QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        for (int i = 0; i < 3; ++i) QApplication::processEvents(QEventLoop::AllEvents, 100);
+        runScene(QString("lang-%1-dashboard.seeded").arg(li.id), 0);
+    }
+    i18n::apply(i18n::Lang::Zh);
+    for (int i = 0; i < 3; ++i) QApplication::processEvents(QEventLoop::AllEvents, 100);
+
+    // 字号 3 × dashboard 有数据 = 3 场景（大字号下表格截断检测）
+    for (int fb : {12, 13, 14}) {
+        ui::setFontBase(fb);
+        for (int i = 0; i < 4; ++i) QApplication::processEvents(QEventLoop::AllEvents, 120);
+        runScene(QString("font-%1-dashboard.seeded").arg(fb), 0);
+    }
+    ui::setFontBase(13);
+    for (int i = 0; i < 4; ++i) QApplication::processEvents(QEventLoop::AllEvents, 120);
+
+    // ---- 快捷键矩阵（第 3 轮拍板）：Ctrl+1..9 全触发，断言切换到位且不崩 ----
+    int shortcutOk = 0, shortcutTotal = 0;
+    for (int i = 0; i < nav->count() && i < 9; ++i) {
+        const QKeySequence seq(QString("Ctrl+%1").arg(i + 1));
+        bool found = false;
+        for (QShortcut* sc : w.findChildren<QShortcut*>())
+            if (sc->key() == seq) {
+                ++shortcutTotal;
+                emit sc->activated();
+                QApplication::processEvents(QEventLoop::AllEvents, 80);
+                if (stack->currentIndex() == i && nav->currentRow() == i) ++shortcutOk;
+                found = true;
+                break;
+            }
+        if (!found) printNow(QString("RULE      shortcuts | Ctrl+%1 未找到对应快捷键").arg(i + 1));
+        Q_UNUSED(found);
+    }
+    if (shortcutOk != shortcutTotal)
+        printNow(QString("RULE      shortcuts | %1/%2 切换到位")
+                     .arg(shortcutOk)
+                     .arg(shortcutTotal));
+
     // ---- 汇总 ----
-    printNow(QString("==== ui_harness 完成：场景 %1，PASS %2，新建基线 %3，结构差异 %4 ====")
+    printNow(QString("==== ui_harness 完成：场景 %1，PASS %2，新建基线 %3，结构差异 %4，规则违例 %5，弹窗 %6 ====")
                  .arg(compared)
                  .arg(passed)
                  .arg(created)
-                 .arg(diffs));
+                 .arg(diffs)
+                 .arg(ruleViolations)
+                 .arg(g_dialogs.total));
+    for (const auto& v : g_dialogs.violations)
+        printNow(QString("RULE      dialogs | %1 | %2").arg(v.rule, v.detail.left(60)));
+    if (!g_dialogs.entries.isEmpty()) {
+        QFile dl(outDir + "/dialogs.log");
+        dl.open(QIODevice::WriteOnly);
+        dl.write(g_dialogs.entries.join('\n').toUtf8());
+    }
     if (update) {
         printNow("基线已更新——请 git diff tests/baseline/ 人工 review 后入库。");
         return 0;
     }
-    return diffs == 0 ? 0 : 2;
+    return (diffs == 0 && ruleViolations == 0 && g_dialogs.violations.empty()) ? 0 : 2;
 }
