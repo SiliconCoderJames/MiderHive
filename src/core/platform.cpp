@@ -704,6 +704,7 @@ void Platform::heartbeat(const std::string& name, const std::string& currentTask
 
 bool Platform::listAgents(std::vector<AgentInfo>& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::AgentList)) { err = "injected fault: agent list unavailable"; return false; }
     return agents_.listAgents(out, err);
 }
 
@@ -826,6 +827,7 @@ bool Platform::knowledgeCreate(const std::string& author, const std::string& tit
 bool Platform::knowledgeList(int limit, const std::string& tagFilter,
                              std::vector<KnowledgeEntry>& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::KnowledgeList)) { err = "injected fault: knowledge unavailable"; return false; }
     return knowledge_.list(limit, tagFilter, out, err);
 }
 
@@ -887,6 +889,20 @@ bool Platform::knowledgeGraphSnapshot(size_t maxNodes, int kPerNode, KnowledgeGr
                                       std::string& err) {
     std::lock_guard lock(mutex_);
     return knowledge_.graphSnapshot(maxNodes, kPerNode, out, err);
+}
+
+// ---- 测试故障注入（harness/测试独享）----
+// faultActive 用 static_cast<int>(f) 的位掩码检查：f == None 永远返回 false。
+// 各读路径在自己入口的第一行查询，命中即以人话 err 返回 false——UI harness
+// 的"读失败态"场景靠它构造（环境破坏式注入全局不可控，弃用）。
+void Platform::setFaultInjector(Fault f) {
+    const int bit = 1 << static_cast<int>(f);
+    const int mask = f == Fault::None ? 0 : faultMask_.load() | bit;
+    faultMask_ = f == Fault::None ? 0 : mask;
+}
+
+bool Platform::faultActive(Fault f) const {
+    return (faultMask_.load() & (1 << static_cast<int>(f))) != 0;
 }
 
 bool Platform::knowledgeSearchSemantic(const std::vector<float>& queryVec, int limit,
@@ -985,6 +1001,7 @@ bool Platform::skillRegister(const std::string& author, const std::string& name,
 bool Platform::skillList(const std::string& categoryFilter, const std::string& ownerFilter,
                          std::vector<SkillInfo>& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::SkillList)) { err = "injected fault: skills unavailable"; return false; }
     return skills_.list(categoryFilter, ownerFilter, out, err);
 }
 
@@ -1183,6 +1200,7 @@ bool Platform::messageList(const std::string& recipientFilter, const std::string
                            const std::string& statusFilter, const std::string& sinceIso, int limit,
                            std::vector<Message>& out, std::string& err, const std::string& viewer) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::MessageList)) { err = "injected fault: messages unavailable"; return false; }
     return messages_.list(recipientFilter, kindFilter, statusFilter, sinceIso, limit, out, err,
                           viewer);
 }
@@ -1281,6 +1299,7 @@ bool Platform::errorReport(const std::string& reporter, const std::string& sever
 bool Platform::errorList(const std::string& statusFilter, const std::string& severityFilter,
                          int limit, std::vector<ErrorReport>& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::ErrorList)) { err = "injected fault: errors unavailable"; return false; }
     return errors_.list(statusFilter, severityFilter, limit, out, err);
 }
 
@@ -1343,11 +1362,13 @@ bool Platform::usageByModel(std::vector<UsageModelRow>& out, std::string& err) {
 bool Platform::usageBreakdown(int days, const std::string& agent, const std::string& model,
                               UsageBreakdown& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::UsageBreakdown)) { err = "injected fault: usage breakdown unavailable"; return false; }
     return usage_.breakdown(days, agent, model, out, err);
 }
 
 bool Platform::usageSummary(UsageSummary& out, std::string& err) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::UsageSummary)) { err = "injected fault: usage summary unavailable"; return false; }
     return usage_.summary(out, err);
 }
 
@@ -1932,6 +1953,7 @@ bool Platform::auditList(const std::string& actorFilter, const std::string& acti
                          const std::string& sinceIso, int limit, std::vector<AuditRecord>& out,
                          std::string& err, const std::string& viewer) {
     std::lock_guard lock(mutex_);
+    if (faultActive(Fault::AuditList)) { err = "injected fault: audit unavailable"; return false; }
     return audit_.list(actorFilter, actionFilter, sinceIso, limit, out, err, viewer);
 }
 

@@ -48,6 +48,19 @@ if(BUILD_TESTS)
         PREFIX "/theme"
         FILES qss/dark.qss)
     target_sources(gui_selftest PRIVATE brand.qrc)
+
+    # ---- UI/UX 评测 harness（LLM eval 式）：结构基线 + 不变量规则 + 交互审查 ----
+    # 与 gui_selftest 分工见 src/harness/harness_main.cpp 头注释。同样的离屏环境
+    # 由调用方提供（MIDERHIVE_HOME 隔离 + QT_QPA_PLATFORM=offscreen）。
+    add_executable(ui_harness
+        ../harness/harness_main.cpp
+    )
+    target_link_libraries(ui_harness PRIVATE miderhive_gui)
+    set_target_properties(ui_harness PROPERTIES AUTOMOC ON AUTORCC ON)
+    qt_add_resources(ui_harness "theme"
+        PREFIX "/theme"
+        FILES qss/dark.qss)
+    target_sources(ui_harness PRIVATE brand.qrc)
 endif()
 
 # ---- 可复现的 Qt 运行时部署 ----

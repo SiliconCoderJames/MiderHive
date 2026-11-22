@@ -242,6 +242,14 @@ public:
     int httpPort() const;
     bool httpRunning() const;
 
+    // ---- 测试故障注入（harness/测试独享；正式代码零影响）----
+    // 注入后对应服务的读操作返回失败，用于 UI harness 的"读失败态"场景。
+    // 默认关闭；setFaultInjector 清空即解除。线程安全（原子读，设置侧持锁）。
+    enum class Fault : int { None = 0, UsageSummary, UsageBreakdown, AuditList, MessageList,
+                             ErrorList, KnowledgeList, AgentList, SkillList };
+    void setFaultInjector(Fault f);  // f == None 解除
+    bool faultActive(Fault f) const;
+
     // ---- 健康自检（防呆）：总览页健康横幅与 GET /api/diagnostics 共用 ----
     // 只读探测：数据目录可写、数据库可读且核心表存在、agents.json 可读、
     // HTTP 服务状态、已注册但明文密钥缺失的 Agent 清单。不改变任何状态。
@@ -299,6 +307,7 @@ private:
     std::string master_key_hash_;
     bool bootstrapped_ = false;
     bool usable_ = true;  // 恢复备份失败后置 false：必须重启（见 isUsable）
+    std::atomic<int> faultMask_{0};  // 故障注入位掩码（harness/测试独享；见 setFaultInjector）
     // LLM 客户端工厂（测试注入 Fake；空 = 默认 makeClient）
     std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)>
         llmClientFactory_;

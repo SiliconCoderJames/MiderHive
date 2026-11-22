@@ -1,0 +1,511 @@
+{
+    "class": "QScrollArea",
+    "en": true,
+    "geom": [
+        0,
+        0,
+        1250,
+        898
+    ],
+    "kids": [
+        {
+            "class": "QWidget",
+            "en": true,
+            "geom": [
+                0,
+                0,
+                1250,
+                898
+            ],
+            "kids": [
+                {
+                    "class": "LogsPanel",
+                    "en": true,
+                    "geom": [
+                        0,
+                        0,
+                        1250,
+                        898
+                    ],
+                    "kids": [
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                16,
+                                16,
+                                38,
+                                38
+                            ],
+                            "text": "",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                82,
+                                16,
+                                1152,
+                                20
+                            ],
+                            "text": "操作日志",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                82,
+                                39,
+                                1152,
+                                15
+                            ],
+                            "text": "谁、什么时候、做了什么——全部写操作可追溯，按天分组浏览",
+                            "vis": true
+                        },
+                        {
+                            "class": "QFrame",
+                            "en": true,
+                            "geom": [
+                                66,
+                                21,
+                                4,
+                                28
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QComboBox",
+                            "en": true,
+                            "geom": [
+                                64,
+                                80,
+                                90,
+                                22
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QComboBoxPrivateContainer",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        100,
+                                        30
+                                    ],
+                                    "kids": [
+                                        {
+                                            "class": "QComboBoxListView",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                640,
+                                                480
+                                            ],
+                                            "kids": [
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        1,
+                                                        1,
+                                                        638,
+                                                        478
+                                                    ],
+                                                    "name": "qt_scrollarea_viewport",
+                                                    "vis": false
+                                                },
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        0,
+                                                        100,
+                                                        30
+                                                    ],
+                                                    "kids": [
+                                                        {
+                                                            "class": "QScrollBar",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                0,
+                                                                100,
+                                                                30
+                                                            ],
+                                                            "vis": false
+                                                        }
+                                                    ],
+                                                    "name": "qt_scrollarea_hcontainer",
+                                                    "vis": false
+                                                },
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        0,
+                                                        100,
+                                                        30
+                                                    ],
+                                                    "kids": [
+                                                        {
+                                                            "class": "QScrollBar",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                0,
+                                                                100,
+                                                                30
+                                                            ],
+                                                            "vis": false
+                                                        }
+                                                    ],
+                                                    "name": "qt_scrollarea_vcontainer",
+                                                    "vis": false
+                                                }
+                                            ],
+                                            "vis": false
+                                        },
+                                        {
+                                            "class": "QComboBoxPrivateScroller",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                100,
+                                                30
+                                            ],
+                                            "vis": false
+                                        },
+                                        {
+                                            "class": "QComboBoxPrivateScroller",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                100,
+                                                30
+                                            ],
+                                            "vis": false
+                                        }
+                                    ],
+                                    "vis": false
+                                }
+                            ],
+                            "text": "全部身份",
+                            "vis": true
+                        },
+                        {
+                            "class": "QDateEdit",
+                            "en": true,
+                            "geom": [
+                                238,
+                                78,
+                                164,
+                                26
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QLineEdit",
+                                    "en": true,
+                                    "geom": [
+                                        2,
+                                        2,
+                                        141,
+                                        22
+                                    ],
+                                    "name": "qt_spinbox_lineedit",
+                                    "text": "2026-10-23",
+                                    "vis": true
+                                }
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QPushButton",
+                            "en": true,
+                            "geom": [
+                                414,
+                                81,
+                                80,
+                                20
+                            ],
+                            "name": "primary",
+                            "text": "筛选",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                1168,
+                                78,
+                                66,
+                                26
+                            ],
+                            "text": "共 21 条",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                16,
+                                78,
+                                36,
+                                26
+                            ],
+                            "text": "身份:",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                166,
+                                78,
+                                60,
+                                26
+                            ],
+                            "text": "起始日期:",
+                            "vis": true
+                        },
+                        {
+                            "class": "QTreeWidget",
+                            "en": true,
+                            "geom": [
+                                16,
+                                116,
+                                1218,
+                                766
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        1,
+                                        17,
+                                        1216,
+                                        748
+                                    ],
+                                    "name": "qt_scrollarea_viewport",
+                                    "vis": true
+                                },
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        100,
+                                        30
+                                    ],
+                                    "kids": [
+                                        {
+                                            "class": "QScrollBar",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                100,
+                                                30
+                                            ],
+                                            "vis": false
+                                        }
+                                    ],
+                                    "name": "qt_scrollarea_hcontainer",
+                                    "vis": false
+                                },
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        100,
+                                        30
+                                    ],
+                                    "kids": [
+                                        {
+                                            "class": "QScrollBar",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                100,
+                                                30
+                                            ],
+                                            "vis": false
+                                        }
+                                    ],
+                                    "name": "qt_scrollarea_vcontainer",
+                                    "vis": false
+                                },
+                                {
+                                    "class": "QHeaderView",
+                                    "en": true,
+                                    "geom": [
+                                        1,
+                                        1,
+                                        1216,
+                                        16
+                                    ],
+                                    "kids": [
+                                        {
+                                            "class": "QWidget",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                1216,
+                                                16
+                                            ],
+                                            "name": "qt_scrollarea_viewport",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QWidget",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                100,
+                                                30
+                                            ],
+                                            "kids": [
+                                                {
+                                                    "class": "QScrollBar",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        0,
+                                                        100,
+                                                        30
+                                                    ],
+                                                    "vis": false
+                                                }
+                                            ],
+                                            "name": "qt_scrollarea_hcontainer",
+                                            "vis": false
+                                        },
+                                        {
+                                            "class": "QWidget",
+                                            "en": true,
+                                            "geom": [
+                                                0,
+                                                0,
+                                                100,
+                                                30
+                                            ],
+                                            "kids": [
+                                                {
+                                                    "class": "QScrollBar",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        0,
+                                                        100,
+                                                        30
+                                                    ],
+                                                    "vis": false
+                                                }
+                                            ],
+                                            "name": "qt_scrollarea_vcontainer",
+                                            "vis": false
+                                        }
+                                    ],
+                                    "vis": true
+                                }
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QLineEdit",
+                            "en": true,
+                            "geom": [
+                                946,
+                                80,
+                                210,
+                                22
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QLineEditIconButton",
+                                    "en": true,
+                                    "geom": [
+                                        184,
+                                        2,
+                                        22,
+                                        18
+                                    ],
+                                    "vis": false
+                                }
+                            ],
+                            "text": "",
+                            "vis": true
+                        }
+                    ],
+                    "vis": true
+                }
+            ],
+            "name": "qt_scrollarea_viewport",
+            "vis": true
+        },
+        {
+            "class": "QWidget",
+            "en": true,
+            "geom": [
+                0,
+                884,
+                1236,
+                14
+            ],
+            "kids": [
+                {
+                    "class": "QScrollBar",
+                    "en": true,
+                    "geom": [
+                        0,
+                        0,
+                        1236,
+                        14
+                    ],
+                    "vis": false
+                }
+            ],
+            "name": "qt_scrollarea_hcontainer",
+            "vis": false
+        },
+        {
+            "class": "QWidget",
+            "en": true,
+            "geom": [
+                1236,
+                0,
+                14,
+                884
+            ],
+            "kids": [
+                {
+                    "class": "QScrollBar",
+                    "en": true,
+                    "geom": [
+                        0,
+                        0,
+                        14,
+                        884
+                    ],
+                    "vis": false
+                }
+            ],
+            "name": "qt_scrollarea_vcontainer",
+            "vis": false
+        }
+    ],
+    "vis": true
+}
