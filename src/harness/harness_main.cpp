@@ -113,6 +113,14 @@ void seedFixTimestamps(const std::string& dbPath) {
 }
 
 void seedData(ah::Platform& p, const std::string& dbPath) {
+    // 种子任一步失败即中止：带着残缺种子拍出来的快照看起来完全正常，降级成警告
+    // 继续跑等于悄悄生成一套错误的基线。harness 的可复现单元是"全新数据目录 +
+    // 完整流水线"，所以同名注册失败（复用旧目录）同样是中止而不是放行
+    auto failSeed = [](const char* what, const std::string& e) {
+        printNow(QString("FATAL  种子注入失败（%1）: %2").arg(what, QString::fromStdString(e)));
+        printNow("        harness 必须在全新的数据目录上运行（MIDERHIVE_HOME 指向空目录）");
+        std::exit(3);
+    };
     std::string err, mk;
     {
         std::ifstream f(ah::fsPath(std::string(ah::defaultHomeDir()) + "/config/master.key"));
@@ -120,45 +128,62 @@ void seedData(ah::Platform& p, const std::string& dbPath) {
     }
     for (const char* n : {"claude", "cursor", "codex"}) {
         std::string k;
-        if (!p.registerAgent(mk, n, "member", k, err)) {
-            // 复用旧 home 时同名注册失败是预期的（种子重复注入）——harness 的
-            // 可复现单元是 fresh home + 完整流水线，同 home 重跑快照必 DIFF
-            printNow(QString("WARN    种子注册失败 %1: %2（复用旧 home？快照将包含重复数据）")
-                         .arg(n, QString::fromStdString(err)));
-        }
+        if (!p.registerAgent(mk, n, "member", k, err)) failSeed(n, err);
     }
     ah::KnowledgeEntry e;
     std::string kerr;
-    p.knowledgeCreate("claude", "sqlite-vec 向量检索用法", "用 sqlite-vec 做向量检索需要先注册扩展",
-                      {"sqlite"}, "踩坑", {}, "", e, kerr);
-    p.knowledgeCreate("claude", "sqlite-vec 向量索引注意事项", "向量索引维度必须与查询向量一致",
-                      {"sqlite"}, "踩坑", {}, "", e, kerr);
-    p.knowledgeCreate("cursor", "向量检索的过滤技巧", "kNN 查询可以带标签过滤缩小召回",
-                      {"sqlite"}, "经验", {}, "", e, kerr);
-    p.knowledgeCreate("codex", "CI 流水线踩坑记录", "Windows runner 上 Qt 安装很慢",
-                      {"ci"}, "踩坑", {}, "", e, kerr);
-    p.knowledgeCreate("cursor", "今天天气不错", "出去散步晒太阳", {}, "生活", {}, "", e, kerr);
+    if (!p.knowledgeCreate("claude", "sqlite-vec 向量检索用法",
+                           "用 sqlite-vec 做向量检索需要先注册扩展", {"sqlite"}, "踩坑", {}, "",
+                           e, kerr))
+        failSeed("knowledge 1", kerr);
+    if (!p.knowledgeCreate("claude", "sqlite-vec 向量索引注意事项",
+                           "向量索引维度必须与查询向量一致", {"sqlite"}, "踩坑", {}, "", e, kerr))
+        failSeed("knowledge 2", kerr);
+    if (!p.knowledgeCreate("cursor", "向量检索的过滤技巧", "kNN 查询可以带标签过滤缩小召回",
+                           {"sqlite"}, "经验", {}, "", e, kerr))
+        failSeed("knowledge 3", kerr);
+    if (!p.knowledgeCreate("codex", "CI 流水线踩坑记录", "Windows runner 上 Qt 安装很慢",
+                           {"ci"}, "踩坑", {}, "", e, kerr))
+        failSeed("knowledge 4", kerr);
+    if (!p.knowledgeCreate("cursor", "今天天气不错", "出去散步晒太阳", {}, "生活", {}, "", e,
+                           kerr))
+        failSeed("knowledge 5", kerr);
 
     bool dup = false;
-    p.usageReport("claude", 1200, 340, "chat", "deepseek-chat", "", "", dup, err);
-    p.usageReport("cursor", 800, 160, "chat", "deepseek-chat", "", "", dup, err);
-    p.usageReport("codex", 500, 90, "review", "deepseek-chat", "", "", dup, err);
+    if (!p.usageReport("claude", 1200, 340, "chat", "deepseek-chat", "", "", dup, err))
+        failSeed("usage claude", err);
+    if (!p.usageReport("cursor", 800, 160, "chat", "deepseek-chat", "", "", dup, err))
+        failSeed("usage cursor", err);
+    if (!p.usageReport("codex", 500, 90, "review", "deepseek-chat", "", "", dup, err))
+        failSeed("usage codex", err);
 
     ah::ErrorReport er;
-    p.errorReport("claude", "warning", "build", "MSVC C2062 示例错误", "语法错误示例", "", er, err);
+    if (!p.errorReport("claude", "warning", "build", "MSVC C2062 示例错误", "语法错误示例", "",
+                       er, err))
+        failSeed("error 1", err);
     ah::ErrorReport er2;
-    p.errorReport("cursor", "critical", "runtime", "崩溃示例", "空指针解引用示例", "", er2, err);
+    if (!p.errorReport("cursor", "critical", "runtime", "崩溃示例", "空指针解引用示例", "",
+                       er2, err))
+        failSeed("error 2", err);
 
     ah::Message m;
-    p.messageSend("note", "claude", "", "广播：构建脚本已更新", "详见知识库 CI 条目", m, err);
-    p.messageSend("question", "cursor", "claude", "检索技巧求助", "kNN 过滤怎么写？", m, err);
-    p.messageSend("task", "claude", "cursor", "整理本周踩坑", "沉淀进知识库", m, err);
+    if (!p.messageSend("note", "claude", "", "广播：构建脚本已更新", "详见知识库 CI 条目", m,
+                       err))
+        failSeed("message 1", err);
+    if (!p.messageSend("question", "cursor", "claude", "检索技巧求助", "kNN 过滤怎么写？", m,
+                       err))
+        failSeed("message 2", err);
+    if (!p.messageSend("task", "claude", "cursor", "整理本周踩坑", "沉淀进知识库", m, err))
+        failSeed("message 3", err);
 
     ah::SkillInfo sk;
-    p.skillRegister("claude", "code-review", "代码审查", "对指定文件做审查", "dev", "{}", sk, err);
+    if (!p.skillRegister("claude", "code-review", "代码审查", "对指定文件做审查", "dev", "{}",
+                         sk, err))
+        failSeed("skill", err);
 
     ah::MemoryEntry me;
-    p.memorySet("user", "project", "current", "MiderHive 图谱视图开发", 0, me, err);
+    if (!p.memorySet("user", "project", "current", "MiderHive 图谱视图开发", 0, me, err))
+        failSeed("memory", err);
 
     p.heartbeat("claude", "整理本周踩坑");
     p.heartbeat("cursor", "kNN 过滤调研");

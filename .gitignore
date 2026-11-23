@@ -6,6 +6,9 @@ data/
 # 打包暂存目录（cmake --install 的产物，ZIP 与 MSI 都从它取材）
 _stage/
 _stage-*/
+# 可直接运行的最新开发构建（scripts/deploy_dev.ps1 每次进展后覆盖；本地产物不入库）
+dist/
+dist.new/
 
 # ---- 发行目录：产物不入库（MSI/ZIP/校验和经 GitHub Releases 发布）----
 # 打包所需的 WiX 源文件在 installer/MiderHive.wxs（入库）；本目录只留本地产物。

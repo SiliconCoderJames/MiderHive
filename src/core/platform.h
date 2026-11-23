@@ -214,15 +214,37 @@ public:
 
     // ---- 摘要沉淀（P2：平台自营 LLM 调用，受预算闸门约束）----
     // 调度状态读/写：enabled + interval 供 GUI 自动摘要行与调度判断；
-    // last_run_at 是"成功才推进"的水位（同时是取料 since），last_status 供展示
-    DigestSchedule digestSchedule() const;
+    // last_run_at 是"摘要成功落库才推进"的水位（同时是取料 since），last_status
+    // 供展示，last_attempt_at 是调度器的退避基准（见 DigestSchedule）。读失败返回
+    // false（不按默认值兜底：默认值里的"从未运行"会让调度器提前判定到期），
+    // out 被清空、调用方保留上一次的界面状态。
+    bool digestSchedule(DigestSchedule& out, std::string& err) const;
     bool digestSetSchedule(const std::string& actor, bool enabled, int64_t intervalHours,
                            std::string& err);
+    // 暂停态：连续 kDigestFailuresBeforeSuspend 轮失败，或某一轮摘要已保存但水位
+    // 写不进去。继续跑只会把同一批活动反复摘要、反复花钱——失败的那次调用在
+    // 服务商那边照样计费，本地却拿不到 usage 无从记账，预算闸门对它是盲的。
+    // 暂停后调度器不再触发，手动触发得到明确报错。解除：进程重启，或任何一次
+    // 成功的 digestSetSchedule / llmConfigSet（配置变了，重新给一轮尝试机会）。
+    bool digestSuspended() const;
+    std::string digestSuspendReason() const;  // 未暂停时为空
     // 跑一轮摘要沉淀：预算闸门（mode 口径超预算 → skip 不调 LLM）→ 取料
-    // （audit/messages 自水位起，errors 客户端过滤）→ LLM 摘要（不持锁）→
-    // 记账 source=llm-digest（计入预算）→ 写知识条目（tag=digest）→ 推进水位。
-    // 手动触发不受 digest_enabled 限制（调度器自行判断）。cancelOut 可空。
-    // statsJson 返回 {"generated":…} / {"skipped_reason":…} 平铺统计。
+    // （audit/messages 自水位起，errors 客户端过滤）→ 预算余量闸 → 落尝试戳
+    // → LLM 摘要（不持锁）→ 记账 source=llm-digest（计入预算）→ 写知识条目
+    // （tag=digest）→ 推进水位。
+    // 手动触发不受 digest_enabled 与间隔限制（调度器自行判断），但同样受暂停态
+    // 约束。cancelOut 可空；非空时被赋一个只在本调用返回前有效的取消句柄——
+    // 调用方只能在调用进行中（另一线程）使用它，不得在调用返回后保存或调用。
+    // 返回与 statsJson：
+    //   true  + {"skipped_reason": "budget exhausted" | "budget headroom" |
+    //                                     "no activity"}              未调用模型
+    //   true  + {"generated": true, ...}   摘要已保存、水位已推进
+    //         （err 此时可能带警告：记账或状态写入失败——结果有效但必须让调用方看见）
+    //   false + {"generated": false, "error": ...}   生成了但没能保存，水位未推进
+    //   false + {"generated": true, "watermark_advanced": false}  已保存但水位写失败
+    //   false + {"error": ...}            未生成（模型调用失败），水位未推进
+    //   false + 无 stats                   预算读失败/取料失败/已暂停，水位未推进
+    // statsJson 里的 activity_truncated=true 表示有较早的活动超出了单轮上限、未纳入本轮。
     bool digestRunOnce(const std::string& actor, std::string& statsJson, std::string& err,
                        std::function<void()>* cancelOut = nullptr);
 
@@ -287,6 +309,8 @@ private:
                                bool* created = nullptr);
     // llmConfigGet 的持锁变体（llmAsk 在已持锁路径上复用）
     bool llmConfigGetLocked(ah::llm::LlmConfig& out, bool& configured, std::string& err);
+    // settings 表单键 upsert（须持 mutex_）
+    bool setSettingLocked(const std::string& key, const std::string& value, std::string& err);
     // 接入拒接原因（须持锁）：空 = 放行；否则为随 403 下发的人话
     std::string accessDeniedReasonLocked(const std::string& name) const;
     // 总闸读（须持锁）：settings key agents_gate_closed == '1' 视为关闭
@@ -311,9 +335,21 @@ private:
     // LLM 客户端工厂（测试注入 Fake；空 = 默认 makeClient）
     std::function<std::unique_ptr<ah::llm::LlmClient>(const ah::llm::LlmConfig&)>
         llmClientFactory_;
-    // digest 重入闸（审计 M3）：GUI 调度器/手动按钮/HTTP 端点三路并发统一闸
+    // digest 重入闸：GUI 调度器/手动按钮/HTTP 端点三路并发统一闸
     std::atomic<bool> digestInFlight_{false};
+    // 摘要暂停态、原因与连续失败计数（均由 mutex_ 保护；见 digestSuspended）
+    bool digestSuspended_ = false;
+    std::string digestSuspendReason_;
+    int digestFailures_ = 0;
+    void clearDigestSuspensionLocked();
     mutable std::recursive_mutex mutex_;
 };
+
+// 自动摘要是否到期（调度器每 15 分钟问一次）：基准取"最近一次尝试"与"水位"里
+// 较晚的一个（1.6.0 及更早的库只有水位），now ≥ 基准 + interval = 到期；两者
+// 都没有或都解析不了 = 从未跑过 = 到期。
+// 不能只看水位：水位只在成功时推进，失败的一轮之后仍然到期，会变成每个 tick
+// 重试一次（见 DigestSchedule::last_attempt_at）。
+bool digestDue(const DigestSchedule& s, std::time_t now);
 
 }  // namespace ah

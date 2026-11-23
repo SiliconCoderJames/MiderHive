@@ -225,18 +225,25 @@ MainWindow::~MainWindow() {
 
 void MainWindow::maybeRunDigest() {
     if (digestBusy_.exchange(true)) return;
-    const ah::DigestSchedule sched = platform_.digestSchedule();
-    if (!sched.enabled) {
+    ah::DigestSchedule sched;
+    std::string serr;
+    if (!platform_.digestSchedule(sched, serr)) {
+        // 读不到调度设置就不跑：状态不明时不花钱。持续故障下每 15 分钟提醒一次
+        // （Toast 的 30s 节流挡不住这个频率）——持续故障本来就该一直可见
+        digestBusy_ = false;
+        ui::Toast::show(this, i18n::trs("自动摘要失败：", "Auto digest failed: ") +
+                                    ui::humanError(QString::fromStdString(serr)),
+                        false);
+        return;
+    }
+    if (!sched.enabled || platform_.digestSuspended()) {
+        // 暂停态（连续失败，或某轮水位写失败）不在这里反复提醒：失败当时已经报过
+        // 错，用量面板的状态行常驻显示暂停与原因
         digestBusy_ = false;
         return;
     }
-    // 到期判断：last_run_at 为空 = 从未跑过（到期）；now ≥ last + interval = 到期
-    std::time_t last = 0;
-    bool due = true;
-    if (!sched.last_run_at.empty() && ah::parseIso(sched.last_run_at, last)) {
-        due = std::time(nullptr) >= last + sched.interval_hours * 3600;
-    }
-    if (!due) {
+    // 到期判断在核心层（可单测）：基准是最近一次尝试，不是只在成功时推进的水位
+    if (!ah::digestDue(sched, std::time(nullptr))) {
         digestBusy_ = false;
         return;
     }
@@ -255,12 +262,19 @@ void MainWindow::maybeRunDigest() {
                 guard->digestBusy_ = false;
                 if (ok && stats.contains("skipped_reason"))
                     return;  // 调度触发的跳过（预算耗尽/无活动）静默——告警面已有预算横幅
-                if (ok)
+                if (ok && err.isEmpty())
                     ui::Toast::show(guard, i18n::trs("自动摘要已写入知识库 ✓（tag: digest）",
                                                      "Auto digest written to knowledge base ✓"));
+                else if (ok)
+                    // 已保存但有警告（记账/状态写入失败）：结果有效，警告不能吞
+                    ui::Toast::show(guard,
+                                    i18n::trs("自动摘要已写入知识库 ✓（tag: digest）",
+                                              "Auto digest written to knowledge base ✓") +
+                                        " " + ui::humanError(err),
+                                    false);
                 else
                     ui::Toast::show(guard, i18n::trs("自动摘要失败：", "Auto digest failed: ") +
-                                                err,
+                                                ui::humanError(err),
                                     false);
             },
             Qt::QueuedConnection);

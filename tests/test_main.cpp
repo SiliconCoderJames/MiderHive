@@ -509,10 +509,12 @@ static void test_platform_end_to_end() {
         step("agents.gate");
         std::string claudeKey;
         CHECK(p.registerAgent(masterKey, "claude", "member", claudeKey, err));
-        // zcode-agent 是保留名（审计 M1）：接入向导默认身份 + 总闸豁免——允许
-        // 注册等于允许造出"开关打不到"的身份
+        // ZCode 工具的默认身份必须能注册：接入向导给 ZCode 预填的就是这个名字。
+        // v1.6.0 曾把它设成保留名，ZCode 工具因此无法一键接入、也拿不到总闸豁免
+        // （2026-11-23 实测 400 reserved agent name）；1.6.1 撤回，这里守住
         std::string zagentKey;
-        CHECK(!p.registerAgent(masterKey, "zcode-agent", "member", zagentKey, err));
+        CHECK(p.registerAgent(masterKey, "zcode-agent", "member", zagentKey, err));
+        CHECK(!ah::Platform::isReservedName("zcode-agent"));
         // 逐 Agent 禁用：凭据正确也拒接；启用即恢复（密钥不变）
         CHECK(!p.agentSetDisabled("hermes", "claude", true, err));   // 非管理者拒
         CHECK(!p.agentSetDisabled("zcode", "zcode", true, err));     // 管理者不可禁用
@@ -530,14 +532,21 @@ static void test_platform_end_to_end() {
         CHECK(p.agentSetDisabled("zcode", "claude", false, err));
         CHECK(p.authenticate("claude", claudeKey));                  // 启用即恢复
         CHECK(p.agentAccessDenied("claude").empty());
-        // 全局总闸：普通 member 全拒；管理者（zcode）放行
+        // 全局总闸：普通 member 全拒；管理者（zcode）放行；zcode-agent 按名豁免
         CHECK(!p.setAgentsGateClosed("hermes", true, err));          // 非管理者/非 user 拒
         CHECK(p.setAgentsGateClosed("user", true, err));
         CHECK(p.agentsGateClosed());
         CHECK(!p.authenticate("claude", claudeKey));
         CHECK(p.agentAccessDenied("claude").find("gate is closed") != std::string::npos);
-        // zcode-agent 豁免无法端到端验证（保留名不可注册）；豁免逻辑的单元面
-        // 由 accessDeniedReasonLocked 的顺序保证（disabled 压过豁免，gate 不压）
+        CHECK(p.authenticate("zcode-agent", zagentKey));             // 总闸豁免：ZCode 工具默认身份
+        CHECK(p.agentAccessDenied("zcode-agent").empty());
+        // 豁免只针对总闸：被明确禁用的 zcode-agent 照样拒接——否则禁用它是一个
+        // "报成功却毫无效果"的空操作
+        CHECK(p.agentSetDisabled("zcode", "zcode-agent", true, err));
+        CHECK(!p.authenticate("zcode-agent", zagentKey));
+        CHECK(p.agentAccessDenied("zcode-agent").find("disabled") != std::string::npos);
+        CHECK(p.agentSetDisabled("zcode", "zcode-agent", false, err));
+        CHECK(p.authenticate("zcode-agent", zagentKey));             // 启用后豁免恢复
         CHECK(p.setAgentsGateClosed("user", false, err));
         CHECK(!p.agentsGateClosed());
         CHECK(p.authenticate("claude", claudeKey));                  // 开闸即恢复
@@ -682,6 +691,10 @@ static void test_platform_end_to_end() {
             CHECK(gatedRes && gatedRes->status == 403);
             if (gatedRes)
                 CHECK(gatedRes->body.find("gate is closed") != std::string::npos);
+            // ZCode 工具的默认身份不受总闸影响（豁免在 HTTP 面的端到端验证）
+            auto zagent = cli.Get("/api/agents",
+                                  {{"X-Agent-Name", "zcode-agent"}, {"X-Api-Key", zagentKey}});
+            CHECK(zagent && zagent->status == 200);
             // 管理者（zcode）不受总闸影响：代理成管理操作照常可用
             auto masterOk2 = cli.Get("/api/diagnostics", {{"X-Master-Key", mk}});
             CHECK(masterOk2 && masterOk2->status == 200);
@@ -2964,6 +2977,61 @@ static void test_llm_protocols() {
     t.join();
 }
 
+// ---- 接入向导预填的默认身份必须个个可签发 ----
+// 向导 / 批量接入 / agent-cli auto-connect 都是拿 toolRegistry 的 defaultAgentName
+// 直接签发（界面侧的默认名也取自这份注册表）。任何一个名字被设成保留名，对应
+// 工具就无法接入——v1.6.0 把 zcode-agent 设成保留名，ZCode 工具一键接入回
+// 400 reserved agent name。在全新的数据目录上，进程内（向导路径）与 HTTP
+// （脚本路径）各签发一遍。
+static void test_wizard_default_identities() {
+    fs::path tmp = fs::temp_directory_path() / ("miderhive_defaults_" + ah::randomHex(6));
+    fs::create_directories(tmp);
+    std::string err;
+    ah::Platform p(tmp.string());
+    CHECK(p.bootstrap(err));
+
+    int checked = 0;
+    for (const auto& t : ah::integrations::toolRegistry()) {
+        const std::string name(t.defaultAgentName ? t.defaultAgentName : "");
+        if (name.empty()) continue;  // 接入时才命名的工具
+        ++checked;
+        if (ah::Platform::isReservedName(name))
+            std::printf("  default identity '%s' (tool %s) is a reserved name\n", name.c_str(),
+                        t.id);
+        CHECK(!ah::Platform::isReservedName(name));
+        std::string key;
+        const bool ok = p.agentProvision(ah::kManagerName, name, key, err);
+        if (!ok)
+            std::printf("  provision '%s' (tool %s) rejected: %s\n", name.c_str(), t.id,
+                        err.c_str());
+        CHECK(ok);
+        CHECK(p.authenticate(name, key));
+    }
+    // 注册表若被改成没有默认名，上面的循环会空转成"全绿"
+    CHECK(checked >= 10);
+
+    int port = 0;
+    for (int cand = 18190; cand < 18290 && port == 0; ++cand) {
+        if (p.startHttpServer(cand, err)) port = p.httpPort();
+    }
+    CHECK(port > 0);
+    httplib::Client cli("http://127.0.0.1:" + std::to_string(port));
+    const std::string mk = readFile((tmp / "config" / "master.key").string());
+    for (const auto& t : ah::integrations::toolRegistry()) {
+        const std::string name(t.defaultAgentName ? t.defaultAgentName : "");
+        if (name.empty()) continue;
+        auto res = cli.Post("/api/agents/provision", {{"X-Master-Key", mk}},
+                           json{{"name", name}}.dump(), "application/json");
+        if (!res || res->status != 200)
+            std::printf("  HTTP provision '%s' (tool %s) -> %s\n", name.c_str(), t.id,
+                        res ? std::to_string(res->status).c_str() : "no response");
+        CHECK(res && res->status == 200);
+    }
+
+    p.shutdown();
+    fs::remove_all(tmp);
+}
+
 // ---- 语义关联图谱快照：节点集/边去重/无自环/similarity 换算/上限行为 ----
 static void test_knowledge_graph() {
     fs::path tmp = fs::temp_directory_path() / ("miderhive_graph_" + ah::randomHex(6));
@@ -3063,30 +3131,59 @@ static void test_digest() {
     ah::Platform p(tmp.string());
     CHECK(p.bootstrap(err));
 
-    // Fake 工厂：固定摘要回复 + usage
+    // Fake 工厂：回复文本与"失败方式"可由测试逐段改写（各失败路径共用一套假模型）
+    struct FakeState {
+        std::vector<LlmMessage> lastPrompt;  // 最近一次发给模型的 prompt
+        std::string text = "摘要：Agent 动态正常；无未解决错误；建议沉淀检索经验。";
+        std::string failWith;  // 非空 = 模型调用以该错误失败
+        int calls = 0;
+    };
+    auto fake = std::make_shared<FakeState>();
     struct FakeClient final : LlmClient {
-        std::vector<LlmMessage>* promptSink = nullptr;  // 捕获发给模型的 prompt
+        std::shared_ptr<FakeState> state;
         std::string name() const override { return "fake"; }
         void cancel() override {}
         LlmReply complete(const std::vector<LlmMessage>& h, const ChunkSink&,
                           std::string& e) override {
-            if (promptSink) *promptSink = h;
+            ++state->calls;
+            state->lastPrompt = h;
+            if (!state->failWith.empty()) {
+                e = state->failWith;
+                return {};
+            }
             LlmReply r;
-            r.text = "摘要：Agent 动态正常；无未解决错误；建议沉淀检索经验。";
+            r.text = state->text;
             r.tokensIn = 40;
             r.tokensOut = 10;
             r.usageKnown = true;
             return r;
         }
     };
-    std::vector<LlmMessage> lastPrompt;
-    int fakeCalls = 0;
-    p.setLlmClientFactory([&](const LlmConfig&) {
-        ++fakeCalls;
+    p.setLlmClientFactory([fake](const LlmConfig&) {
         auto f = std::make_unique<FakeClient>();
-        f->promptSink = &lastPrompt;
+        f->state = fake;
         return f;
     });
+    std::vector<LlmMessage>& lastPrompt = fake->lastPrompt;
+    int& fakeCalls = fake->calls;
+    // 当前水位（digest_last_run_at）与已归档的摘要条目数
+    auto watermarkOf = [&]() -> std::string {
+        ah::DigestSchedule s;
+        return p.digestSchedule(s, err) ? s.last_run_at : std::string("<read failed>");
+    };
+    auto digestEntryCount = [&]() -> int64_t {
+        std::vector<ah::KnowledgeEntry> es;
+        if (!p.knowledgeList(50, "digest", es, err)) return -1;
+        return static_cast<int64_t>(es.size());
+    };
+    // 产生一条水位之后的新活动。先跨秒再造：水位会推到"最后消费的行 +1s"（取料
+    // 用 >=，不这样下一轮会把同一秒的行再取一遍），所以与上一轮同一秒内产生的
+    // 行下一轮是看不到的——这里造的是"上一轮之后至少一秒"才发生的活动
+    auto newActivity = [&](const char* subject) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        ah::Message m;
+        CHECK(p.messageSend("note", "cursor", "", subject, "触发一轮摘要", m, err));
+    };
 
     // 播种活动：注册两个 Agent + token 上报 + 错误 + 消息（digest 的四种取料）
     std::string k1, k2;
@@ -3100,12 +3197,48 @@ static void test_digest() {
     ah::Message msg;
     CHECK(p.messageSend("note", "claude", "", "广播", "常规通报", msg, err));
 
+    std::string stats;
+    auto statsJsonOf = [&]() { return nlohmann::json::parse(stats); };
     // ---- 预算耗尽：skip 不调 LLM 不花钱 ----
     CHECK(p.usageSetBudgetConfig("zcode", "tokens", 1, 100, err));  // 预算 1 < 已耗 700
-    std::string stats;
     CHECK(p.digestRunOnce("zcode", stats, err));
-    CHECK(stats.find("budget exhausted") != std::string::npos);
+    CHECK(statsJsonOf()["skipped_reason"] == "budget exhausted");  // 顶层是对象，不是数组
     CHECK_EQ(fakeCalls, 0);  // 闸门拦截：LLM 一次都没调
+    // 预算跳过也落尝试戳：调度器按它退避，而不是每 15 分钟回来查一次
+    {
+        ah::DigestSchedule s;
+        CHECK(p.digestSchedule(s, err));
+        CHECK(!s.last_attempt_at.empty());
+        CHECK(s.last_run_at.empty());  // 水位没动：跳过不算"跑过"
+    }
+
+    // ---- digestDue：基准是最近一次尝试，不是只在成功时推进的水位 ----
+    {
+        ah::DigestSchedule s;
+        s.interval_hours = 6;
+        const std::time_t now = 1'800'000'000;  // 2027-01-15T08:00:00Z
+        CHECK(ah::digestDue(s, now));           // 从未跑过 = 到期
+        s.last_attempt_at = "2027-01-15T03:00:00Z";  // 5 小时前试过
+        CHECK(!ah::digestDue(s, now));
+        s.last_attempt_at = "2027-01-15T02:00:00Z";  // 6 小时前
+        CHECK(ah::digestDue(s, now));
+        // v1.6.0 的回归：10 分钟前失败过（水位不推进，停在两天前）——只看水位的话
+        // 仍然"到期"，调度器每个 tick 重试一次
+        s.last_attempt_at = "2027-01-15T07:50:00Z";
+        s.last_run_at = "2027-01-13T08:00:00Z";
+        CHECK(!ah::digestDue(s, now));
+        // 空跑会推进水位但不记尝试戳：取两者里较晚的
+        s.last_attempt_at = "2027-01-15T01:00:00Z";
+        s.last_run_at = "2027-01-15T07:00:00Z";
+        CHECK(!ah::digestDue(s, now));
+        // 1.6.0 升级上来的库只有水位
+        s.last_attempt_at.clear();
+        s.last_run_at = "2027-01-15T01:00:00Z";
+        CHECK(ah::digestDue(s, now));
+        // 坏戳不当成"还没到"：宁可多试一次（有退避戳与暂停态兜着）
+        s.last_run_at = "not-a-timestamp";
+        CHECK(ah::digestDue(s, now));
+    }
 
     // ---- 放开预算：取料生成知识条目 + 记账 llm-digest + 水位推进 ----
     {
@@ -3146,16 +3279,300 @@ static void test_digest() {
     // （created_at/水位同为秒级 ISO 字符串；同秒内重跑会把 >= 水位的旧料再吃一遍）
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
     CHECK(p.digestRunOnce("zcode", stats, err));
-    CHECK(stats.find("no activity") != std::string::npos);
+    CHECK(statsJsonOf()["skipped_reason"] == "no activity");
     CHECK_EQ(fakeCalls, 1);  // 空跑不调 LLM
 
-    // ---- 调度状态读写 ----
+    // ---- 请求数口径：至多贴线，不会越线（未到线时本轮恰好 +1；到线即跳过）----
+    // 余量闸只给 Token 口径设，这里的预算只够"再来一次"，必须照跑
+    newActivity("请求数口径的新活动");
+    {
+        ah::UsageSummary sum;
+        CHECK(p.usageSummary(sum, err));
+        const int64_t budget = sum.budgeted_calls + 1;
+        CHECK(p.usageSetBudgetConfig("zcode", "requests", 10'000'000, budget, err));
+        CHECK(p.digestRunOnce("zcode", stats, err));
+        CHECK(statsJsonOf()["generated"] == true);
+        CHECK_EQ(fakeCalls, 2);
+        CHECK(p.usageSummary(sum, err));
+        CHECK_EQ(sum.budgeted_calls, budget);  // 贴线，没越线
+        newActivity("请求数口径的再次活动");
+        CHECK(p.digestRunOnce("zcode", stats, err));
+        CHECK(statsJsonOf()["skipped_reason"] == "budget exhausted");
+        CHECK_EQ(fakeCalls, 2);  // 到线：不调
+        // 恢复大预算：后面的用例都要真的调模型
+        CHECK(p.usageSetBudgetConfig("zcode", "tokens", 10'000'000, 1000, err));
+    }
+
+    // ---- 调度状态读写；读失败如实返回 false，不按默认值兜底 ----
     CHECK(p.digestSetSchedule("user", true, 6, err));
-    const ah::DigestSchedule sched = p.digestSchedule();
+    ah::DigestSchedule sched;
+    CHECK(p.digestSchedule(sched, err));
     CHECK(sched.enabled);
     CHECK_EQ(sched.interval_hours, static_cast<int64_t>(6));
     CHECK(!p.digestSetSchedule("claude", true, 6, err));  // 非管理者/非 user 拒
     CHECK(!p.digestSetSchedule("user", true, 0, err));    // 间隔越界拒
+    // settings 表暂时改名 = 调度设置读不出来：必须如实失败，不能伪装成
+    // "未启用 / 从未运行"；此时跑一轮也必须在读预算处停下，不调模型
+    {
+        ah::Database raw;
+        CHECK(raw.open(dbPath, err));
+        CHECK(raw.execScript("ALTER TABLE settings RENAME TO settings_hidden;", err));
+        raw.close();
+        ah::DigestSchedule hidden;
+        CHECK(!p.digestSchedule(hidden, err));
+        const int callsBefore = fakeCalls;
+        stats.clear();
+        CHECK(!p.digestRunOnce("zcode", stats, err));
+        CHECK(stats.empty());
+        CHECK_EQ(fakeCalls, callsBefore);
+        ah::Database raw2;
+        CHECK(raw2.open(dbPath, err));
+        CHECK(raw2.execScript("ALTER TABLE settings_hidden RENAME TO settings;", err));
+        raw2.close();
+    }
+
+    // ---- 取料读失败：中止、水位不动、不调模型 ----
+    // 读失败若被当成"没有这类活动"，水位照推，那批活动就永久没有摘要
+    for (const auto fault : {ah::Platform::Fault::AuditList,
+                             ah::Platform::Fault::MessageList,
+                             ah::Platform::Fault::ErrorList}) {
+        const std::string wmBefore = watermarkOf();
+        p.setFaultInjector(fault);
+        stats.clear();
+        CHECK(!p.digestRunOnce("zcode", stats, err));
+        CHECK(err.find("cannot collect activity") != std::string::npos);
+        CHECK(stats.empty());  // 没有生成任何东西
+        p.setFaultInjector(ah::Platform::Fault::None);
+        CHECK_EQ(watermarkOf(), wmBefore);
+    }
+    CHECK_EQ(fakeCalls, 2);
+
+    // ---- 活动超过单轮上限：照常推进水位，并如实标出"有较早的活动未纳入" ----
+    // （曾把水位只推到最老的一条已消费行：更早的活动照样拿不到，而几乎同一批
+    //   活动会被下一轮重新摘要、重新花钱）
+    newActivity("上限路径的新活动");
+    for (int i = 0; i < 51; ++i) {
+        ah::ErrorReport eOut;
+        CHECK(p.errorReport("cursor", "info", "bench", "上限探测 " + std::to_string(i),
+                            "填充错误流", "", eOut, err));
+    }
+    err.clear();
+    CHECK(p.digestRunOnce("zcode", stats, err));
+    CHECK(err.empty());
+    CHECK(stats.find("\"generated\": true") != std::string::npos);
+    CHECK(stats.find("\"activity_truncated\": true") != std::string::npos);
+    CHECK(fake->lastPrompt.back().content.find("上限探测 50") != std::string::npos);
+    CHECK(fake->lastPrompt.back().content.find("上限路径的新活动") != std::string::npos);
+    CHECK_EQ(fakeCalls, 3);
+    {
+        // 水位已越过这一批：紧接着再跑是空跑，而不是把同一批再摘要一遍
+        const int callsBefore = fakeCalls;
+        CHECK(p.digestRunOnce("zcode", stats, err));
+        CHECK(statsJsonOf()["skipped_reason"] == "no activity");
+        CHECK_EQ(fakeCalls, callsBefore);
+    }
+    CHECK_EQ(digestEntryCount(), static_cast<int64_t>(3));
+
+    // ---- 摘要生成了但知识库拒收（正文超长）：必须报失败，水位不推进 ----
+    // v1.6.0 在这里返回成功，界面弹「摘要已写入知识库 ✓」
+    newActivity("保存失败路径的新活动");
+    fake->text.assign(100001, 'x');  // 超过 knowledgeCreate 的正文上限
+    std::string wmBefore = watermarkOf();
+    // 第 1、2 次：如实报失败，还没到暂停阈值——单次故障不该停掉自动摘要
+    for (int n = 1; n <= 2; ++n) {
+        err.clear();
+        CHECK(!p.digestRunOnce("zcode", stats, err));
+        CHECK(statsJsonOf()["generated"] == false);
+        CHECK(err.find("could not be saved") != std::string::npos);
+        CHECK(err.find("suspended until") == std::string::npos);
+        CHECK(statsJsonOf()["consecutive_failures"] == n);
+        CHECK(!p.digestSuspended());
+        CHECK_EQ(watermarkOf(), wmBefore);  // 没保存就不推进：这批活动下一轮重来
+    }
+    CHECK_EQ(digestEntryCount(), static_cast<int64_t>(3));
+    CHECK_EQ(fakeCalls, 5);  // 两次失败的调用
+    // 第 3 次：暂停。一直存不进去还按周期重试，每一轮都是一次白花的模型调用
+    err.clear();
+    CHECK(!p.digestRunOnce("zcode", stats, err));
+    CHECK(statsJsonOf()["generated"] == false);
+    CHECK(statsJsonOf()["suspended"] == true);
+    CHECK(err.find("suspended until MiderHive restarts") != std::string::npos);
+    CHECK(p.digestSuspended());
+    CHECK(p.digestSuspendReason().find("could not be saved") != std::string::npos);
+    CHECK_EQ(fakeCalls, 6);
+    // 暂停期间：手动触发得到明确报错，模型不再被调用
+    stats.clear();
+    err.clear();
+    CHECK(!p.digestRunOnce("zcode", stats, err));
+    CHECK(stats.empty());
+    CHECK(err.find("suspended until MiderHive restarts") != std::string::npos);
+    CHECK_EQ(fakeCalls, 6);
+    // 改摘要设置 = 明确要求再试：解除暂停（界面传的是管理者身份，所以不按 actor 区分）
+    CHECK(p.digestSetSchedule("zcode", true, 6, err));
+    CHECK(!p.digestSuspended());
+    CHECK(p.digestSuspendReason().empty());
+    // 假模型恢复正常：没保存的那批活动这一轮补上，没有丢；失败计数清零
+    fake->text = "摘要：Agent 动态正常；无未解决错误；建议沉淀检索经验。";
+    err.clear();
+    CHECK(p.digestRunOnce("zcode", stats, err));
+    CHECK(err.empty());
+    CHECK(statsJsonOf()["generated"] == true);
+    CHECK(statsJsonOf()["consecutive_failures"] == 0);
+    CHECK(fake->lastPrompt.back().content.find("保存失败路径的新活动") != std::string::npos);
+    CHECK_EQ(digestEntryCount(), static_cast<int64_t>(4));
+    CHECK_EQ(fakeCalls, 7);  // 3 次存不进去 + 这一次补上
+
+    // ---- 模型调用失败：水位不推进，原因进 digest_last_status，退避基准前移 ----
+    newActivity("模型失败路径的新活动");
+    wmBefore = watermarkOf();
+    std::string attemptBefore;
+    {
+        ah::DigestSchedule s;
+        CHECK(p.digestSchedule(s, err));
+        attemptBefore = s.last_attempt_at;
+        CHECK(!attemptBefore.empty());
+    }
+    fake->failWith = "provider exploded";
+    // 第 1、2 次：失败原因原样返回，未到阈值
+    for (int n = 1; n <= 2; ++n) {
+        stats.clear();
+        err.clear();
+        CHECK(!p.digestRunOnce("zcode", stats, err));
+        CHECK_EQ(err, std::string("provider exploded"));
+        CHECK(stats.empty());
+        CHECK(!p.digestSuspended());
+        ah::DigestSchedule s;
+        CHECK(p.digestSchedule(s, err));
+        // 水位没动，但尝试戳前移了：调度器的到期判断看的是后者。v1.6.0 只看
+        // 水位——失败之后仍然"到期"，每 15 分钟重试一次，失败的调用照常计费
+        CHECK_EQ(s.last_run_at, wmBefore);
+        CHECK(s.last_attempt_at != attemptBefore);
+        CHECK(s.last_status.find("provider exploded") != std::string::npos);
+    }
+    // 第 3 次：暂停
+    stats.clear();
+    err.clear();
+    CHECK(!p.digestRunOnce("zcode", stats, err));
+    CHECK(stats.empty());
+    CHECK(err.find("provider exploded") != std::string::npos);
+    CHECK(err.find("suspended until MiderHive restarts") != std::string::npos);
+    CHECK(p.digestSuspended());
+    CHECK(p.digestSuspendReason().find("provider exploded") != std::string::npos);
+    CHECK_EQ(fakeCalls, 10);  // 保存失败用例收在 7；这里是 3 次失败的调用
+    stats.clear();
+    err.clear();
+    CHECK(!p.digestRunOnce("zcode", stats, err));
+    CHECK(stats.empty());
+    CHECK_EQ(fakeCalls, 10);
+    // 保存 LLM 配置（换了模型/端点/密钥）同样解除暂停
+    LlmConfig cfg;  // ah::llm::LlmConfig（本函数开头 using namespace ah::llm）
+    cfg.providerId = "fake";
+    cfg.baseUrl = "http://127.0.0.1:9";
+    cfg.model = "fake-model";
+    cfg.apiKey = std::string("digest") + "-" + "test-" + "key";  // 测试占位，按段拼接
+    CHECK(p.llmConfigSet("user", cfg, err));
+    CHECK(!p.digestSuspended());
+    CHECK(p.digestSuspendReason().empty());
+    fake->failWith.clear();
+    err.clear();
+    CHECK(p.digestRunOnce("zcode", stats, err));
+    CHECK(statsJsonOf()["generated"] == true);
+    CHECK(fake->lastPrompt.back().content.find("模型失败路径的新活动") != std::string::npos);
+    CHECK_EQ(digestEntryCount(), static_cast<int64_t>(5));
+    CHECK_EQ(fakeCalls, 11);
+
+    // ---- 尝试戳写不进去：不调模型 ----
+    // 没有退避保障的那一次调用会被调度器无限重复，所以先落戳再调用
+    newActivity("尝试戳写失败路径的新活动");
+    {
+        ah::Database raw;
+        CHECK(raw.open(dbPath, err));
+        CHECK(raw.execScript(
+            "CREATE TRIGGER digest_attempt_block BEFORE UPDATE OF value ON settings "
+            "WHEN NEW.key='digest_last_attempt_at' "
+            "BEGIN SELECT RAISE(ABORT,'attempt stamp blocked by test'); END;",
+            err));
+        raw.close();
+    }
+    stats.clear();
+    err.clear();
+    CHECK(!p.digestRunOnce("zcode", stats, err));
+    CHECK(stats.empty());
+    CHECK(err.find("cannot record the digest attempt") != std::string::npos);
+    CHECK_EQ(fakeCalls, 11);        // 模型没被调用
+    CHECK(!p.digestSuspended());     // 没调模型不算一次失败
+    {
+        ah::Database raw;
+        CHECK(raw.open(dbPath, err));
+        CHECK(raw.execScript("DROP TRIGGER digest_attempt_block;", err));
+        raw.close();
+    }
+
+    // ---- 摘要已保存但水位写不进去：报失败并暂停，不再重复花钱 ----
+    // 用触发器只拦这一个键的写入，精确复现"保存成功、推进失败"
+    {
+        ah::Database raw;
+        CHECK(raw.open(dbPath, err));
+        CHECK(raw.execScript(
+            "CREATE TRIGGER digest_wm_block BEFORE UPDATE OF value ON settings "
+            "WHEN NEW.key='digest_last_run_at' "
+            "BEGIN SELECT RAISE(ABORT,'watermark write blocked by test'); END;",
+            err));
+        raw.close();
+    }
+    err.clear();
+    const int callsWm = fakeCalls;
+    CHECK(!p.digestRunOnce("zcode", stats, err));
+    CHECK(statsJsonOf()["generated"] == true);  // 摘要本身已保存
+    CHECK(statsJsonOf()["watermark_advanced"] == false);
+    CHECK(err.find("watermark could not be advanced") != std::string::npos);
+    CHECK(err.find("suspended until MiderHive restarts") != std::string::npos);
+    CHECK(p.digestSuspended());  // 一次就暂停，不等凑满 3 次
+    CHECK_EQ(digestEntryCount(), static_cast<int64_t>(6));
+    CHECK_EQ(fakeCalls, callsWm + 1);
+    // 暂停期间：手动触发得到明确报错，模型不再被调用
+    stats.clear();
+    err.clear();
+    CHECK(!p.digestRunOnce("zcode", stats, err));
+    CHECK(stats.empty());
+    CHECK(err.find("suspended until MiderHive restarts") != std::string::npos);
+    CHECK_EQ(fakeCalls, callsWm + 1);
+    CHECK_EQ(digestEntryCount(), static_cast<int64_t>(6));  // 没有重复摘要
+    {
+        ah::Database raw;
+        CHECK(raw.open(dbPath, err));
+        CHECK(raw.execScript("DROP TRIGGER digest_wm_block;", err));
+        raw.close();
+    }
+
+    // ---- 预算余量闸（Token 口径）：按最坏情况预留本轮开销，跑完也不越线 ----
+    // 只看"当前是否已超"的话，本轮自己就能把用量推过线
+    CHECK(p.digestSetSchedule("user", true, 6, err));  // 解除上一段的暂停
+    CHECK(!p.digestSuspended());
+    newActivity("预算余量路径的新活动");
+    const int callsHeadroom = fakeCalls;
+    const std::string wmHeadroom = watermarkOf();
+    {
+        ah::UsageSummary sum;
+        CHECK(p.usageSummary(sum, err));
+        CHECK(p.usageSetBudgetConfig("zcode", "tokens", sum.budgeted_tokens + 1, 1000, err));
+    }
+    stats.clear();
+    err.clear();
+    CHECK(p.digestRunOnce("zcode", stats, err));
+    CHECK(err.empty());
+    CHECK(statsJsonOf()["skipped_reason"] == "budget headroom");
+    CHECK(statsJsonOf()["worst_case_tokens"].get<int64_t>() >= 1024);  // 含输出上限
+    CHECK_EQ(fakeCalls, callsHeadroom);   // 余量不够一轮：不调
+    CHECK_EQ(watermarkOf(), wmHeadroom);  // 水位不动：这批活动留到预算够的时候
+    // 预算够了：同一批活动补上
+    CHECK(p.usageSetBudgetConfig("zcode", "tokens", 10'000'000, 1000, err));
+    err.clear();
+    CHECK(p.digestRunOnce("zcode", stats, err));
+    CHECK(statsJsonOf()["generated"] == true);
+    CHECK(fake->lastPrompt.back().content.find("预算余量路径的新活动") != std::string::npos);
+    CHECK_EQ(digestEntryCount(), static_cast<int64_t>(7));
+    CHECK_EQ(fakeCalls, callsHeadroom + 1);
 
     p.shutdown();
     fs::remove_all(tmp);
@@ -3415,6 +3832,7 @@ int main() {
     run("llm_platform", test_llm_platform);
     run("digest", test_digest);
     run("knowledge_graph", test_knowledge_graph);
+    run("wizard_default_identities", test_wizard_default_identities);
 
     std::printf("checks: %d, failures: %d\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

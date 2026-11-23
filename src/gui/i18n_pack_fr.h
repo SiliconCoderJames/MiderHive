@@ -1564,6 +1564,16 @@ inline const std::unordered_map<std::string_view, std::string_view>& fr() {
          "Nœuds = dernières entrées (taille = degré, couleur = catégorie) ; arêtes = similarité vectorielle. Molette pour zoomer · glisser pour déplacer · cliquer sur un nœud pour les détails · glisser un nœud pour l'épingler."},
         {"语义关联知识图谱 · 向量 kNN 相似边",
          "Graphe sémantique des connaissances · arêtes kNN"},
+        {"自动摘要已暂停",
+         "Digest automatique suspendu"},
+        {"连续 3 轮失败，或摘要已保存但没能记下进度。重新保存 LLM / 摘要设置，或重启 MiderHive 后恢复。原因：",
+         "Trois exécutions ont échoué d'affilée, ou un résumé a été enregistré sans que sa progression puisse être notée. Ré-enregistrez les paramètres LLM / digest ou redémarrez MiderHive pour reprendre. Raison : "},
+        {"预算已用完",
+         "le budget hebdomadaire est épuisé"},
+        {"剩余预算不够跑完一轮",
+         "le budget restant ne suffit pas pour une exécution"},
+        {"没有新活动",
+         "rien de nouveau à résumer"},
     };
     return k;
 }

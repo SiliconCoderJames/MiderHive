@@ -161,13 +161,20 @@ struct UsageBudgetConfig {
     int64_t request_budget = 0; // mode=requests 时的分母
 };
 
-// 摘要沉淀调度状态（settings 四键的聚合读）：GUI 自动摘要行与调度器共用
+// 摘要沉淀调度状态（settings 五键的聚合读）：GUI 自动摘要行与调度器共用
 struct DigestSchedule {
     bool enabled = false;        // digest_enabled
     int64_t interval_hours = 24; // digest_interval_hours
     std::string last_run_at;     // digest_last_run_at（成功才推进的水位）
     std::string last_status;     // digest_last_status（JSON 统计/跳过原因）
+    // digest_last_attempt_at：最近一次"走到了调模型那一步"的尝试（预算跳过也算）。
+    // 调度器按它退避一个完整间隔。与水位分开记：水位只在成功时推进，拿它当退避
+    // 基准的话，失败的一轮之后仍然到期，会变成每个 tick 重试一次。
+    std::string last_attempt_at;
 };
+
+// 连续这么多轮摘要失败后暂停，直到重启或配置被修改（见 Platform::digestSuspended）
+constexpr int kDigestFailuresBeforeSuspend = 3;
 
 struct UsageDailyPoint {
     std::string day;            // UTC 日期 YYYY-MM-DD

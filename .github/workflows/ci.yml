@@ -21,6 +21,10 @@ jobs:
     runs-on: windows-latest
     # Qt 安装 + 全量构建 + 单测 + 两轮集成检查；60 分钟富余,卡死早失败早发现
     timeout-minutes: 60
+    # 检查脚本会打印带中文的源码行和报告。runner 控制台不是 UTF-8 时，Python 会在打印途中
+    # 抛 UnicodeEncodeError，本该可读的失败原因被一段 traceback 取代（v1.6.0 那几次红就是）。
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       # 第三方 action 一律钉全量 commit SHA（SHA 经 git ls-remote 向官方仓库查证）,
       # 标签可被移动而 SHA 不可变,防供应链投毒;注释里保留人可读的版本号

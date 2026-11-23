@@ -22,6 +22,99 @@ join the hive over HTTP or MCP.
 > `%USERPROFILE%\.miderhive`). The old `AGENTHIVE_*` / `ZCODE_*` names and the old data
 > directory are recognised and migrated automatically.
 
+## [1.6.1] - 2026-11-24
+
+Patch release. It reverts a regression in 1.6.0 that broke ZCode onboarding and closes a set of
+auto-digest defects — the most serious being that a failing digest could retry every 15 minutes
+and spend outside the budget. No database migration (schema stays v4).
+
+### Fixed
+- **ZCode onboarding regression (1.6.0)**: a pre-release audit fix had made `zcode-agent` a
+  reserved agent name, so the onboarding wizard's default identity for the ZCode tool could no
+  longer be issued (`POST /api/agents/provision` answered 400 `reserved agent name: zcode-agent`).
+  Reverted. `zcode-agent` keeps its gate exemption, and an explicitly disabled `zcode-agent` is
+  still denied. A new test (`wizard_default_identities`) asserts that every default identity the
+  wizard can prefill is issuable, in-process and over HTTP.
+- **Auto digest retried every 15 minutes and could spend outside the budget (1.6.0)**: the
+  scheduler decided "due" from the watermark, which only advances when a digest succeeds. After a
+  failed run it was therefore still due, and the 15-minute tick called the model again regardless
+  of the configured interval. The provider bills a failed call too, but its tokens were never
+  recorded, so the budget gate could not see that spend. Now every run that reaches the model
+  records an attempt timestamp first (`digest_last_attempt_at`) and the scheduler backs off for a
+  full interval from it; budget skips count as an attempt too. If the timestamp cannot be written,
+  the model is not called.
+- **Auto digest suspends instead of looping**: three failed runs in a row (model call failed, or
+  the summary could not be saved), or one run whose summary was saved but whose progress could not
+  be recorded, suspend digest runs until MiderHive restarts or the LLM / digest settings are saved
+  again. While suspended, the scheduler stays quiet and manual triggers (the button,
+  `agent-cli digest run`, `POST /api/digest/run`) are refused with the reason.
+- **The suspended state is visible**: the Usage panel shows "Auto digest suspended" with the
+  reason. Before, the toggle still read as enabled and the status line looked like "nothing for
+  days".
+- **Digest reported success when nothing was saved (1.6.0)**: if the summary was generated but the
+  knowledge-base write failed, the run returned success and the UI showed "Digest written to
+  knowledge base ✓". It now returns failure and leaves the watermark alone, so that activity is
+  summarized again next time.
+- **Digest read failures were treated as "no activity" (1.6.0)**: when the watermark or one of the
+  activity streams (audits / messages / errors) could not be read, the run continued with partial
+  data and advanced the watermark, so that activity was never summarized. Any read failure now
+  aborts the run without touching the watermark, and a watermark read failure no longer falls back
+  to "30 days ago".
+- **Digest backlog handling re-summarized the same batch (1.6.0)**: when a stream hit its per-run
+  cap, the watermark was only advanced to the oldest consumed row. Each run still takes the newest
+  N rows, so nearly the same batch was summarized and paid for again on every run, while the older
+  rows stayed out of reach regardless. The watermark advances normally again, and
+  `activity_truncated: true` in the run stats reports that older activity was beyond the cap.
+- **Digest settings read failure no longer looks like defaults (1.6.0)**: a failed read returned
+  "disabled / never run", which could make the scheduler treat a run as due while the panel showed
+  a disabled toggle. The read now reports failure: the scheduler skips the round and the panel
+  keeps its last state.
+- **UI harness: seeding failures abort the run**: 13 seed calls ignored their result, so the
+  harness could continue on partially seeded data. It now exits with code 3.
+- **Bool-return discipline**: 24 unchecked `bool` returns in the digest functions and the harness
+  seeding — the reason the last CI step was red on master while 1.6.0 was released. All are
+  checked now, and `scripts/ci_local.ps1` runs that gate (and every other CI step) before pushing.
+
+### Changed
+- **Auto digest does not overshoot the budget**: with a token budget, a run is skipped
+  (`skipped_reason: "budget headroom"`) when what is left cannot cover the run's worst case (half
+  the prompt's UTF-8 bytes plus the 1024-token output cap). Before, only "already over budget" was
+  checked, so the digest itself could push usage past the line. Request budgets were already exact.
+- Budget skips back off for a full interval. Before, the scheduler re-checked every 15 minutes and
+  wrote a `digest.skip` audit row each time.
+- Skip toasts say why in words ("budget used up" / "not enough budget left to finish one run" /
+  "nothing new to summarize") instead of printing the run's JSON. The new UI strings ship in all 8
+  languages.
+- Run stats gained `consecutive_failures` and `suspended`.
+
+### Added
+- `scripts/ci_local.ps1`: every post-build CI step, in CI order with the same arguments, against
+  the local build; reports all results at once instead of stopping at the first failure.
+- `scripts/deploy_dev.ps1`: deploys the current build to `dist\` as a runnable tree
+  (`MiderHive.exe`, `platformd`, `agent-cli`, `miderhive-mcp`, Qt runtime) with a `BUILD_INFO.txt`
+  and a start-up smoke test.
+- `ah::digestDue()` decides whether an auto-digest run is due (unit-tested; the logic used to live
+  in the window class).
+- `docs/api.md`: `POST /api/digest/run` is documented (it had been missing since 1.6.0).
+- **UI/UX test harness** (`ui_harness`, first full phase): 46 scripted scenes compared against
+  structural baselines in `tests/baseline/`, invariant rules, a dialog auto-answerer, golden image
+  hashes and an HTML report. **Not yet a regression gate** — see Known issues.
+- Tests: 2454 checks (+107).
+
+### Known issues
+- The **UI harness** still runs as observation only in CI (`continue-on-error`). Its golden-image
+  comparison cannot currently report a difference (the hash is recorded before it is compared),
+  its baselines contain machine-dependent content (27 of 46 scenes differ on the CI runner, and
+  one date field drifts with the calendar), a new baseline does not fail the exit code, and two of
+  the agreed interaction checks are not implemented (focus order, state retention).
+- Digest collection uses second-resolution timestamps. Activity written in the same second as the
+  collection query but after it is not picked up by the next run. Fixing this needs id-based
+  cursors.
+- A failed model call cannot be accounted (the provider's usage is not available on a failed
+  response); the back-off and suspension above bound this to at most three attempts per
+  configuration.
+- Digest entries are ordinary knowledge entries with tag `digest` and are not pruned.
+
 ## [1.6.0] - 2026-11-21
 
 ### Added
@@ -726,7 +819,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.3.0...v1.4.0

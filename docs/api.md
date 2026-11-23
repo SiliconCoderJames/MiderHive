@@ -352,7 +352,8 @@ task:          pending → accepted | declined ; accepted → done
 `alert_level`: `none`（<80%）| `warn`（≥80%）| `critical`（≥95%）| `over`（>100%）。
 口径随 `budget_mode` 切换（`tokens` 按周 Token，`requests` 按周调用次数，豁免的
 临时问答不计入分子）。对 Agent 上报**不做任何调用限制**；唯一受预算闸门约束的
-是平台自营的摘要沉淀调用（超预算自动跳过）。工作台仪表盘实时展示。
+是平台自营的摘要沉淀调用（预算已用完、或剩余预算不够跑完一轮时自动跳过，跑完也
+不会越过预算线）。工作台仪表盘实时展示。
 
 **GET /api/usage/daily?days=14** —— 最近 N 天逐日消耗（默认 14，上限 90），
 连续日期缺失天补 0：
@@ -366,6 +367,26 @@ task:          pending → accepted | declined ; accepted → done
 ```json
 { "data": { "models": [ { "model": "glm-5.3-flash", "tokens": 18000 }, … ] } }
 ```
+
+**POST /api/digest/run**（主密钥）—— 手动跑一轮摘要沉淀：用配置好的 LLM 把自上次
+摘要以来的蜂巢活动（审计 / 消息 / 错误）整理成一条不超过 500 字的结构化摘要，写入
+知识库（标签 `digest`），Token 计入周预算。不受自动摘要开关与间隔限制；同一时刻
+只会有一轮在跑。响应 `data` 是本轮统计：
+
+| 情形 | HTTP | `data` / `error` |
+| --- | --- | --- |
+| 已跳过，未调用模型 | 200 | `{ "skipped_reason": "budget exhausted" \| "budget headroom" \| "no activity" }` |
+| 摘要已保存 | 200 | `{ "generated": true, "tokens_in": …, "tokens_out": …, "knowledge_uuid": "…", … }` |
+| 已暂停 | 500 | `error` 以 `digest runs are suspended` 开头 |
+| 其它失败 | 500 | `error` 为原因；摘要没保存成功时水位不推进，这批活动留给下一次 |
+
+- `budget exhausted`：本周预算已用完。`budget headroom`：按 Token 计预算时，平台先按
+  最坏情况预留本轮开销，剩余预算不够跑完一轮就跳过（按请求数计是精确的：未到线就跑，
+  跑完至多贴线，不会越线）。
+- **暂停态**：连续 3 轮失败（模型调用失败、摘要存不进知识库），或某轮摘要已保存但
+  进度写不进去时，摘要进入暂停——继续重试只会把同一批活动反复摘要、反复计费。暂停后
+  本端点与界面上的「立即沉淀」都会被拒并说明原因；重新保存 LLM 或摘要设置、或重启
+  MiderHive 后恢复。
 
 ### 4.8 操作日志
 

@@ -498,10 +498,12 @@ bool Platform::isManager(const std::string& name) const { return name == kManage
 // 把操作记成人类用户做的——恰好打穿"全程可追溯"这条核心承诺。
 bool Platform::isReservedName(const std::string& name) {
     const std::string n = toLower(name);
-    // zcode-agent 也是保留名（审计 M1）：它是接入向导给 ZCode 工具的默认身份
-    // 且默认豁免于总闸——允许注册等于允许造出"开关打不到"的身份
-    return n == kManagerName || n == "user" || n == "system" || n == "master" ||
-           n == "zcode-agent";
+    // zcode-agent 不能进这份名单：它是接入向导给 ZCode 工具预填的默认身份
+    // （toolRegistry / ui::integrations::tools），设为保留名等于让 ZCode 工具
+    // 无法一键接入——v1.6.0 的回归，1.6.1 撤回。它对总闸的豁免在
+    // accessDeniedReasonLocked 里按名判断，且"被明确禁用"优先于豁免。
+    // tests/test_main.cpp 的 test_wizard_default_identities 守着这条不变量。
+    return n == kManagerName || n == "user" || n == "system" || n == "master";
 }
 
 bool Platform::registerAgent(const std::string& masterKey, const std::string& name,
@@ -1570,6 +1572,8 @@ bool Platform::llmConfigSet(const std::string& actor, const ah::llm::LlmConfig& 
                              {"base_url", sanitizeUrlForAudit(cfg.baseUrl)},
                              {"model", cfg.model}}.dump(),
               aerr);
+    // 换了模型/端点/密钥 = 明确要求再试：解除摘要暂停（见 clearDigestSuspensionLocked）
+    clearDigestSuspensionLocked();
     return true;
 }
 
@@ -1643,24 +1647,78 @@ void Platform::setLlmClientFactory(
 
 // ---------------- 摘要沉淀（digest）：受预算闸门约束的自营调用 ----------------
 
-DigestSchedule Platform::digestSchedule() const {
+bool Platform::digestSchedule(DigestSchedule& out, std::string& err) const {
     std::lock_guard lock(mutex_);
-    DigestSchedule out;
-    out.enabled = false;
-    out.interval_hours = 24;
-    std::string err;
-    // IGNORE：读失败按默认值（未启用/24h）——与总闸同款可用性取舍，能走到
-    // 这里的调用路径已被 refuseIfUnusable 拦过一次
-    db_.query("SELECT value FROM settings WHERE key='digest_enabled'", nullptr,
-              [&](Stmt& st) { out.enabled = st.text(0) == "1"; }, err);
-    db_.query("SELECT value FROM settings WHERE key='digest_interval_hours'", nullptr,
-              [&](Stmt& st) { out.interval_hours = st.i64(0); }, err);
+    out = DigestSchedule{};
+    // 读失败如实上报，不按默认值兜底：默认值里的"从未运行"会让调度器提前判定
+    // 到期，"未启用"则会让界面显示一个与事实相反的开关。调用方据此跳过本轮
+    // 或保留上一次的界面状态。
+    if (!db_.query("SELECT value FROM settings WHERE key='digest_enabled'", nullptr,
+                   [&](Stmt& st) { out.enabled = st.text(0) == "1"; }, err))
+        return false;
+    if (!db_.query("SELECT value FROM settings WHERE key='digest_interval_hours'", nullptr,
+                   [&](Stmt& st) { out.interval_hours = st.i64(0); }, err))
+        return false;
+    if (!db_.query("SELECT value FROM settings WHERE key='digest_last_run_at'", nullptr,
+                   [&](Stmt& st) { out.last_run_at = st.text(0); }, err))
+        return false;
+    if (!db_.query("SELECT value FROM settings WHERE key='digest_last_status'", nullptr,
+                   [&](Stmt& st) { out.last_status = st.text(0); }, err))
+        return false;
+    if (!db_.query("SELECT value FROM settings WHERE key='digest_last_attempt_at'", nullptr,
+                   [&](Stmt& st) { out.last_attempt_at = st.text(0); }, err))
+        return false;
+    // 从未设置过 = 默认间隔（行不存在时回调不触发，值仍为 0）
     if (out.interval_hours <= 0) out.interval_hours = 24;
-    db_.query("SELECT value FROM settings WHERE key='digest_last_run_at'", nullptr,
-              [&](Stmt& st) { out.last_run_at = st.text(0); }, err);
-    db_.query("SELECT value FROM settings WHERE key='digest_last_status'", nullptr,
-              [&](Stmt& st) { out.last_status = st.text(0); }, err);
-    return out;
+    return true;
+}
+
+bool Platform::digestSuspended() const {
+    std::lock_guard lock(mutex_);
+    return digestSuspended_;
+}
+
+bool digestDue(const DigestSchedule& s, std::time_t now) {
+    std::time_t latest = 0;
+    bool haveBase = false;
+    for (const std::string* stamp : {&s.last_attempt_at, &s.last_run_at}) {
+        std::time_t t = 0;
+        if (stamp->empty() || !parseIso(*stamp, t)) continue;
+        haveBase = true;
+        if (t > latest) latest = t;
+    }
+    // 没有可用基准（从未跑过，或两个戳都坏了）= 到期：宁可多试一次（有退避戳
+    // 与暂停态兜着），也不能因为一个坏戳永远不再跑
+    if (!haveBase) return true;
+    return now >= latest + s.interval_hours * 3600;
+}
+
+std::string Platform::digestSuspendReason() const {
+    std::lock_guard lock(mutex_);
+    return digestSuspendReason_;
+}
+
+// 解除暂停并清零连续失败计数（须持 mutex_）。只在"配置被修改"或进程重启时发生：
+// 运行类调用（手动触发、HTTP 端点）一律不能自己解除——否则一个循环重试的脚本
+// 就能把暂停态架空。
+void Platform::clearDigestSuspensionLocked() {
+    digestSuspended_ = false;
+    digestSuspendReason_.clear();
+    digestFailures_ = 0;
+}
+
+// settings 表单键 upsert（须持 mutex_）。摘要的四个状态键都走它：这些键决定
+// "哪些活动已经摘要过"，写不进去必须让调用方看见。
+bool Platform::setSettingLocked(const std::string& key, const std::string& value,
+                                std::string& err) {
+    return db_.query(
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [&](Stmt& st) {
+            st.bind(1, key);
+            st.bind(2, value);
+        },
+        nullptr, err);
 }
 
 bool Platform::digestSetSchedule(const std::string& actor, bool enabled, int64_t intervalHours,
@@ -1698,10 +1756,21 @@ bool Platform::digestSetSchedule(const std::string& actor, bool enabled, int64_t
         db_.rollback();
         return false;
     }
+    // 用户改了摘要设置 = 明确要求再试：解除暂停（见 clearDigestSuspensionLocked）
+    clearDigestSuspensionLocked();
     return true;
 }
 
 namespace {
+// 单轮摘要的输出上限：既限单次成本，也是预算余量闸里"本轮最坏开销"的输出部分
+constexpr int kDigestMaxTokens = 1024;
+
+// 暂停态的统一说明：拒绝运行时原样返回；刚跨过失败阈值时接在失败原因后面。
+std::string digestSuspendedNote() {
+    return "Digest runs are suspended until MiderHive restarts or the digest/LLM settings are "
+           "saved again, so no further model calls are made for the same activity.";
+}
+
 // 水位推进需要"最大已消费行 +1 秒"：parseIso 解析后加一秒再格式化回平台 ISO。
 // 解析失败原样返回（调用方用 max(now, 该值) 兜底）。
 std::string isoAdvanceOneSec(const std::string& iso) {
@@ -1735,10 +1804,33 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
 
     ah::llm::LlmConfig cfg;
     std::string watermark;
+    // 本轮开始的时刻，在取料查询之前取：查询之后才产生的活动 created_at 都不早于
+    // 它，留作水位下限，下一轮一定还看得到
+    const std::string runStartedAt = nowIso();
+    // 预算类跳过同样落一次尝试戳：调度器按尝试戳退避一个完整间隔。不记的话它每
+    // 15 分钟回来查一次，超预算的一周会写进近千条 digest.skip 审计
+    auto skipForBudget = [&](nlohmann::json stats) {
+        std::lock_guard lock(mutex_);
+        if (!setSettingLocked("digest_last_attempt_at", runStartedAt, err)) {
+            err = "a digest run was skipped for budget reasons, but the run state could not be "
+                  "recorded: " +
+                  err;
+            return false;
+        }
+        statsJson = stats.dump();
+        std::string aerr;
+        auditStep(actor, "digest.skip", std::string(), statsJson, aerr);
+        return true;
+    };
     // ---- 预算闸门（先查后调）：mode 口径超预算 → 跳过，不调 LLM 不花钱 ----
     {
         std::lock_guard lock(mutex_);
         if (refuseIfUnusable(err)) return false;
+        if (digestSuspended_) {
+            err = "digest runs are suspended: " + digestSuspendReason_ + ". " +
+                  digestSuspendedNote();
+            return false;
+        }
     }
     UsageSummary sum;
     if (!usageSummary(sum, err)) return false;
@@ -1750,34 +1842,49 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
                                                      / sum.budget
                                                : 0.0);
     if (ratio >= 1.0) {
-        statsJson = nlohmann::json{{"skipped_reason", "budget exhausted"},
-                                   {"budget_mode", sum.budget_mode}}.dump();
-        std::lock_guard lock(mutex_);
-        std::string aerr;
-        auditStep(actor, "digest.skip", std::string(), statsJson, aerr);
-        return true;
+        return skipForBudget({{"skipped_reason", "budget exhausted"},
+                              {"budget_mode", sum.budget_mode}});
     }
 
     // ---- 取料（锁内逐个查）：audit/messages 自水位起，errors 客户端过滤 ----
-    std::string lastRunAt, lastStatus;
+    // 三条流都是"水位以来最新的 N 条"。N 是单轮摘要的上限，不是分页游标：积压
+    // 超过 N 时更早的活动本轮拿不到，stats 里以 activity_truncated 如实标出。
+    // （曾把水位只推到"最老的一条已消费行"想留给下一轮——但下一轮取的仍是
+    //   "最新 N 条"，于是几乎同一批活动被反复摘要、反复花钱，而更早的那批照样
+    //   拿不到。水位必须照常推到最新。）
+    constexpr size_t kAuditCap = 200, kMessageCap = 100, kErrorCap = 50;
+    std::string lastRunAt;
     std::vector<AuditRecord> audits;
     std::vector<Message> msgs;
     std::vector<ErrorReport> errs;
     std::vector<AgentInfo> agents;
     std::string maxCreated;  // 本轮已消费行的最大 created_at（水位推进用）
-    bool backlogTruncated = false;  // 任一流取到 cap 上限 = 疑似积压未清（审计 M2）
+    bool truncated = false;  // 至少一条流取到了上限：更早的活动未纳入本轮
     {
         std::lock_guard lock(mutex_);
         std::string qerr;
-        db_.query("SELECT value FROM settings WHERE key='digest_last_run_at'", nullptr,
-                  [&](Stmt& st) { lastRunAt = st.text(0); }, qerr);
-        db_.query("SELECT value FROM settings WHERE key='digest_last_status'", nullptr,
-                  [&](Stmt& st) { lastStatus = st.text(0); }, qerr);
+        // 水位读失败必须中止：读不到时退回"30 天前"，一轮摘要会吞掉 30 天的活动
+        // 并且照常花钱
+        if (!db_.query("SELECT value FROM settings WHERE key='digest_last_run_at'", nullptr,
+                       [&](Stmt& st) { lastRunAt = st.text(0); }, qerr)) {
+            err = "cannot read the digest watermark: " + qerr;
+            return false;
+        }
         watermark = lastRunAt.empty() ? isoDaysAgo(30) : lastRunAt;  // 审计轮转上限 30 天
-        if (!auditList("", "", watermark, 200, audits, qerr, std::string())) qerr.clear();
-        if (!messageList("", "", "", watermark, 100, msgs, qerr, std::string())) qerr.clear();
-        if (!errorList("", "", 50, errs, qerr)) qerr.clear();
-        if (!listAgents(agents, qerr)) qerr.clear();
+        // 任一路读失败即中止且不动水位：把读失败当成"没有这类活动"的话，水位
+        // 照推，那批活动就永久不会再被摘要
+        if (!auditList("", "", watermark, static_cast<int>(kAuditCap), audits, qerr,
+                       std::string()) ||
+            !messageList("", "", "", watermark, static_cast<int>(kMessageCap), msgs, qerr,
+                         std::string()) ||
+            !errorList("", "", static_cast<int>(kErrorCap), errs, qerr) ||
+            !listAgents(agents, qerr)) {
+            err = "cannot collect activity for the digest: " + qerr;
+            return false;
+        }
+        // 上限判断必须在过滤之前：被过滤掉的行同样占用了名额
+        truncated = audits.size() >= kAuditCap || msgs.size() >= kMessageCap ||
+                    errs.size() >= kErrorCap;
         // 自排除：digest 写审计用 actor="user"，且上一轮的水位推进行 created_at
         // 恰等于新水位（>= 会命中）——不排掉的话每轮都把自己的痕迹当新活动，
         // 自激永不停。actor=user 的行全部视为平台自营（摘要只关心 Agent 侧活动）
@@ -1798,30 +1905,27 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
             if (m.created_at > maxCreated) maxCreated = m.created_at;
         for (const auto& e : errs)
             if (e.created_at > maxCreated) maxCreated = e.created_at;
-        // 积压检测（审计 M2）：三条流都按"最新 N 条"取，积压超限时最老的料本轮
-        // 拿不到——水位照推会让它们永久静默丢失。此处只标记：水位推到本轮
-        // **最小**已消费行（而非最大），剩余积压留给下一轮
-        if (audits.size() >= 200 || msgs.size() >= 100) backlogTruncated = true;
     }
     // 活动判断只看三类流（audit/messages/errors）；Agent 状态快照是 prompt
     // 的上下文，不是活动——注册过的 Agent 恒非空，算进去会让"无活动"永假
     const bool hasActivity = !audits.empty() || !msgs.empty() || !errs.empty();
     if (!hasActivity) {
         // 空跑也推进水位：防止水位永不动导致取料越积越多。**保持单调**——取
-        // max(旧水位, now)：同秒连跑时 now 可能小于旧水位（run1 已推进到
-        // maxCreated+1s），直接写 now 会让水位倒退、旧料被重吃（审计 L1）
+        // max(旧水位, 本轮开始时刻)：同秒连跑时开始时刻可能小于旧水位（上一轮
+        // 已推进到 maxCreated+1s），直接写它会水位倒退、旧料被重吃
         statsJson = nlohmann::json{{"skipped_reason", "no activity"}}.dump();
         std::lock_guard lock(mutex_);
         std::string werr;
-        const std::string now = nowIso();
-        db_.query(
-            "INSERT INTO settings(key, value) VALUES('digest_last_run_at', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&](Stmt& st) { st.bind(1, now > watermark ? now : watermark); }, nullptr, werr);
-        db_.query(
-            "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&](Stmt& st) { st.bind(1, statsJson); }, nullptr, werr);
+        std::string newWatermark = runStartedAt;
+        if (newWatermark < watermark) newWatermark = watermark;
+        if (!setSettingLocked("digest_last_run_at", newWatermark, werr) ||
+            !setSettingLocked("digest_last_status", statsJson, werr)) {
+            err = "there was nothing new to summarize, but the run state could not be recorded: " +
+                  werr;
+            return false;
+        }
+        // 空跑是一次干净的求值：连续失败计数从这里重新开始（暂停态走不到这一步）
+        digestFailures_ = 0;
         return true;
     }
 
@@ -1852,98 +1956,150 @@ bool Platform::digestRunOnce(const std::string& actor, std::string& statsJson, s
         (errLines.empty() ? "（无）" : errLines) + "\n== Agent 状态 ==\n" +
         (agentLines.empty() ? "（无）" : agentLines);
 
+    // ---- 预算余量闸（Token 口径）：跑完也不能越线 ----
+    // 上面那道闸只看"当前是否已超"，本轮自己就能把用量推过线。请求数口径不需要
+    // 这一道：调用数是整数，未超线时本轮恰好 +1，至多贴线。Token 只能估——输入按
+    // UTF-8 字节数的一半计（对中文和标点密集的审计行都是高估），输出按上限计。
+    // 估高的代价是这一轮不跑，估低的代价是越过用户划的线。
+    if (sum.budget_mode != kBudgetModeRequests && sum.budget > 0) {
+        const double worstCase = static_cast<double>(prompt.size()) / 2.0 + kDigestMaxTokens;
+        if (static_cast<double>(sum.budgeted_tokens) + worstCase >
+            static_cast<double>(sum.budget)) {
+            return skipForBudget({{"skipped_reason", "budget headroom"},
+                                  {"budget_mode", sum.budget_mode},
+                                  {"worst_case_tokens", static_cast<int64_t>(worstCase)}});
+        }
+    }
+
+    // ---- 尝试戳：调模型之前先落盘 ----
+    // 调度器按它退避一个完整间隔。此前到期判断只看水位，而水位只在成功时推进：
+    // 一轮失败之后仍然"到期"，调度器每个 tick（15 分钟）重试一次，与用户设的间隔
+    // 无关。失败的调用在服务商那边照样计费，本地却拿不到 usage 无从记账，预算闸门
+    // 对这笔开销是盲的。写不进去就不调模型：没有退避保障的那一次调用会被无限重复。
+    {
+        std::lock_guard lock(mutex_);
+        if (!setSettingLocked("digest_last_attempt_at", runStartedAt, err)) {
+            err = "cannot record the digest attempt, so the model was not called: " + err;
+            return false;
+        }
+    }
+
     // ---- 调 LLM（不持锁；maxTokens 限成本——必须经 llmAskOpen 参数在构造前
     // 生效，事后改局部副本是死代码，审计 H2）----
-    auto client = llmAskOpen(cfg, err, 1024);
-    if (!client) {
-        // LLM 未配置/store 不可用：水位不动（下轮重试），但状态如实落库——
-        // 此前直接 return false，GUI 状态行显示陈旧信息（审计 L7）
-        std::lock_guard lock(mutex_);
-        std::string werr;
-        const std::string status = nlohmann::json{{"error", truncateForAudit(err)}}.dump(
-            2, ' ', false, nlohmann::detail::error_handler_t::replace);
-        db_.query(
-            "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&](Stmt& st) { st.bind(1, status); }, nullptr, werr);
+    // 失败收尾：水位不动（这批活动留给下一次尝试），原因写进 digest_last_status 供
+    // 界面展示，连续失败计数 +1，达到阈值即暂停。连状态都写不进去时并进 err，
+    // 不留"失败了但界面毫无痕迹"的情况。
+    auto failRun = [&](const char* what, std::string reason) {
+        reason = truncateForAudit(reason);
+        bool justSuspended = false;
+        {
+            std::lock_guard lock(mutex_);
+            std::string werr;
+            const std::string status =
+                nlohmann::json{{"error", reason},
+                               {"consecutive_failures", digestFailures_ + 1}}.dump(
+                    2, ' ', false, nlohmann::detail::error_handler_t::replace);
+            if (!setSettingLocked("digest_last_status", status, werr))
+                reason +=
+                    " (also: could not record this failure in the digest status: " + werr + ")";
+            justSuspended = ++digestFailures_ >= kDigestFailuresBeforeSuspend;
+            if (justSuspended) {
+                digestSuspended_ = true;
+                digestSuspendReason_ = std::string(what) + ": " + reason;
+            }
+        }
+        if (justSuspended) reason += " " + digestSuspendedNote();
+        err = reason;
         return false;
-    }
+    };
+    auto client = llmAskOpen(cfg, err, kDigestMaxTokens);
+    if (!client) return failRun("the model could not be called", err);
     if (cancelOut) *cancelOut = [c = client.get()] { c->cancel(); };
     err.clear();  // stale-err 纪律
     ah::llm::LlmReply reply = client->complete({ah::llm::LlmMessage{"user", prompt}}, nullptr,
                                                err);
-    const bool ok = err.empty() && !reply.text.empty();
-    // ---- 收尾（持锁）：记账 + 写知识 + 水位/状态 + 审计 ----
-    {
-        std::lock_guard lock(mutex_);
-        if (!ok) {
-            // LLM 失败：水位不推进（下轮重新吃同一批料），状态如实落库供 GUI 展示
-            std::string werr;
-            const std::string status = nlohmann::json{{"error", truncateForAudit(err)}}.dump(
-                2, ' ', false, nlohmann::detail::error_handler_t::replace);
-            db_.query(
-                "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                [&](Stmt& st) { st.bind(1, status); }, nullptr, werr);
-            return false;
-        }
-        bool dup = false;
-        if (!usage_.report("user", reply.tokensIn, reply.tokensOut, "llm", cfg.model, "", "",
-                           dup, err, kUsageSourceLlmDigest)) {
-            err = "digest generated, but usage accounting failed: " + err;
-        }
-        KnowledgeEntry entry;
-        const std::string title = "蜂巢摘要 " + nowIso().substr(0, 16);
-        std::string kerr;
-        const bool written = knowledgeCreate("user", title, reply.text, {"digest"}, "蜂巢摘要",
-                                             {}, "", entry, kerr);
-        // 水位推进：默认到 max(now, 最大已消费行 +1s)（now 与本轮行同秒时 +1s
-        // 防下一轮 >= 重吃）。**积压保护**（审计 M2）：任一流取到 cap = 疑似
-        // 积压超限，最老的料本轮没拿到——水位只推到本轮**最小**已消费行 +1s，
-        // 剩余积压留给下一轮，不静默丢料
-        std::string newWatermark = nowIso();
+    if (!err.empty()) return failRun("the model call failed", err);
+    if (reply.text.empty())
+        return failRun("the model call failed", "the model returned an empty summary");
+    // ---- 收尾（持锁）：记账 + 写知识 + 水位/状态 + 审计 + 失败计数 ----
+    std::lock_guard lock(mutex_);
+    bool dup = false;
+    std::string recErr;
+    const bool accounted = usage_.report("user", reply.tokensIn, reply.tokensOut, "llm", cfg.model,
+                                         "", "", dup, recErr, kUsageSourceLlmDigest);
+    KnowledgeEntry entry;
+    std::string kerr;
+    // 摘要以固定 tag 归档，「查看 digest」的深链靠它过滤
+    const bool written =
+        knowledgeCreate("user", "蜂巢摘要 " + nowIso().substr(0, 16), reply.text, {"digest"},
+                        "蜂巢摘要", {}, "", entry, kerr);
+    // 水位只在摘要真正落库后推进：写不进去还推进，这批活动就永远没有摘要
+    bool watermarkAdvanced = false;
+    std::string werr;
+    if (written) {
+        // max(本轮开始时刻, 最大已消费行 +1s)。+1s 是因为取料用 >=：水位停在
+        // 最大已消费行本身，会把那一秒的行原样再取一遍。代价是一个亚秒级窗口：
+        // 与取料查询落在同一秒、且晚于查询产生的行，下一轮看不到（时间戳是秒级，
+        // 分不出先后）。要彻底消除需要改成按行 id 的游标。
+        std::string newWatermark = runStartedAt;
         if (!maxCreated.empty()) {
-            if (backlogTruncated) {
-                std::string minCreated = maxCreated;
-                for (const auto& r : audits)
-                    if (r.created_at < minCreated) minCreated = r.created_at;
-                for (const auto& m : msgs)
-                    if (m.created_at < minCreated) minCreated = m.created_at;
-                for (const auto& e : errs)
-                    if (e.created_at < minCreated) minCreated = e.created_at;
-                const std::string past = isoAdvanceOneSec(minCreated);
-                if (past < newWatermark) newWatermark = past;
-            } else {
-                const std::string past = isoAdvanceOneSec(maxCreated);
-                if (past > newWatermark) newWatermark = past;
-            }
+            const std::string past = isoAdvanceOneSec(maxCreated);
+            if (past > newWatermark) newWatermark = past;
         }
-        db_.query(
-            "INSERT INTO settings(key, value) VALUES('digest_last_run_at', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&](Stmt& st) { st.bind(1, newWatermark); }, nullptr, kerr);
-        statsJson = nlohmann::json{{"generated", written},
-                                   {"tokens_in", reply.tokensIn},
-                                   {"tokens_out", reply.tokensOut},
-                                   {"truncated", reply.truncated},
-                                   {"backlog_truncated", backlogTruncated},
-                                   {"knowledge_uuid", written ? entry.uuid : std::string()}}.dump(
-            2, ' ', false, nlohmann::detail::error_handler_t::replace);
-        db_.query(
-            "INSERT INTO settings(key, value) VALUES('digest_last_status', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&](Stmt& st) { st.bind(1, statsJson); }, nullptr, kerr);
-        std::string aerr;
-        auditStep(actor, "digest.run", written ? entry.uuid : std::string(), statsJson, aerr);
-        if (!written) {
-            // 摘要生成但落库失败：水位已推进，该轮内容不可重试——至少把失败
-            // 如实并进 stats/err（审计 M4 的可见性部分；M4 的堆积治理入维护任务）
-            err = "digest generated, but writing the knowledge entry failed: " + kerr;
-            statsJson = nlohmann::json{{"generated", false},
-                                       {"error", truncateForAudit(kerr)}}.dump(
-                2, ' ', false, nlohmann::detail::error_handler_t::replace);
+        watermarkAdvanced = setSettingLocked("digest_last_run_at", newWatermark, werr);
+    }
+    // 连续失败计数：保存失败累加（阈值 kDigestFailuresBeforeSuspend）；水位写失败
+    // 直接暂停——摘要存下了却记不住"摘要到哪了"，下一轮必然把这批再摘要、再付一次
+    bool justSuspended = false;
+    if (written && watermarkAdvanced) {
+        digestFailures_ = 0;
+    } else {
+        ++digestFailures_;
+        const bool watermarkLost = written && !watermarkAdvanced;
+        if (watermarkLost || digestFailures_ >= kDigestFailuresBeforeSuspend) {
+            justSuspended = digestSuspended_ = true;
+            digestSuspendReason_ =
+                watermarkLost
+                    ? "the summary was saved but its watermark could not be advanced: " + werr
+                    : "the summary could not be saved to the knowledge base: " +
+                          truncateForAudit(kerr);
         }
     }
+    statsJson =
+        nlohmann::json{{"generated", written},
+                       {"tokens_in", reply.tokensIn},
+                       {"tokens_out", reply.tokensOut},
+                       {"truncated", reply.truncated},
+                       {"activity_truncated", truncated},
+                       {"accounted", accounted},
+                       {"watermark_advanced", watermarkAdvanced},
+                       {"consecutive_failures", digestFailures_},
+                       {"suspended", digestSuspended_},
+                       {"knowledge_uuid", written ? entry.uuid : std::string()},
+                       {"error", written ? std::string() : truncateForAudit(kerr)}}
+            .dump(2, ' ', false, nlohmann::detail::error_handler_t::replace);
+    std::string serr;
+    const bool statusRecorded = setSettingLocked("digest_last_status", statsJson, serr);
+    std::string aerr;
+    auditStep(actor, "digest.run", written ? entry.uuid : std::string(), statsJson, aerr);
+
+    if (!written) {
+        err = "the summary was generated but could not be saved to the knowledge base: " + kerr +
+              " (the watermark was not advanced, so this activity is summarized again next time)";
+        if (justSuspended) err += " " + digestSuspendedNote();
+        return false;
+    }
+    if (!watermarkAdvanced) {
+        err = "the summary was generated and saved, but its watermark could not be advanced: " +
+              werr + " " + digestSuspendedNote();
+        return false;
+    }
+    // 以下两项不改变"摘要已生成并保存"这个结果，但必须让调用方看见
+    if (!accounted)
+        err = "the summary was generated, but its token usage was not recorded: " + recErr;
+    if (!statusRecorded)
+        err += (err.empty() ? std::string() : "; ") +
+               "the run status could not be recorded: " + serr;
     return true;
 }
 

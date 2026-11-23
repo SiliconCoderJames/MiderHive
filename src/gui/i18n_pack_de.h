@@ -1564,6 +1564,16 @@ inline const std::unordered_map<std::string_view, std::string_view>& de() {
          "Knoten = neueste Einträge (Größe = Kantenzahl, Farbe = Kategorie); Kanten = Vektorähnlichkeit. Rad zoomt · Ziehen verschiebt · Klick für Details · Knoten ziehen zum Fixieren."},
         {"语义关联知识图谱 · 向量 kNN 相似边",
          "Semantischer Wissensgraph · kNN-Ähnlichkeitskanten"},
+        {"自动摘要已暂停",
+         "Auto-Digest angehalten"},
+        {"连续 3 轮失败，或摘要已保存但没能记下进度。重新保存 LLM / 摘要设置，或重启 MiderHive 后恢复。原因：",
+         "Drei Läufe hintereinander fehlgeschlagen, oder eine Zusammenfassung wurde gespeichert, ihr Fortschritt konnte aber nicht vermerkt werden. LLM-/Digest-Einstellungen erneut speichern oder MiderHive neu starten, um fortzufahren. Grund: "},
+        {"预算已用完",
+         "das Wochenbudget ist aufgebraucht"},
+        {"剩余预算不够跑完一轮",
+         "für einen weiteren Lauf reicht das Restbudget nicht"},
+        {"没有新活动",
+         "nichts Neues zusammenzufassen"},
     };
     return k;
 }

@@ -1564,6 +1564,16 @@ inline const std::unordered_map<std::string_view, std::string_view>& it() {
          "Nodi = voci più recenti (dimensione = grado, colore = categoria); archi = similarità vettoriale. Rotella per zoom · trascina per spostare · clic su un nodo per i dettagli · trascina un nodo per fissarlo."},
         {"语义关联知识图谱 · 向量 kNN 相似边",
          "Grafo semantico delle conoscenze · archi kNN"},
+        {"自动摘要已暂停",
+         "Digest automatico sospeso"},
+        {"连续 3 轮失败，或摘要已保存但没能记下进度。重新保存 LLM / 摘要设置，或重启 MiderHive 后恢复。原因：",
+         "Tre esecuzioni consecutive non riuscite, oppure un riepilogo è stato salvato ma non è stato possibile registrarne l'avanzamento. Salva di nuovo le impostazioni LLM / digest o riavvia MiderHive per riprendere. Motivo: "},
+        {"预算已用完",
+         "il budget settimanale è esaurito"},
+        {"剩余预算不够跑完一轮",
+         "il budget rimanente non basta per un'altra esecuzione"},
+        {"没有新活动",
+         "niente di nuovo da riassumere"},
     };
     return k;
 }

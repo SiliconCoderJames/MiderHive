@@ -21,6 +21,20 @@
 #include "../i18n.h"
 #include "../widgets.h"
 
+namespace {
+// digest 的 skipped_reason → 界面说法。stats 是平台返回的 JSON，原样弹给用户等于
+// 没说。没见过的原因原样给出，不猜。
+QString digestSkipReason(const QString& stats) {
+    if (stats.contains("budget exhausted"))
+        return i18n::trs("预算已用完", "the weekly budget is used up");
+    if (stats.contains("budget headroom"))
+        return i18n::trs("剩余预算不够跑完一轮", "not enough budget left to finish one run");
+    if (stats.contains("no activity"))
+        return i18n::trs("没有新活动", "nothing new to summarize");
+    return stats;
+}
+}  // namespace
+
 UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
     : PanelBase(platform, parent) {
     auto* root = new QVBoxLayout(this);
@@ -307,22 +321,49 @@ void UsagePanel::refresh() {
         editBudgetBtn_->setStyleSheet(ui::th(QString(
             "padding:5px 14px; color:%1;").arg(ui::usageColor(ratio).name())));
         // digest 状态行：上次时间 + 统计摘要
-        const ah::DigestSchedule sched = platform_.digestSchedule();
-        digestCheck_->blockSignals(true);  // 程序性回填不触发 toggled 连锁写库
-        digestCheck_->setChecked(sched.enabled);
-        digestCheck_->blockSignals(false);
-        populate_ = true;
-        digestHours_->setValue(static_cast<int>(sched.interval_hours));
-        populate_ = false;
-        digestHours_->setEnabled(sched.enabled);
-        digestRunBtn_->setEnabled(!digestBusy_.load());
-        digestStatus_->setText(i18n::trs("上次沉淀：%1", "last run: %1")
-                                   .arg(sched.last_run_at.empty()
-                                            ? i18n::trs("从未", "never")
-                                            : relTime(QString::fromStdString(sched.last_run_at))));
-        digestStatus_->setToolTip(sched.last_status.empty()
-                                      ? QString()
-                                      : QString::fromStdString(sched.last_status));
+        ah::DigestSchedule sched;
+        std::string derr;
+        if (platform_.digestSchedule(sched, derr)) {
+            digestCheck_->blockSignals(true);  // 程序性回填不触发 toggled 连锁写库
+            digestCheck_->setChecked(sched.enabled);
+            digestCheck_->blockSignals(false);
+            populate_ = true;
+            digestHours_->setValue(static_cast<int>(sched.interval_hours));
+            populate_ = false;
+            digestHours_->setEnabled(sched.enabled);
+            digestRunBtn_->setEnabled(!digestBusy_.load());
+            // 沉淀进行中，3s 轮询不能把「正在沉淀…」冲掉
+            if (!digestBusy_.load() && platform_.digestSuspended()) {
+                // 暂停态常驻可见：开关仍是"已启用"，只看开关和"上次沉淀"会以为一切
+                // 正常、只是很久没跑。文案里的 3 = ah::kDigestFailuresBeforeSuspend
+                digestStatus_->setText(
+                    QString("<span style='color:%1; font-weight:600;'>%2</span>")
+                        .arg(ui::warn().name(),
+                             i18n::trs("自动摘要已暂停", "Auto digest suspended")));
+                digestStatus_->setToolTip(
+                    i18n::trs(
+                        "连续 3 轮失败，或摘要已保存但没能记下进度。重新保存 LLM / 摘要"
+                        "设置，或重启 MiderHive 后恢复。原因：",
+                        "Three runs failed in a row, or a summary was saved but its "
+                        "progress could not be recorded. Re-save the LLM / digest "
+                        "settings, or restart MiderHive to resume. Reason: ") +
+                    "\n" +
+                    ui::humanError(QString::fromStdString(platform_.digestSuspendReason())));
+            } else if (!digestBusy_.load()) {
+                digestStatus_->setText(i18n::trs("上次沉淀：%1", "last run: %1")
+                                           .arg(sched.last_run_at.empty()
+                                                    ? i18n::trs("从未", "never")
+                                                    : relTime(QString::fromStdString(
+                                                          sched.last_run_at))));
+                digestStatus_->setToolTip(sched.last_status.empty()
+                                              ? QString()
+                                              : QString::fromStdString(sched.last_status));
+            }
+        } else {
+            // 读失败时保留上一次的开关/间隔/状态行：开关尤其不能在状态不明时
+            // 被回填成"未启用"（那会让用户以为自动摘要被关了，或者反过来）
+            ui::Toast::show(this, ui::humanError(QString::fromStdString(derr)), false);
+        }
     } else {
         // 读失败如实提示：此前静默 return，界面停留旧数据而状态栏照常翻新，
         // 用户无法区分"没变化"与"读取失败"（审计 P2 清单顺带修）
@@ -413,13 +454,21 @@ void UsagePanel::onRunDigest() {
                 guard->digestRunBtn_->setEnabled(true);
                 guard->digestBusy_ = false;
                 guard->refresh();
-                if (ok && stats.contains("generated")) {
-                    ui::Toast::show(guard, i18n::trs("摘要已写入知识库 ✓（tag: digest）",
-                                                     "Digest written to knowledge base ✓"));
-                } else if (ok && stats.contains("skipped_reason")) {
-                    // 主动触发必须给反馈：跳过原因（预算耗尽/无新活动）如实说明
+                if (ok && stats.contains("\"generated\": true")) {
+                    // err 非空 = 记账或状态写入失败的警告：摘要已保存，但警告不能吞
                     ui::Toast::show(guard,
-                                    i18n::trs("已跳过：", "Skipped: ") + stats, false);
+                                    i18n::trs("摘要已写入知识库 ✓（tag: digest）",
+                                              "Digest written to knowledge base ✓") +
+                                        (err.isEmpty() ? QString()
+                                                       : " " + ui::humanError(err)),
+                                    err.isEmpty());
+                } else if (ok && stats.contains("skipped_reason")) {
+                    // 主动触发必须给反馈：跳过原因如实说明（预算用完/余量不够一轮/
+                    // 无新活动），用人话而不是 stats JSON
+                    ui::Toast::show(guard,
+                                    i18n::trs("已跳过：", "Skipped: ") +
+                                        digestSkipReason(stats),
+                                    false);
                 } else {
                     ui::Toast::show(guard,
                                     ui::humanError(err.isEmpty()
