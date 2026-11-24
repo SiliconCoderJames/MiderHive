@@ -22,7 +22,8 @@
 // （临时端口）。少任何一步，拍到的就不是用户看到的界面。
 //
 // 确定性——换台机器、换一天、换个时区，快照必须逐字一致：
-//   - 显示用的时钟冻结在整点（gui_util.h 的 displayNow）；种子时间取"整点减固定偏移"，
+//   - 显示用的时钟冻结在"今天第一个合法的整点"（gui_util.h 的 displayNow）；种子时间取
+//     "它减固定偏移"，
 //     内容表各行再按 rowid 错开几秒（并列时间戳上的排序不稳定）。全部落在"今天/
 //     本周"之内，而"最近 N 天"这类相对窗口永远包含它们
 //   - 随"现在"变化的文案（8 种语言的相对时间、本地时间戳、日期）序列化时归一化
@@ -130,19 +131,21 @@ constexpr int kCreatedMinutesAgo = 30;  // created_at：30 分钟前
 constexpr int kSeenMinutesAgo = 5;      // last_seen_at、token_usage：5 分钟前
 
 // ---- 冻结的时钟 ----
-// 界面显示用的"现在"固定在整点（gui_util.h 的 displayNow 读 MIDERHIVE_UI_NOW），上面的
+// 界面显示用的"现在"固定在一个整点（gui_util.h 的 displayNow 读 MIDERHIVE_UI_NOW），上面的
 // 偏移相对它取。于是相对时间文案（"30 分钟前"）与绝对时间戳在多次运行之间完全相同：
 // 像素金样反映的是"同一份程序、同一份数据"，而不是"什么时候跑的"。
-// 取"当前小时"的整点，但要保证"整点减 30 分钟"仍然算今天——核心的"今日"统计按 UTC
-// 日期、界面的"今日新增"按本地日期，用的都是真实时钟。刚过 UTC 午夜或本地午夜的
-// 那半小时里往后挪一个整点：种子时间戳因此比真实时间略超前，只影响 harness 里的显示。
+// 取"今天第一个合法的整点"，而不是"当前小时"：同一段时间里每轮的冻结时刻都一样，像素
+// 金样才真的可比（取当前小时的话，每过一小时，带绝对时间戳的那张就报一次差异——一个
+// 每小时都响的信号很快就被当噪声忽略掉）。"合法"指"整点减 30 分钟"仍然算今天：核心的
+// "今日"统计按 UTC 日期、界面的"今日新增"按本地日期，用的都是真实时钟。所以从本地零点
+// 起逐小时往后找，直到同时不早于本地午夜与 UTC 午夜（两个日期不在同一零点切换的时区
+// 里，一天内会有两个取值）。种子时间戳因此可能比真实时间超前几个小时，只影响 harness
+// 里的显示。
 QDateTime g_frozenNow;
 
 QDateTime freezeClock() {
-    const QDateTime real = QDateTime::currentDateTime();
-    QDateTime frozen = real;
-    frozen.setTime(QTime(real.time().hour(), 0));
-    QDateTime mustBeAfter(real.date().startOfDay());  // 本地午夜
+    QDateTime frozen(QDateTime::currentDateTime().date().startOfDay());  // 本地零点起逐小时找
+    QDateTime mustBeAfter = frozen;                                      // 本地午夜
     {
         const QDateTime utcMidnight(QDateTime::currentDateTimeUtc().date(), QTime(0, 0),
                                     QTimeZone::UTC);
@@ -1071,7 +1074,7 @@ int main(int argc, char** argv) {
         settlePage(panel);
         QJsonObject tree = dumpWidget(panel);
         // 每个场景存一张图：JSON 回答"结构对不对"，图回答"看起来对不对"。报告里按场景
-        // 列出，供人工 review；不参与对比（面板上的相对时间会让隔天的像素必然不同）
+        // 列出，供人工 review；不参与对比（像素随字体与日期变，不能拿别的机器的来比）
         panel->grab().save(outDir + "/" + id + ".png");
         // Tab 焦点链录进快照（参与基线对比）
         tree["focus"] = focusChainOf(panel);
@@ -1378,8 +1381,9 @@ int main(int argc, char** argv) {
                     g_dialogs.entries.join('\n').toHtmlEscaped() + "</pre>";
         }
         html += QStringLiteral(
-                    "<h2>金样哈希（本机信号，不计入退出码）</h2><p>面板上的相对时间会让隔天的像素必然"
-                    "不同；它回答的是\"同一时段内重复运行像素是否一致\"。</p><pre>%1</pre>")
+                    "<h2>金样哈希（本机信号，不计入退出码）</h2><p>显示时钟冻结在今天第一个合法的整点，"
+                    "所以同一天里重复运行的像素应当一致；跨天（以及本地日期与 UTC 日期交替的那个小时）"
+                    "绝对时间戳会变，金样随之不同。换机器不可比（字体不同）。</p><pre>%1</pre>")
                     .arg(QString::fromUtf8(QJsonDocument(goldenHashes)
                                                .toJson(QJsonDocument::Indented)
                                                .constData())
