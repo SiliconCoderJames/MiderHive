@@ -58,6 +58,31 @@ QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QPlainTextEdit:disabl
 }
 QComboBox { padding-right: 28px; outline: 0; }
 QComboBox::drop-down { border: none; width: 22px; }
+/* QSpinBox / QDateEdit 的上下按钮：只给框体写样式、不写子控件规则时，Qt 会把按钮
+   缩成两条看不见的线（用量页的间隔微调框就是这样），完全不像可以点的东西。
+   按钮给足尺寸与悬停反馈；箭头是资源里的 SVG（样式表接管子控件后 Qt 不再代画原生
+   箭头，QSS 边框拼三角在这个尺寸下会糊成色块，见 spin-arrow-*.svg）。 */
+QSpinBox { padding-right: 26px; }
+QSpinBox::up-button, QSpinBox::down-button,
+QDateEdit::up-button, QDateEdit::down-button {
+    subcontrol-origin: border;
+    width: 20px;
+    border: none;
+    border-left: 1px solid @line@;
+    background: transparent;
+}
+QSpinBox::up-button, QDateEdit::up-button { subcontrol-position: top right; }
+QSpinBox::down-button, QDateEdit::down-button { subcontrol-position: bottom right; }
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDateEdit::up-button:hover, QDateEdit::down-button:hover { background: @fieldhover@; }
+QSpinBox::up-arrow, QDateEdit::up-arrow {
+    image: url(:/theme/qss/spin-arrow-up.svg);
+    width: 10px; height: 6px;
+}
+QSpinBox::down-arrow, QDateEdit::down-arrow {
+    image: url(:/theme/qss/spin-arrow-down.svg);
+    width: 10px; height: 6px;
+}
 QComboBox::down-arrow {
     image: none;
     width: 0;

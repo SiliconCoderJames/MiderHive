@@ -142,6 +142,9 @@ UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
             this, [this] { drillTo("knowledge", "tag", "digest"); });
     digestRow->addWidget(digestViewBtn_);
     digestRow->addStretch(1);
+    // 复选框必须进布局。此前创建后漏了这一行：它停在 (0,0)，被间隔微调框整个盖住——
+    // 「自动摘要沉淀」看不见，只从框的左上角露出可点的小角，等于一个看不见的开关
+    dl->addWidget(digestCheck_);
     dl->addLayout(digestRow);
     digestStatus_ = new QLabel(digestBox);
     digestStatus_->setTextFormat(Qt::RichText);

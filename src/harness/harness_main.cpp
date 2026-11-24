@@ -83,6 +83,7 @@
 #include <QTableWidget>
 #include <QTcpServer>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimeZone>
 #include <QTimer>
 
@@ -99,6 +100,7 @@
 #include <vector>
 
 #include "core/db/database.h"
+#include "core/integrations.hpp"
 #include "core/platform.h"
 #include "core/util.h"
 #include "gui/i18n.h"
@@ -740,19 +742,49 @@ FakeWorld makeFakeWorld(const QString& dataHome) {
         QDir().mkpath(d);
     // 假标记。名单是固定的：claude（配置目录存在）、codex（PATH 上的可执行文件）、
     // cursor（配置文件存在但没有 miderhive 条目）、gemini（npm 全局目录）算已安装；
-    // 其余工具在假环境里不存在 → 未安装
+    // 其余工具在假环境里不存在 → 未安装。
+    // 可执行标记刻意不带 .exe/.cmd 后缀（exeOnPath 对裸名也匹配）：新建的可执行文件
+    // 会被杀软实时扫描短暂锁住，存在性检查在这几秒里瞬时失败——曾让一次运行的检测
+    // 结果从 4 个工具变成 1 个（空目录从不触发扫描，所以只有它从没失手）。
     const auto touch = [](const QString& p) {
         QFile f(p);
         f.open(QIODevice::WriteOnly);
     };
-    touch(w.bin + "/codex.cmd");
+    touch(w.bin + "/codex");
     touch(w.home + "/.cursor/mcp.json");
-    touch(appdata + "/npm/gemini.cmd");
+    touch(appdata + "/npm/gemini");
+    // 「是否已接入」的读取也必须落在假环境：GUI 层的 configPath() 用 QDir::homePath()
+    // 解析真实主目录（不跟随上面的 qputenv——Qt 有缓存），真机上已接入的工具会被判成
+    // Connected，接入提示条就随真机状态漂移（曾让一次运行从"4 个未接入"变成"1 个"）。
+    // MIDERHIVE_CONNECT_ROOT 是项目自带的换根开关（gui_selftest 同款用法）：指向这个
+    // 根目录之后，所有工具的配置读取都落在这里——目录里什么都不放 → 永远"未接入"。
+    qputenv("MIDERHIVE_CONNECT_ROOT", root.toUtf8());
     qputenv("USERPROFILE", w.home.toUtf8());
     qputenv("HOME", w.home.toUtf8());
     qputenv("LOCALAPPDATA", local.toUtf8());
     qputenv("APPDATA", appdata.toUtf8());
     return w;
+}
+
+// 假世界的标记必须全部可检出才开始拍：上面提到的杀软扫描窗口里，存在性检查会瞬时
+// 失败。这里轮询到期望的四个工具都检出为止（至多 10 秒），超时则中止——宁可这条
+// CI 步骤红掉让人来看，也不能带着不确定的检测结果拍快照/基线。返回期望检出的个数。
+int waitUntilFakeWorldDetected() {
+    const QStringList expected = {"claude-code", "codex", "cursor", "gemini"};
+    for (int i = 0; i < 100; ++i) {
+        bool all = true;
+        for (const QString& id : expected)
+            if (!ah::integrations::installedById(id.toStdString())) {
+                all = false;
+                break;
+            }
+        if (all) break;
+        QThread::msleep(100);
+    }
+    int detected = 0;
+    for (const auto& t : ah::integrations::toolRegistry())
+        if (ah::integrations::installedById(t.id)) ++detected;
+    return detected;
 }
 
 // PATH 只留两段：假环境的 bin，和 Qt 的 bin（原 PATH 上第一个含 Qt6Core.dll 的目录）
@@ -970,6 +1002,14 @@ int main(int argc, char** argv) {
     QApplication::setOrganizationName("miderhive");
     QApplication::setApplicationName("MiderHive 多 Agent 协作工作台");
     limitPath(world);
+    // 假世界的四个标记全部可检出（轮询等待，杀软扫描窗口见 waitUntilFakeWorldDetected）
+    const int detectedTools = waitUntilFakeWorldDetected();
+    if (detectedTools != 4) {
+        printNow(QString("FATAL  假环境的工具检测不确定：期望 4 个、实际 %1 个。"
+                         "带着不确定的检测结果拍快照没有意义，已中止。")
+                     .arg(detectedTools));
+        return 1;
+    }
     if (QFontDatabase::families().isEmpty()) {
         printNow("FATAL  一个字体都没有加载（QT_QPA_FONTDIR=" +
                  qEnvironmentVariable("QT_QPA_FONTDIR") + "）。所有文字会渲染成空方块。");
@@ -1209,7 +1249,9 @@ int main(int argc, char** argv) {
         } else if (it.value() != hash) {
             ++goldenDiff;
             results.push_back({id, "GOLDEN-DIFF"});
-            // 把上一次的图留成 .prev.png，方便并排看差在哪
+            // 把上一次的图留成 .prev.png，方便并排看差在哪。QFile::copy 不覆盖已存在的
+            // 目标文件且静默失败——先删再拷，否则 .prev 会一直是某次更早的旧图
+            QFile::remove(goldenDir + "/" + id + ".prev.png");
             QFile::copy(goldenDir + "/" + id + ".png", goldenDir + "/" + id + ".prev.png");
             printNow(QString("GOLDEN-DIFF  %1（像素与上一次运行不同——本机信号，不计入退出码）")
                          .arg(id));
@@ -1325,8 +1367,9 @@ int main(int argc, char** argv) {
                  .arg(ruleViolations)
                  .arg(g_dialogs.total)
                  .arg(goldenDiff));
-    printNow(QString("ENV   %1 · 数据目录 %2 · 显示时钟冻结在 %3")
-                 .arg(envLine, home, g_frozenNow.toUTC().toString(Qt::ISODate)));
+    printNow(QString("ENV   %1 · 数据目录 %2 · 显示时钟冻结在 %3 · 假环境检出工具 %4")
+                 .arg(envLine, home, g_frozenNow.toUTC().toString(Qt::ISODate))
+                 .arg(detectedTools));
 
     // ---- HTML 报告（第 4 轮拍板：自包含，人工 review 用）----
     {

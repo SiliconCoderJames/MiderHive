@@ -32,7 +32,7 @@ miderhive_add_version_resource(miderhive "miderhive" "MiderHive workbench" "mide
 set_target_properties(miderhive PROPERTIES AUTOMOC ON AUTORCC ON)
 qt_add_resources(miderhive "theme"
     PREFIX "/theme"
-    FILES qss/dark.qss)
+    FILES qss/dark.qss qss/spin-arrow-up.svg qss/spin-arrow-down.svg)
 target_sources(miderhive PRIVATE brand.qrc)  # :/brand/logo.png（qt_add_resources 对源外文件会生成坏 alias，见 brand.qrc 注释）
 
 # ---- GUI 全链路自测（离屏）：引导 → 上线 → 欢迎记忆 → 密钥丢失 → 横幅修复 → 设置重入 ----
@@ -46,7 +46,7 @@ if(BUILD_TESTS)
     set_target_properties(gui_selftest PROPERTIES AUTOMOC ON AUTORCC ON)
     qt_add_resources(gui_selftest "theme"
         PREFIX "/theme"
-        FILES qss/dark.qss)
+        FILES qss/dark.qss qss/spin-arrow-up.svg qss/spin-arrow-down.svg)
     target_sources(gui_selftest PRIVATE brand.qrc)
 
     # ---- UI/UX 评测 harness（LLM eval 式）：结构基线 + 不变量规则 + 交互审查 ----
@@ -59,7 +59,7 @@ if(BUILD_TESTS)
     set_target_properties(ui_harness PROPERTIES AUTOMOC ON AUTORCC ON)
     qt_add_resources(ui_harness "theme"
         PREFIX "/theme"
-        FILES qss/dark.qss)
+        FILES qss/dark.qss qss/spin-arrow-up.svg qss/spin-arrow-down.svg)
     target_sources(ui_harness PRIVATE brand.qrc)
 endif()
 

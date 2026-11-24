@@ -399,8 +399,12 @@ protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        int side = qMin(width(), height());
-        QRectF rect((width() - side) / 2 + 10, (height() - side) / 2 + 10,
+        // 标题（"剩余 …"）画在环**下方**自己的条里：先给它预留高度，环相应缩小。
+        // 此前画在"中心下方固定 40px"，环小时那个位置正好压在下弧上——
+        // 用量页预算环的「剩余 10M」就是这样叠在弧线上、又暗又像被裁掉
+        const int capH = caption_.isEmpty() ? 0 : qMax(12, fontMetrics().lineSpacing() + 4);
+        int side = qMin(width(), qMax(60, height() - capH));
+        QRectF rect((width() - side) / 2 + 10, (height() - capH - side) / 2 + 10,
                     side - 20, side - 20);
         double ratio = animRatio_;
         // 背景环
@@ -449,12 +453,16 @@ protected:
         p.drawText(center.adjusted(0, 16, 0, 16), Qt::AlignCenter,
                    fit(QString("%1 / %2").arg(fmt(used_), fmt(total_)), used_, total_));
         if (!caption_.isEmpty()) {
+            f.setPixelSize(qMax(10, side / 16));
+            p.setFont(f);
+            QFontMetrics capFm(p.font());
             QString cap = caption_;
-            if (fm.horizontalAdvance(cap) > avail) {
+            if (capFm.horizontalAdvance(cap) > width() - 8) {
                 cap = QString("%1 %2").arg(i18n::trs("剩余", "left"),
                                            fmtCompact(used_ > total_ ? 0 : total_ - used_));
             }
-            p.drawText(center.adjusted(0, 40, 0, 40), Qt::AlignCenter, cap);
+            // 环下方预留的那条空带（见 paintEvent 开头），与弧线永不相交
+            p.drawText(QRectF(0, rect.bottom() + 6, width(), capH), Qt::AlignCenter, cap);
         }
     }
 

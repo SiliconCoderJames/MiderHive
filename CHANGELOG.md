@@ -53,6 +53,16 @@ survive the 3-second refresh.
 - **The audit log tree jumped back to the top on every refresh**, and day groups the user had
   collapsed were re-expanded. The tree is rebuilt only when the records change; on a real change
   the scroll position, the current row and the collapsed days are restored.
+- **Usage panel, the auto-digest checkbox was invisible**: "Auto digest" was created but never
+  added to the layout, so it sat at position (0,0) underneath the interval spin box — the label
+  was completely covered and only a clickable corner of the box peeked out: an invisible toggle.
+- **Usage panel, "left 10M" was drawn on the budget ring's lower arc** (dim text on the arc,
+  looking cut off). The ring now reserves a strip below itself for the caption and shrinks to
+  fit; the caption never touches the arc.
+- **Spin-box up/down buttons were invisible**: the stylesheet styles the box but had no rules
+  for the buttons, which Qt then collapsed to two hairlines (the interval spin box looked like
+  it had a broken handle). The buttons now have a real size, a separator and a hover state, with
+  crisp SVG arrows.
 - The graph's initial layout no longer depends on the global `std::rand()` state: the canvas has
   its own fixed-seed generator, so the same data starts from the same arrangement on every
   launch. "Re-layout" still produces a fresh arrangement.
@@ -86,6 +96,15 @@ survive the 3-second refresh.
   to its stop condition synchronously. Neither affects normal use.
 - `scripts/ui_harness.ps1`: the UI harness in one command, with the same invocation as CI, and
   the path of its report (`-Filter`, `-UpdateBaseline`, `-OpenReport`).
+- The harness's fake machine is now sealed against the real one for the "already connected"
+  check too: `MIDERHIVE_CONNECT_ROOT` (the same redirect the GUI self-test uses) sends every
+  tool-config read into the fake root, so the onboarding banner counts the four planted tools no
+  matter what is installed on the machine running the harness. Before, the GUI resolved configs
+  through the real home directory, so the banner showed whatever the machine had connected — it
+  flipped from four tools to one mid-day. The fake executables also lost their `.cmd` suffixes
+  (real-time AV scanning briefly locks fresh executables, which made the file-existence checks
+  fail for one run), the harness now waits until all four planted tools are detected (and aborts
+  loudly if not), and the environment line reports how many tools were detected.
 - `scripts/check_symbols.py`: asks DbgHelp whether an executable can be debugged at source level
   (does the PDB belong to this exact build, do line numbers resolve). `scripts/deploy_dev.ps1`
   runs it on every deploy.
