@@ -13,8 +13,11 @@
   Integration steps start platformd on ports 19090..19092 with scratch data
   directories under %TEMP%; nothing reads or writes the real data directory.
 
-  The UI harness step is reported but never fails the run, matching CI, where it is
-  continue-on-error until its baselines hold on more than one machine.
+  Every step is required, as in CI. That includes the UI harness (a required check since
+  2026-11-24; before that it was observation-only while CI showed 27-30 differences as
+  success). After an intentional UI change, re-record the baselines on a fresh data
+  directory (`build\src\gui\Release\ui_harness.exe --update-baseline`), review
+  `git diff tests/baseline/` scene by scene, and commit them together with the code.
 
   NOTE: keep this file ASCII-only (see package.ps1).
 
@@ -103,7 +106,7 @@ function Stop-Platformd($proc) {
 # CI gives every step a fresh shell, so a variable set for one step never reaches the
 # next. -Vars does the same here: the variables are set for the step only, and
 # whatever they held before is restored afterwards.
-function Run-Step($name, [scriptblock]$Body, [hashtable]$Vars = @{}, [switch]$soft) {
+function Run-Step($name, [scriptblock]$Body, [hashtable]$Vars = @{}) {
     Step $name
     $saved = @{}
     foreach ($k in $Vars.Keys) {
@@ -120,12 +123,8 @@ function Run-Step($name, [scriptblock]$Body, [hashtable]$Vars = @{}, [switch]$so
     } finally {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
     }
-    if ($soft) { $failed = $false } else { $failed = -not $ok }
-    $null = $results.Add([pscustomobject]@{ Name = $name; Ok = $ok; Failed = $failed })
-    if (-not $ok) {
-        $color = if ($soft) { "Yellow" } else { "Red" }
-        Write-Host ("  -> " + $note) -ForegroundColor $color
-    }
+    $null = $results.Add([pscustomobject]@{ Name = $name; Ok = $ok })
+    if (-not $ok) { Write-Host ("  -> " + $note) -ForegroundColor Red }
 }
 
 # Same as CI's runner, where no MIDERHIVE_*/MH_* variable exists: a variable set for
@@ -197,7 +196,7 @@ Run-Step "GUI end-to-end self-test (offscreen)" -Body {
 }
 
 $harnessHome = Join-Path $env:TEMP "miderhive-ci-local-uiharness"
-Run-Step "UI harness baseline check (observation)" -soft -Vars @{
+Run-Step "UI harness baseline check" -Vars @{
     MIDERHIVE_HOME   = $harnessHome
     QT_QPA_PLATFORM  = "offscreen"
 } -Body {
@@ -215,7 +214,6 @@ Run-Step "UI harness baseline check (observation)" -soft -Vars @{
     $line = Select-String -Path $log -Pattern "ui_harness " | Select-Object -Last 1
     $text = if ($line) { $line.Line.Trim() } else { "no summary line in $log" }
     Write-Host "  $text"
-    # Soft step: the exit code is reported as WARN, it does not fail the run.
     if ($p.ExitCode -ne 0) { throw "$text (exit code $($p.ExitCode); log: $log)" }
     $text
 }
@@ -256,18 +254,15 @@ Remove-Item -Recurse -Force $feasibilityHome, $mcpHome, $harnessHome -ErrorActio
 Step "summary"
 $width = ($results | ForEach-Object { $_.Name.Length } | Measure-Object -Maximum).Maximum
 foreach ($r in $results) {
-    $color = if ($r.Failed) { "Red" } elseif ($r.Ok) { "Gray" } else { "Yellow" }
-    $mark = if ($r.Failed) { "FAIL" } elseif ($r.Ok) { "ok  " } else { "WARN" }
+    $ok = $r.Ok
+    $color = if ($ok) { "Gray" } else { "Red" }
+    $mark = if ($ok) { "ok  " } else { "FAIL" }
     Write-Host ("  {0}  {1}" -f $mark, $r.Name.PadRight($width)) -ForegroundColor $color
 }
-$failed = @($results | Where-Object { $_.Failed })
-$warned = @($results | Where-Object { -not $_.Ok })
+$failed = @($results | Where-Object { -not $_.Ok })
 if ($failed.Count -gt 0) {
     Write-Host ("`n{0} check(s) failed. Do not push until ci_local.ps1 is clean." -f $failed.Count) -ForegroundColor Red
     exit 1
-}
-if ($warned.Count -gt 0) {
-    Write-Host ("`nAll required checks passed. Reported without failing: {0}" -f (($warned | ForEach-Object { $_.Name }) -join "; ")) -ForegroundColor Yellow
 }
 Write-Host "`nAll required checks passed." -ForegroundColor Green
 exit 0

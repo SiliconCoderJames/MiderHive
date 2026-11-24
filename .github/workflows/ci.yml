@@ -143,10 +143,10 @@ jobs:
       # 要看得到差在哪（此前 CI 上有 30 处差异却没有任何可查的产物）。
       - name: UI harness baseline check (offscreen)
         shell: pwsh
-        # 观察期：基线重录后先确认 CI runner 上也逐字一致，再去掉这一行转为必过。
-        # 即便在观察期，步骤结论也如实记为失败（exit 非零），并贴出汇总行——
-        # 此前只 Write-Host 一句警告，27 处差异照样显示 success
-        continue-on-error: true
+        # 必过项（2026-11-24 起）。此前是 continue-on-error + 只 Write-Host 一句警告：CI 上
+        # 有 27～30 处差异照样显示 success。转为必过前先做了三件事：重做 harness 的确定性；
+        # 用 runner 的实际快照离线预演；带 continue-on-error 推一次确认 PASS 47。改了界面
+        # 文案/结构是有意的 → 本地 --update-baseline 并逐场景 review diff 后随代码一起入库。
         env:
           MIDERHIVE_HOME: ${{ runner.temp }}\miderhive_uiharness
           QT_QPA_PLATFORM: offscreen

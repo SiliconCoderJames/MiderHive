@@ -58,13 +58,16 @@ survive the 3-second refresh.
   launch. "Re-layout" still produces a fresh arrangement.
 
 ### Added
-- **The UI harness is now a regression gate** (47 scenes; `continue-on-error` is removed from CI
-  once the runner has been confirmed to match). It starts the workbench exactly as
-  `gui/main.cpp` does (application font, global stylesheet, built-in HTTP service), loads fonts
-  (the offscreen platform loads none by default, so every screenshot was boxes), freezes the
-  display clock and seeds "now minus fixed offsets", points tool detection at a fixed fake
-  environment, and refreshes a panel synchronously before capturing it. Two runs on fresh data
-  directories produce byte-identical snapshots and golden images.
+- **The UI harness is a required check** (47 scenes; it fails CI and `scripts/ci_local.ps1`
+  like any other gate). It starts the workbench exactly as `gui/main.cpp` does (application
+  font, global stylesheet, built-in HTTP service), loads fonts (the offscreen platform loads
+  none by default, so every screenshot was boxes), freezes the display clock and seeds "now
+  minus fixed offsets", points tool detection at a fixed fake environment, refreshes a panel
+  synchronously before capturing it, and leaves out Qt's scroll-area scaffolding (whether a
+  scrollbar shows depends on font metrics, and showing it reorders the children). Verified:
+  20 runs on fresh data directories produce byte-identical snapshots and golden images; on the
+  CI runner (UTC, different fonts) all 47 scenes match the baselines; a run with a Latin-only
+  font set matches as well. Before this, CI reported 27–30 differences as a success.
 - New invariant rules: standard controls must be reachable by Tab (the Tab order is part of each
   baseline); stylesheets must not contain unreplaced `@token@` placeholders; a container's
   stylesheet rule must not reach the controls inside it; user state (selection, filter text,
