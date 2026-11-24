@@ -29,6 +29,8 @@
 //   - 工具安装检测指向一棵固定的假目录树（配置根 + PATH），装了/没装不随机器变
 //   - 按当天初始化的控件（日志面板的起始日期）钉到固定日期
 //   - 每个场景拍之前显式同步刷新面板（主窗口只在导航行变化时刷新）
+//   - 滚动区的脚手架（滚动条及其容器）不录进快照：显示与否取决于字体度量，显示时
+//     还会被 raise 到子列表末尾——两类都是机器相关的事实
 //
 // 隔离（强制）：harness 会向数据库灌种子，绝不能碰真实数据目录。没设
 // MIDERHIVE_HOME 就用一次性临时目录；设了但目录里已经有库则拒跑。
@@ -346,6 +348,28 @@ QString normText(QString s) {
     return s;
 }
 
+QJsonObject dumpWidget(QWidget* w);
+
+// 某控件的子节点。滚动区自带的脚手架——滚动条及其容器（qt_scrollarea_*container）——
+// 不录：它是 Qt 的实现细节，而且随机器变。滚动条显不显示取决于字体度量（行高一两个
+// 像素，内容就溢出/不溢出），滚动条一显示 Qt 还会把它的容器 raise 到子列表末尾，
+// 顺序跟着变。本机与 CI runner 的日志面板就同时差在这两点上。视口只是个包装，把它的
+// 子节点直接接到这一层——那才是界面内容。
+void appendKidsOf(QWidget* w, QJsonArray& kids) {
+    for (QObject* c : w->children()) {
+        auto* child = qobject_cast<QWidget*>(c);
+        if (!child) continue;
+        const QString name = child->objectName();
+        if (qobject_cast<QScrollBar*>(child)) continue;
+        if (name.startsWith("qt_scrollarea_") && name != "qt_scrollarea_viewport") continue;
+        if (name == "qt_scrollarea_viewport") {
+            appendKidsOf(child, kids);
+            continue;
+        }
+        kids.append(dumpWidget(child));
+    }
+}
+
 QJsonObject dumpWidget(QWidget* w) {
     QJsonObject o;
     o["class"] = w->metaObject()->className();
@@ -371,8 +395,7 @@ QJsonObject dumpWidget(QWidget* w) {
     // 面板的场景。只记它存在，不往下钻
     if (w->isWindow() && !w->isVisible()) return o;
     QJsonArray kids;
-    for (QObject* c : w->children())
-        if (auto* cw = qobject_cast<QWidget*>(c)) kids.append(dumpWidget(cw));
+    appendKidsOf(w, kids);  // 滚动区脚手架的取舍见 appendKidsOf
     if (!kids.isEmpty()) o["kids"] = kids;
     return o;
 }

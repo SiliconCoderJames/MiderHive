@@ -15,71 +15,390 @@
     ],
     "kids": [
         {
-            "class": "QWidget",
+            "class": "DashboardPanel",
             "en": true,
             "geom": [
                 0,
                 0,
                 1240,
-                896
+                1039
             ],
             "kids": [
                 {
-                    "class": "DashboardPanel",
+                    "class": "QLabel",
+                    "en": true,
+                    "geom": [
+                        16,
+                        20,
+                        38,
+                        38
+                    ],
+                    "text": "",
+                    "vis": true
+                },
+                {
+                    "class": "QLabel",
+                    "en": true,
+                    "geom": [
+                        82,
+                        16,
+                        1142,
+                        27
+                    ],
+                    "text": "概要",
+                    "vis": true
+                },
+                {
+                    "class": "QLabel",
+                    "en": true,
+                    "geom": [
+                        82,
+                        46,
+                        1142,
+                        16
+                    ],
+                    "text": "予算消費 · Agent 状態 · イベントとアラートで、ハイブの状況を一画面で把握",
+                    "vis": true
+                },
+                {
+                    "class": "QFrame",
+                    "en": true,
+                    "geom": [
+                        66,
+                        25,
+                        4,
+                        28
+                    ],
+                    "vis": true
+                },
+                {
+                    "class": "QWidget",
                     "en": true,
                     "geom": [
                         0,
                         0,
-                        1240,
-                        1039
+                        100,
+                        30
+                    ],
+                    "name": "__self64",
+                    "vis": false
+                },
+                {
+                    "class": "QWidget",
+                    "en": true,
+                    "geom": [
+                        16,
+                        84,
+                        1208,
+                        52
+                    ],
+                    "kids": [
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                0,
+                                0,
+                                1208,
+                                52
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        12,
+                                        8,
+                                        1040,
+                                        36
+                                    ],
+                                    "text": "未接続の Agent ツールが 4 件検出されました：Claude, ChatGPT / Codex, Cursor, Gemini CLI。ワンクリックで ID を発行して設定に書き込みます（オンラインのものはそのまま）。",
+                                    "vis": true
+                                },
+                                {
+                                    "class": "QPushButton",
+                                    "en": true,
+                                    "geom": [
+                                        1058,
+                                        8,
+                                        138,
+                                        36
+                                    ],
+                                    "name": "primary",
+                                    "text": "ワンクリック接続",
+                                    "vis": true
+                                }
+                            ],
+                            "name": "__self75",
+                            "vis": true
+                        }
+                    ],
+                    "name": "__self65",
+                    "vis": true
+                },
+                {
+                    "class": "QFrame",
+                    "en": true,
+                    "geom": [
+                        16,
+                        146,
+                        292,
+                        100
                     ],
                     "kids": [
                         {
                             "class": "QLabel",
                             "en": true,
                             "geom": [
-                                16,
-                                20,
-                                38,
-                                38
+                                15,
+                                11,
+                                218,
+                                15
+                            ],
+                            "text": "今週の Token",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                27,
+                                52,
+                                22
+                            ],
+                            "text": "3090",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                0,
+                                0,
+                                100,
+                                30
+                            ],
+                            "text": "",
+                            "vis": false
+                        },
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                15,
+                                50,
+                                218,
+                                23
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        2,
+                                        218,
+                                        30
+                                    ],
+                                    "vis": true
+                                },
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        100,
+                                        8
+                                    ],
+                                    "vis": false
+                                }
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                74,
+                                218,
+                                15
+                            ],
+                            "text": "予算 10M · 残り 10M",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                243,
+                                11,
+                                34,
+                                34
                             ],
                             "text": "",
                             "vis": true
+                        }
+                    ],
+                    "name": "metricTile",
+                    "vis": true
+                },
+                {
+                    "class": "QFrame",
+                    "en": true,
+                    "geom": [
+                        322,
+                        150,
+                        291,
+                        92
+                    ],
+                    "kids": [
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                11,
+                                217,
+                                15
+                            ],
+                            "text": "Agents",
+                            "vis": true
                         },
                         {
                             "class": "QLabel",
                             "en": true,
                             "geom": [
-                                82,
-                                16,
-                                1142,
+                                15,
+                                27,
+                                39,
                                 27
                             ],
-                            "text": "概要",
+                            "text": "0/4",
                             "vis": true
                         },
                         {
                             "class": "QLabel",
                             "en": true,
                             "geom": [
-                                82,
-                                46,
-                                1142,
-                                16
+                                0,
+                                0,
+                                100,
+                                30
                             ],
-                            "text": "予算消費 · Agent 状態 · イベントとアラートで、ハイブの状況を一画面で把握",
+                            "text": "",
+                            "vis": false
+                        },
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                15,
+                                55,
+                                217,
+                                10
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        100,
+                                        30
+                                    ],
+                                    "vis": false
+                                },
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        2,
+                                        217,
+                                        8
+                                    ],
+                                    "vis": true
+                                }
+                            ],
                             "vis": true
                         },
                         {
-                            "class": "QFrame",
+                            "class": "QLabel",
                             "en": true,
                             "geom": [
+                                15,
                                 66,
-                                25,
-                                4,
-                                28
+                                217,
+                                15
                             ],
+                            "text": "4 件がオフライン",
                             "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                242,
+                                11,
+                                34,
+                                34
+                            ],
+                            "text": "",
+                            "vis": true
+                        }
+                    ],
+                    "name": "metricTile",
+                    "vis": true
+                },
+                {
+                    "class": "QFrame",
+                    "en": true,
+                    "geom": [
+                        627,
+                        155,
+                        292,
+                        81
+                    ],
+                    "kids": [
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                11,
+                                218,
+                                15
+                            ],
+                            "text": "今日の消費",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                27,
+                                52,
+                                27
+                            ],
+                            "text": "3090",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                0,
+                                0,
+                                100,
+                                30
+                            ],
+                            "text": "",
+                            "vis": false
                         },
                         {
                             "class": "QWidget",
@@ -90,17 +409,114 @@
                                 100,
                                 30
                             ],
-                            "name": "__self64",
+                            "kids": [
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        100,
+                                        30
+                                    ],
+                                    "vis": false
+                                },
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        100,
+                                        8
+                                    ],
+                                    "vis": false
+                                }
+                            ],
+                            "vis": false
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                55,
+                                218,
+                                15
+                            ],
+                            "text": "昨日比",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                243,
+                                11,
+                                34,
+                                34
+                            ],
+                            "text": "",
+                            "vis": true
+                        }
+                    ],
+                    "name": "metricTile",
+                    "vis": true
+                },
+                {
+                    "class": "QFrame",
+                    "en": true,
+                    "geom": [
+                        933,
+                        150,
+                        291,
+                        92
+                    ],
+                    "kids": [
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                11,
+                                217,
+                                15
+                            ],
+                            "text": "未解決エラー",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                27,
+                                13,
+                                27
+                            ],
+                            "text": "2",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                0,
+                                0,
+                                100,
+                                30
+                            ],
+                            "text": "",
                             "vis": false
                         },
                         {
                             "class": "QWidget",
                             "en": true,
                             "geom": [
-                                16,
-                                84,
-                                1208,
-                                52
+                                15,
+                                55,
+                                217,
+                                10
                             ],
                             "kids": [
                                 {
@@ -109,188 +525,637 @@
                                     "geom": [
                                         0,
                                         0,
-                                        1208,
-                                        52
+                                        100,
+                                        30
+                                    ],
+                                    "vis": false
+                                },
+                                {
+                                    "class": "QWidget",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        2,
+                                        217,
+                                        8
+                                    ],
+                                    "vis": true
+                                }
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                15,
+                                66,
+                                217,
+                                15
+                            ],
+                            "text": "「エラーレポート」で処理",
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                242,
+                                11,
+                                34,
+                                34
+                            ],
+                            "text": "",
+                            "vis": true
+                        }
+                    ],
+                    "name": "metricTile",
+                    "vis": true
+                },
+                {
+                    "class": "QGroupBox",
+                    "en": true,
+                    "geom": [
+                        16,
+                        256,
+                        280,
+                        222
+                    ],
+                    "kids": [
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                31,
+                                45,
+                                112,
+                                112
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QLabel",
+                            "en": true,
+                            "geom": [
+                                155,
+                                45,
+                                94,
+                                73
+                            ],
+                            "text": "<div style='line-height:152%'>使用済み <b style='color:#0ea5e9'>3,090</b><br>残り <b style='color:#22c55e'>9,996,910</b><br>割合 <b style='color:#0ea5e9'>0.0%</b></div>",
+                            "vis": true
+                        },
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                155,
+                                124,
+                                94,
+                                30
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QPushButton",
+                            "en": true,
+                            "geom": [
+                                92,
+                                165,
+                                95,
+                                30
+                            ],
+                            "name": "editBudget",
+                            "text": "予算を変更",
+                            "vis": true
+                        }
+                    ],
+                    "name": "card",
+                    "text": "今週の Token 予算",
+                    "vis": true
+                },
+                {
+                    "class": "QGroupBox",
+                    "en": true,
+                    "geom": [
+                        310,
+                        256,
+                        450,
+                        222
+                    ],
+                    "kids": [
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                29,
+                                45,
+                                392,
+                                152
+                            ],
+                            "vis": true
+                        }
+                    ],
+                    "name": "card",
+                    "text": "Agent 別の今週の使用量",
+                    "vis": true
+                },
+                {
+                    "class": "QGroupBox",
+                    "en": true,
+                    "geom": [
+                        774,
+                        256,
+                        450,
+                        222
+                    ],
+                    "kids": [
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                29,
+                                45,
+                                392,
+                                152
+                            ],
+                            "vis": true
+                        }
+                    ],
+                    "name": "card",
+                    "text": "直近 14 日間の日別消費",
+                    "vis": true
+                },
+                {
+                    "class": "QGroupBox",
+                    "en": true,
+                    "geom": [
+                        16,
+                        488,
+                        716,
+                        228
+                    ],
+                    "kids": [
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                29,
+                                45,
+                                658,
+                                158
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QFrame",
+                                    "en": true,
+                                    "geom": [
+                                        0,
+                                        0,
+                                        325,
+                                        75
                                     ],
                                     "kids": [
                                         {
                                             "class": "QLabel",
                                             "en": true,
                                             "geom": [
-                                                12,
-                                                8,
-                                                1040,
-                                                36
+                                                32,
+                                                10,
+                                                40,
+                                                17
                                             ],
-                                            "text": "未接続の Agent ツールが 4 件検出されました：Claude, ChatGPT / Codex, Cursor, Gemini CLI。ワンクリックで ID を発行して設定に書き込みます（オンラインのものはそのまま）。",
+                                            "text": "claude",
                                             "vis": true
                                         },
                                         {
-                                            "class": "QPushButton",
+                                            "class": "QLabel",
                                             "en": true,
                                             "geom": [
-                                                1058,
-                                                8,
-                                                138,
-                                                36
+                                                14,
+                                                10,
+                                                14,
+                                                17
                                             ],
-                                            "name": "primary",
-                                            "text": "ワンクリック接続",
+                                            "text": "<span style='color:#94a3b8;'>●</span>",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                76,
+                                                10,
+                                                71,
+                                                17
+                                            ],
+                                            "text": "オフライン",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                271,
+                                                10,
+                                                40,
+                                                17
+                                            ],
+                                            "text": "member",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                31,
+                                                297,
+                                                15
+                                            ],
+                                            "text": "整理本周踩坑",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                50,
+                                                297,
+                                                14
+                                            ],
+                                            "text": "最終アクティブ <rel>",
                                             "vis": true
                                         }
                                     ],
-                                    "name": "__self75",
-                                    "vis": true
-                                }
-                            ],
-                            "name": "__self65",
-                            "vis": true
-                        },
-                        {
-                            "class": "QFrame",
-                            "en": true,
-                            "geom": [
-                                16,
-                                146,
-                                292,
-                                100
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        11,
-                                        218,
-                                        15
-                                    ],
-                                    "text": "今週の Token",
+                                    "name": "agentCard",
                                     "vis": true
                                 },
                                 {
-                                    "class": "QLabel",
+                                    "class": "QFrame",
                                     "en": true,
                                     "geom": [
-                                        15,
-                                        27,
-                                        52,
-                                        22
-                                    ],
-                                    "text": "3090",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
+                                        333,
                                         0,
-                                        0,
-                                        100,
-                                        30
-                                    ],
-                                    "text": "",
-                                    "vis": false
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        50,
-                                        218,
-                                        23
+                                        325,
+                                        75
                                     ],
                                     "kids": [
                                         {
-                                            "class": "QWidget",
+                                            "class": "QLabel",
                                             "en": true,
                                             "geom": [
-                                                0,
-                                                2,
-                                                218,
-                                                30
+                                                32,
+                                                10,
+                                                37,
+                                                17
                                             ],
+                                            "text": "codex",
                                             "vis": true
                                         },
                                         {
-                                            "class": "QWidget",
+                                            "class": "QLabel",
                                             "en": true,
                                             "geom": [
-                                                0,
-                                                0,
-                                                100,
-                                                8
+                                                14,
+                                                10,
+                                                14,
+                                                17
                                             ],
-                                            "vis": false
+                                            "text": "<span style='color:#94a3b8;'>●</span>",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                73,
+                                                10,
+                                                71,
+                                                17
+                                            ],
+                                            "text": "オフライン",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                271,
+                                                10,
+                                                40,
+                                                17
+                                            ],
+                                            "text": "member",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                31,
+                                                297,
+                                                15
+                                            ],
+                                            "text": "（現在のタスクなし）",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                50,
+                                                297,
+                                                14
+                                            ],
+                                            "text": "最終アクティブ <rel>",
+                                            "vis": true
                                         }
                                     ],
+                                    "name": "agentCard",
                                     "vis": true
                                 },
                                 {
-                                    "class": "QLabel",
+                                    "class": "QFrame",
                                     "en": true,
                                     "geom": [
-                                        15,
-                                        74,
-                                        218,
-                                        15
+                                        0,
+                                        83,
+                                        325,
+                                        75
                                     ],
-                                    "text": "予算 10M · 残り 10M",
+                                    "kids": [
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                32,
+                                                10,
+                                                39,
+                                                17
+                                            ],
+                                            "text": "cursor",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                10,
+                                                14,
+                                                17
+                                            ],
+                                            "text": "<span style='color:#94a3b8;'>●</span>",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                75,
+                                                10,
+                                                71,
+                                                17
+                                            ],
+                                            "text": "オフライン",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                271,
+                                                10,
+                                                40,
+                                                17
+                                            ],
+                                            "text": "member",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                31,
+                                                297,
+                                                15
+                                            ],
+                                            "text": "kNN 过滤调研",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                50,
+                                                297,
+                                                14
+                                            ],
+                                            "text": "最終アクティブ <rel>",
+                                            "vis": true
+                                        }
+                                    ],
+                                    "name": "agentCard",
                                     "vis": true
                                 },
                                 {
-                                    "class": "QLabel",
+                                    "class": "QFrame",
                                     "en": true,
                                     "geom": [
-                                        243,
-                                        11,
-                                        34,
-                                        34
+                                        333,
+                                        83,
+                                        325,
+                                        75
                                     ],
-                                    "text": "",
+                                    "kids": [
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                32,
+                                                10,
+                                                35,
+                                                17
+                                            ],
+                                            "text": "zcode",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                10,
+                                                14,
+                                                17
+                                            ],
+                                            "text": "<span style='color:#94a3b8;'>●</span>",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                71,
+                                                10,
+                                                71,
+                                                17
+                                            ],
+                                            "text": "オフライン",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                283,
+                                                10,
+                                                28,
+                                                17
+                                            ],
+                                            "text": "zcode",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                31,
+                                                297,
+                                                15
+                                            ],
+                                            "text": "（現在のタスクなし）",
+                                            "vis": true
+                                        },
+                                        {
+                                            "class": "QLabel",
+                                            "en": true,
+                                            "geom": [
+                                                14,
+                                                50,
+                                                297,
+                                                14
+                                            ],
+                                            "text": "最終アクティブ <rel>",
+                                            "vis": true
+                                        }
+                                    ],
+                                    "name": "agentCard",
                                     "vis": true
                                 }
                             ],
-                            "name": "metricTile",
                             "vis": true
                         },
                         {
                             "class": "QFrame",
                             "en": true,
                             "geom": [
-                                322,
-                                150,
-                                291,
-                                92
+                                0,
+                                0,
+                                100,
+                                30
                             ],
                             "kids": [
                                 {
                                     "class": "QLabel",
                                     "en": true,
                                     "geom": [
-                                        15,
-                                        11,
-                                        217,
-                                        15
-                                    ],
-                                    "text": "Agents",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        27,
                                         39,
-                                        27
+                                        14,
+                                        22,
+                                        0
                                     ],
-                                    "text": "0/4",
-                                    "vis": true
+                                    "text": "",
+                                    "vis": false
                                 },
                                 {
                                     "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        10,
+                                        18,
+                                        80,
+                                        0
+                                    ],
+                                    "text": "まだ Agent が接続していません",
+                                    "vis": false
+                                },
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        10,
+                                        21,
+                                        80,
+                                        0
+                                    ],
+                                    "text": "右側の設定にある「接続コマンド」で最初の Agent をハイブに追加しましょう",
+                                    "vis": false
+                                }
+                            ],
+                            "name": "__self66",
+                            "vis": false
+                        }
+                    ],
+                    "name": "card",
+                    "text": "Agent 状態",
+                    "vis": true
+                },
+                {
+                    "class": "QGroupBox",
+                    "en": true,
+                    "geom": [
+                        746,
+                        488,
+                        478,
+                        228
+                    ],
+                    "kids": [
+                        {
+                            "class": "QWidget",
+                            "en": true,
+                            "geom": [
+                                29,
+                                45,
+                                420,
+                                158
+                            ],
+                            "vis": true
+                        }
+                    ],
+                    "name": "card",
+                    "text": "モデル別使用量の累計",
+                    "vis": true
+                },
+                {
+                    "class": "QGroupBox",
+                    "en": true,
+                    "geom": [
+                        16,
+                        726,
+                        716,
+                        297
+                    ],
+                    "kids": [
+                        {
+                            "class": "QComboBox",
+                            "en": true,
+                            "geom": [
+                                31,
+                                45,
+                                90,
+                                25
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QComboBoxPrivateContainer",
                                     "en": true,
                                     "geom": [
                                         0,
@@ -298,771 +1163,22 @@
                                         100,
                                         30
                                     ],
-                                    "text": "",
                                     "vis": false
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        55,
-                                        217,
-                                        10
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                100,
-                                                30
-                                            ],
-                                            "vis": false
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                2,
-                                                217,
-                                                8
-                                            ],
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        66,
-                                        217,
-                                        15
-                                    ],
-                                    "text": "4 件がオフライン",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        242,
-                                        11,
-                                        34,
-                                        34
-                                    ],
-                                    "text": "",
-                                    "vis": true
                                 }
                             ],
-                            "name": "metricTile",
+                            "text": "すべての種類",
                             "vis": true
                         },
                         {
-                            "class": "QFrame",
+                            "class": "QStackedWidget",
                             "en": true,
                             "geom": [
-                                627,
-                                155,
-                                292,
-                                81
+                                31,
+                                78,
+                                654,
+                                192
                             ],
                             "kids": [
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        11,
-                                        218,
-                                        15
-                                    ],
-                                    "text": "今日の消費",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        27,
-                                        52,
-                                        27
-                                    ],
-                                    "text": "3090",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        0,
-                                        100,
-                                        30
-                                    ],
-                                    "text": "",
-                                    "vis": false
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        0,
-                                        100,
-                                        30
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                100,
-                                                30
-                                            ],
-                                            "vis": false
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                100,
-                                                8
-                                            ],
-                                            "vis": false
-                                        }
-                                    ],
-                                    "vis": false
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        55,
-                                        218,
-                                        15
-                                    ],
-                                    "text": "昨日比",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        243,
-                                        11,
-                                        34,
-                                        34
-                                    ],
-                                    "text": "",
-                                    "vis": true
-                                }
-                            ],
-                            "name": "metricTile",
-                            "vis": true
-                        },
-                        {
-                            "class": "QFrame",
-                            "en": true,
-                            "geom": [
-                                933,
-                                150,
-                                291,
-                                92
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        11,
-                                        217,
-                                        15
-                                    ],
-                                    "text": "未解決エラー",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        27,
-                                        13,
-                                        27
-                                    ],
-                                    "text": "2",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        0,
-                                        100,
-                                        30
-                                    ],
-                                    "text": "",
-                                    "vis": false
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        55,
-                                        217,
-                                        10
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                100,
-                                                30
-                                            ],
-                                            "vis": false
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                2,
-                                                217,
-                                                8
-                                            ],
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        15,
-                                        66,
-                                        217,
-                                        15
-                                    ],
-                                    "text": "「エラーレポート」で処理",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        242,
-                                        11,
-                                        34,
-                                        34
-                                    ],
-                                    "text": "",
-                                    "vis": true
-                                }
-                            ],
-                            "name": "metricTile",
-                            "vis": true
-                        },
-                        {
-                            "class": "QGroupBox",
-                            "en": true,
-                            "geom": [
-                                16,
-                                256,
-                                280,
-                                222
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        31,
-                                        45,
-                                        112,
-                                        112
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        155,
-                                        45,
-                                        94,
-                                        73
-                                    ],
-                                    "text": "<div style='line-height:152%'>使用済み <b style='color:#0ea5e9'>3,090</b><br>残り <b style='color:#22c55e'>9,996,910</b><br>割合 <b style='color:#0ea5e9'>0.0%</b></div>",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        155,
-                                        124,
-                                        94,
-                                        30
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QPushButton",
-                                    "en": true,
-                                    "geom": [
-                                        92,
-                                        165,
-                                        95,
-                                        30
-                                    ],
-                                    "name": "editBudget",
-                                    "text": "予算を変更",
-                                    "vis": true
-                                }
-                            ],
-                            "name": "card",
-                            "text": "今週の Token 予算",
-                            "vis": true
-                        },
-                        {
-                            "class": "QGroupBox",
-                            "en": true,
-                            "geom": [
-                                310,
-                                256,
-                                450,
-                                222
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        29,
-                                        45,
-                                        392,
-                                        152
-                                    ],
-                                    "vis": true
-                                }
-                            ],
-                            "name": "card",
-                            "text": "Agent 別の今週の使用量",
-                            "vis": true
-                        },
-                        {
-                            "class": "QGroupBox",
-                            "en": true,
-                            "geom": [
-                                774,
-                                256,
-                                450,
-                                222
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        29,
-                                        45,
-                                        392,
-                                        152
-                                    ],
-                                    "vis": true
-                                }
-                            ],
-                            "name": "card",
-                            "text": "直近 14 日間の日別消費",
-                            "vis": true
-                        },
-                        {
-                            "class": "QGroupBox",
-                            "en": true,
-                            "geom": [
-                                16,
-                                488,
-                                716,
-                                228
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        29,
-                                        45,
-                                        658,
-                                        158
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QFrame",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                325,
-                                                75
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        32,
-                                                        10,
-                                                        40,
-                                                        17
-                                                    ],
-                                                    "text": "claude",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        14,
-                                                        17
-                                                    ],
-                                                    "text": "<span style='color:#94a3b8;'>●</span>",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        76,
-                                                        10,
-                                                        71,
-                                                        17
-                                                    ],
-                                                    "text": "オフライン",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        271,
-                                                        10,
-                                                        40,
-                                                        17
-                                                    ],
-                                                    "text": "member",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        31,
-                                                        297,
-                                                        15
-                                                    ],
-                                                    "text": "整理本周踩坑",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        50,
-                                                        297,
-                                                        14
-                                                    ],
-                                                    "text": "最終アクティブ <rel>",
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "name": "agentCard",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QFrame",
-                                            "en": true,
-                                            "geom": [
-                                                333,
-                                                0,
-                                                325,
-                                                75
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        32,
-                                                        10,
-                                                        37,
-                                                        17
-                                                    ],
-                                                    "text": "codex",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        14,
-                                                        17
-                                                    ],
-                                                    "text": "<span style='color:#94a3b8;'>●</span>",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        73,
-                                                        10,
-                                                        71,
-                                                        17
-                                                    ],
-                                                    "text": "オフライン",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        271,
-                                                        10,
-                                                        40,
-                                                        17
-                                                    ],
-                                                    "text": "member",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        31,
-                                                        297,
-                                                        15
-                                                    ],
-                                                    "text": "（現在のタスクなし）",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        50,
-                                                        297,
-                                                        14
-                                                    ],
-                                                    "text": "最終アクティブ <rel>",
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "name": "agentCard",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QFrame",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                83,
-                                                325,
-                                                75
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        32,
-                                                        10,
-                                                        39,
-                                                        17
-                                                    ],
-                                                    "text": "cursor",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        14,
-                                                        17
-                                                    ],
-                                                    "text": "<span style='color:#94a3b8;'>●</span>",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        75,
-                                                        10,
-                                                        71,
-                                                        17
-                                                    ],
-                                                    "text": "オフライン",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        271,
-                                                        10,
-                                                        40,
-                                                        17
-                                                    ],
-                                                    "text": "member",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        31,
-                                                        297,
-                                                        15
-                                                    ],
-                                                    "text": "kNN 过滤调研",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        50,
-                                                        297,
-                                                        14
-                                                    ],
-                                                    "text": "最終アクティブ <rel>",
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "name": "agentCard",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QFrame",
-                                            "en": true,
-                                            "geom": [
-                                                333,
-                                                83,
-                                                325,
-                                                75
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        32,
-                                                        10,
-                                                        35,
-                                                        17
-                                                    ],
-                                                    "text": "zcode",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        14,
-                                                        17
-                                                    ],
-                                                    "text": "<span style='color:#94a3b8;'>●</span>",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        71,
-                                                        10,
-                                                        71,
-                                                        17
-                                                    ],
-                                                    "text": "オフライン",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        283,
-                                                        10,
-                                                        28,
-                                                        17
-                                                    ],
-                                                    "text": "zcode",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        31,
-                                                        297,
-                                                        15
-                                                    ],
-                                                    "text": "（現在のタスクなし）",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        50,
-                                                        297,
-                                                        14
-                                                    ],
-                                                    "text": "最終アクティブ <rel>",
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "name": "agentCard",
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
                                 {
                                     "class": "QFrame",
                                     "en": true,
@@ -1094,7 +1210,7 @@
                                                 80,
                                                 0
                                             ],
-                                            "text": "まだ Agent が接続していません",
+                                            "text": "この種類のイベントはまだありません",
                                             "vis": false
                                         },
                                         {
@@ -1106,502 +1222,258 @@
                                                 80,
                                                 0
                                             ],
-                                            "text": "右側の設定にある「接続コマンド」で最初の Agent をハイブに追加しましょう",
+                                            "text": "種類を変更するか、Agent が新しい操作を行うのをお待ちください",
                                             "vis": false
                                         }
                                     ],
-                                    "name": "__self66",
+                                    "name": "__self67",
                                     "vis": false
-                                }
-                            ],
-                            "name": "card",
-                            "text": "Agent 状態",
-                            "vis": true
-                        },
-                        {
-                            "class": "QGroupBox",
-                            "en": true,
-                            "geom": [
-                                746,
-                                488,
-                                478,
-                                228
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        29,
-                                        45,
-                                        420,
-                                        158
-                                    ],
-                                    "vis": true
-                                }
-                            ],
-                            "name": "card",
-                            "text": "モデル別使用量の累計",
-                            "vis": true
-                        },
-                        {
-                            "class": "QGroupBox",
-                            "en": true,
-                            "geom": [
-                                16,
-                                726,
-                                716,
-                                297
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QComboBox",
-                                    "en": true,
-                                    "geom": [
-                                        31,
-                                        45,
-                                        90,
-                                        25
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QComboBoxPrivateContainer",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                100,
-                                                30
-                                            ],
-                                            "vis": false
-                                        }
-                                    ],
-                                    "text": "すべての種類",
-                                    "vis": true
                                 },
                                 {
-                                    "class": "QStackedWidget",
+                                    "class": "QListWidget",
                                     "en": true,
                                     "geom": [
-                                        31,
-                                        78,
+                                        0,
+                                        0,
                                         654,
                                         192
                                     ],
-                                    "kids": [
-                                        {
-                                            "class": "QFrame",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                100,
-                                                30
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        39,
-                                                        14,
-                                                        22,
-                                                        0
-                                                    ],
-                                                    "text": "",
-                                                    "vis": false
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        10,
-                                                        18,
-                                                        80,
-                                                        0
-                                                    ],
-                                                    "text": "この種類のイベントはまだありません",
-                                                    "vis": false
-                                                },
-                                                {
-                                                    "class": "QLabel",
-                                                    "en": true,
-                                                    "geom": [
-                                                        10,
-                                                        21,
-                                                        80,
-                                                        0
-                                                    ],
-                                                    "text": "種類を変更するか、Agent が新しい操作を行うのをお待ちください",
-                                                    "vis": false
-                                                }
-                                            ],
-                                            "name": "__self67",
-                                            "vis": false
-                                        },
-                                        {
-                                            "class": "QListWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                654,
-                                                192
-                                            ],
-                                            "items": 6,
-                                            "kids": [
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        9,
-                                                        9,
-                                                        626,
-                                                        174
-                                                    ],
-                                                    "name": "qt_scrollarea_viewport",
-                                                    "vis": true
-                                                },
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        0,
-                                                        0,
-                                                        100,
-                                                        10
-                                                    ],
-                                                    "kids": [
-                                                        {
-                                                            "class": "QScrollBar",
-                                                            "en": true,
-                                                            "geom": [
-                                                                0,
-                                                                0,
-                                                                100,
-                                                                10
-                                                            ],
-                                                            "vis": false
-                                                        }
-                                                    ],
-                                                    "name": "qt_scrollarea_hcontainer",
-                                                    "vis": false
-                                                },
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        635,
-                                                        9,
-                                                        10,
-                                                        174
-                                                    ],
-                                                    "kids": [
-                                                        {
-                                                            "class": "QScrollBar",
-                                                            "en": true,
-                                                            "geom": [
-                                                                0,
-                                                                0,
-                                                                10,
-                                                                174
-                                                            ],
-                                                            "vis": true
-                                                        }
-                                                    ],
-                                                    "name": "qt_scrollarea_vcontainer",
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "vis": true
-                                        }
-                                    ],
+                                    "items": 6,
                                     "vis": true
                                 }
                             ],
-                            "name": "card",
-                            "text": "イベントストリーム",
                             "vis": true
-                        },
+                        }
+                    ],
+                    "name": "card",
+                    "text": "イベントストリーム",
+                    "vis": true
+                },
+                {
+                    "class": "QGroupBox",
+                    "en": true,
+                    "geom": [
+                        746,
+                        726,
+                        478,
+                        297
+                    ],
+                    "kids": [
                         {
-                            "class": "QGroupBox",
+                            "class": "QFrame",
                             "en": true,
                             "geom": [
-                                746,
-                                726,
-                                478,
-                                297
+                                31,
+                                45,
+                                416,
+                                168
                             ],
                             "kids": [
                                 {
-                                    "class": "QFrame",
+                                    "class": "QLabel",
                                     "en": true,
                                     "geom": [
-                                        31,
-                                        45,
-                                        416,
-                                        168
+                                        197,
+                                        14,
+                                        22,
+                                        43
                                     ],
-                                    "kids": [
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                197,
-                                                14,
-                                                22,
-                                                43
-                                            ],
-                                            "text": "",
-                                            "vis": false
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                10,
-                                                63,
-                                                396,
-                                                42
-                                            ],
-                                            "text": "エラーはありません。すべて正常です",
-                                            "vis": false
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                10,
-                                                111,
-                                                396,
-                                                43
-                                            ],
-                                            "text": "予算の超過や Agent のエラー発生時には、ここでレベル別にアラートを表示します",
-                                            "vis": false
-                                        }
-                                    ],
-                                    "name": "__self68",
+                                    "text": "",
                                     "vis": false
                                 },
                                 {
-                                    "class": "QFrame",
+                                    "class": "QLabel",
                                     "en": true,
                                     "geom": [
-                                        31,
-                                        45,
-                                        416,
-                                        109
+                                        10,
+                                        63,
+                                        396,
+                                        42
                                     ],
-                                    "kids": [
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                18,
-                                                10,
-                                                15,
-                                                89
-                                            ],
-                                            "text": "",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                41,
-                                                10,
-                                                361,
-                                                89
-                                            ],
-                                            "text": "崩溃示例 — cursor · <rel>",
-                                            "vis": true
-                                        }
+                                    "text": "エラーはありません。すべて正常です",
+                                    "vis": false
+                                },
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        10,
+                                        111,
+                                        396,
+                                        43
                                     ],
+                                    "text": "予算の超過や Agent のエラー発生時には、ここでレベル別にアラートを表示します",
+                                    "vis": false
+                                }
+                            ],
+                            "name": "__self68",
+                            "vis": false
+                        },
+                        {
+                            "class": "QFrame",
+                            "en": true,
+                            "geom": [
+                                31,
+                                45,
+                                416,
+                                109
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        18,
+                                        10,
+                                        15,
+                                        89
+                                    ],
+                                    "text": "",
                                     "vis": true
                                 },
                                 {
-                                    "class": "QFrame",
+                                    "class": "QLabel",
                                     "en": true,
                                     "geom": [
-                                        31,
-                                        162,
-                                        416,
-                                        108
+                                        41,
+                                        10,
+                                        361,
+                                        89
                                     ],
-                                    "kids": [
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                18,
-                                                10,
-                                                15,
-                                                88
-                                            ],
-                                            "text": "",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                41,
-                                                10,
-                                                361,
-                                                88
-                                            ],
-                                            "text": "MSVC C2062 示例错误 — claude · <rel>",
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QFrame",
-                                    "en": true,
-                                    "geom": [
-                                        31,
-                                        45,
-                                        416,
-                                        109
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                18,
-                                                10,
-                                                15,
-                                                89
-                                            ],
-                                            "text": "",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                41,
-                                                10,
-                                                361,
-                                                89
-                                            ],
-                                            "text": "崩溃示例 — cursor · <rel>",
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QFrame",
-                                    "en": true,
-                                    "geom": [
-                                        31,
-                                        162,
-                                        416,
-                                        108
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                18,
-                                                10,
-                                                15,
-                                                88
-                                            ],
-                                            "text": "",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                41,
-                                                10,
-                                                361,
-                                                88
-                                            ],
-                                            "text": "MSVC C2062 示例错误 — claude · <rel>",
-                                            "vis": true
-                                        }
-                                    ],
+                                    "text": "崩溃示例 — cursor · <rel>",
                                     "vis": true
                                 }
                             ],
-                            "name": "card",
-                            "text": "アラート",
                             "vis": true
                         },
                         {
-                            "class": "QWidget",
+                            "class": "QFrame",
                             "en": true,
                             "geom": [
-                                0,
-                                0,
-                                100,
-                                30
+                                31,
+                                162,
+                                416,
+                                108
                             ],
-                            "vis": false
+                            "kids": [
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        18,
+                                        10,
+                                        15,
+                                        88
+                                    ],
+                                    "text": "",
+                                    "vis": true
+                                },
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        41,
+                                        10,
+                                        361,
+                                        88
+                                    ],
+                                    "text": "MSVC C2062 示例错误 — claude · <rel>",
+                                    "vis": true
+                                }
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QFrame",
+                            "en": true,
+                            "geom": [
+                                31,
+                                45,
+                                416,
+                                109
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        18,
+                                        10,
+                                        15,
+                                        89
+                                    ],
+                                    "text": "",
+                                    "vis": true
+                                },
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        41,
+                                        10,
+                                        361,
+                                        89
+                                    ],
+                                    "text": "崩溃示例 — cursor · <rel>",
+                                    "vis": true
+                                }
+                            ],
+                            "vis": true
+                        },
+                        {
+                            "class": "QFrame",
+                            "en": true,
+                            "geom": [
+                                31,
+                                162,
+                                416,
+                                108
+                            ],
+                            "kids": [
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        18,
+                                        10,
+                                        15,
+                                        88
+                                    ],
+                                    "text": "",
+                                    "vis": true
+                                },
+                                {
+                                    "class": "QLabel",
+                                    "en": true,
+                                    "geom": [
+                                        41,
+                                        10,
+                                        361,
+                                        88
+                                    ],
+                                    "text": "MSVC C2062 示例错误 — claude · <rel>",
+                                    "vis": true
+                                }
+                            ],
+                            "vis": true
                         }
                     ],
+                    "name": "card",
+                    "text": "アラート",
                     "vis": true
-                }
-            ],
-            "name": "qt_scrollarea_viewport",
-            "vis": true
-        },
-        {
-            "class": "QWidget",
-            "en": true,
-            "geom": [
-                0,
-                886,
-                1240,
-                10
-            ],
-            "kids": [
+                },
                 {
-                    "class": "QScrollBar",
+                    "class": "QWidget",
                     "en": true,
                     "geom": [
                         0,
                         0,
-                        1240,
-                        10
+                        100,
+                        30
                     ],
                     "vis": false
                 }
             ],
-            "name": "qt_scrollarea_hcontainer",
-            "vis": false
-        },
-        {
-            "class": "QWidget",
-            "en": true,
-            "geom": [
-                1240,
-                0,
-                10,
-                896
-            ],
-            "kids": [
-                {
-                    "class": "QScrollBar",
-                    "en": true,
-                    "geom": [
-                        0,
-                        0,
-                        10,
-                        896
-                    ],
-                    "vis": true
-                }
-            ],
-            "name": "qt_scrollarea_vcontainer",
             "vis": true
         }
     ],
