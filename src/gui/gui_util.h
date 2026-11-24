@@ -179,13 +179,25 @@ inline QDateTime parseUtcIso(const QString& iso) {
     return QDateTime::fromString(iso.endsWith('Z') ? iso : iso + "Z", Qt::ISODate);
 }
 
+// 界面显示用的"现在"。默认就是系统当前时间。环境变量 MIDERHIVE_UI_NOW（ISO8601，带 Z）
+// 可以把它冻结在固定时刻——给 UI/UX 评测 harness 用：种子的时间戳相对它取，相对时间
+// 文案（"30 分钟前"）与绝对时间戳在多次运行之间才可比。只影响显示，不参与任何判断。
+inline QDateTime displayNow() {
+    const QByteArray frozen = qgetenv("MIDERHIVE_UI_NOW");
+    if (!frozen.isEmpty()) {
+        const QDateTime t = QDateTime::fromString(QString::fromLatin1(frozen), Qt::ISODate);
+        if (t.isValid()) return t.toLocalTime();
+    }
+    return QDateTime::currentDateTime();
+}
+
 // 相对时间：把 "2026-09-10T14:07:04Z" 转成「刚刚 / 12 分钟前 / 3 小时前 / 2 天前」，
 // 超过一周回落为本地 "MM-dd HH:mm"。解析失败时原样返回，不吞信息。
 inline QString relTime(const QString& iso) {
     const QDateTime t = parseUtcIso(iso);
     if (!t.isValid()) return iso;
     const QDateTime local = t.toLocalTime();
-    qint64 secs = local.secsTo(QDateTime::currentDateTime());
+    qint64 secs = local.secsTo(displayNow());
     if (secs < 0) secs = 0;  // 时钟偏差时不显示"未来"
     if (secs < 45) return i18n::trs("刚刚", "just now");
     if (secs < 3600) return i18n::trs("%1 分钟前", "%1 min ago").arg(secs / 60);

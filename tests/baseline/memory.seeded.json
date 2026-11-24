@@ -1,11 +1,26 @@
 {
     "class": "QScrollArea",
     "en": true,
+    "focus": [
+        "QToolButton「▾  项目档案」",
+        "QToolButton「▾  决策日志」",
+        "QToolButton「▾  偏好记录」",
+        "QToolButton「▾  设备环境」",
+        "QToolButton「▾  工作习惯」",
+        "QToolButton「▾  项目档案」",
+        "QToolButton「▾  决策日志」",
+        "QToolButton「▾  偏好记录」",
+        "QToolButton「▾  设备环境」",
+        "QToolButton「▾  工作习惯」",
+        "QPushButton#primary「编辑 / 新增（生成新版本）」",
+        "QPushButton「查看历史版本」",
+        "QScrollArea"
+    ],
     "geom": [
         0,
         0,
         1250,
-        898
+        896
     ],
     "kids": [
         {
@@ -15,7 +30,7 @@
                 0,
                 0,
                 1250,
-                898
+                896
             ],
             "kids": [
                 {
@@ -25,7 +40,7 @@
                         0,
                         0,
                         1250,
-                        898
+                        896
                     ],
                     "kids": [
                         {
@@ -33,7 +48,7 @@
                             "en": true,
                             "geom": [
                                 16,
-                                16,
+                                20,
                                 38,
                                 38
                             ],
@@ -47,7 +62,7 @@
                                 82,
                                 16,
                                 1152,
-                                20
+                                27
                             ],
                             "text": "用户记忆",
                             "vis": true
@@ -57,9 +72,9 @@
                             "en": true,
                             "geom": [
                                 82,
-                                39,
+                                46,
                                 1152,
-                                15
+                                16
                             ],
                             "text": "项目档案 · 决策日志 · 偏好记录 · 设备环境 · 工作习惯，所有 Agent 共享",
                             "vis": true
@@ -69,7 +84,7 @@
                             "en": true,
                             "geom": [
                                 66,
-                                21,
+                                25,
                                 4,
                                 28
                             ],
@@ -80,21 +95,21 @@
                             "en": true,
                             "geom": [
                                 16,
-                                78,
-                                325,
-                                20
+                                86,
+                                187,
+                                36
                             ],
-                            "text": "记忆条目 1 · 最后更新 11-01 08:00",
+                            "text": "记忆条目 1 · 最后更新 <rel>",
                             "vis": true
                         },
                         {
                             "class": "QPushButton",
                             "en": true,
                             "geom": [
-                                1058,
-                                78,
-                                176,
-                                20
+                                1044,
+                                86,
+                                190,
+                                36
                             ],
                             "name": "primary",
                             "text": "编辑 / 新增（生成新版本）",
@@ -104,10 +119,10 @@
                             "class": "QPushButton",
                             "en": true,
                             "geom": [
-                                966,
-                                78,
-                                80,
-                                20
+                                920,
+                                86,
+                                112,
+                                36
                             ],
                             "text": "查看历史版本",
                             "vis": true
@@ -117,9 +132,9 @@
                             "en": true,
                             "geom": [
                                 16,
-                                110,
+                                134,
                                 1218,
-                                772
+                                746
                             ],
                             "kids": [
                                 {
@@ -128,8 +143,8 @@
                                     "geom": [
                                         0,
                                         0,
-                                        1204,
-                                        772
+                                        1208,
+                                        746
                                     ],
                                     "kids": [
                                         {
@@ -138,8 +153,8 @@
                                             "geom": [
                                                 0,
                                                 0,
-                                                1204,
-                                                1049
+                                                1208,
+                                                1081
                                             ],
                                             "kids": [
                                                 {
@@ -148,8 +163,8 @@
                                                     "geom": [
                                                         0,
                                                         0,
-                                                        1192,
-                                                        89
+                                                        1196,
+                                                        101
                                                     ],
                                                     "kids": [
                                                         {
@@ -158,8 +173,8 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                150,
-                                                                38
+                                                                109,
+                                                                43
                                                             ],
                                                             "vis": true
                                                         },
@@ -168,9 +183,9 @@
                                                             "en": true,
                                                             "geom": [
                                                                 0,
-                                                                38,
-                                                                1192,
-                                                                51
+                                                                43,
+                                                                1196,
+                                                                58
                                                             ],
                                                             "kids": [
                                                                 {
@@ -179,10 +194,10 @@
                                                                     "geom": [
                                                                         14,
                                                                         10,
-                                                                        1164,
-                                                                        29
+                                                                        1168,
+                                                                        36
                                                                     ],
-                                                                    "text": "<b style='color:#0ea5e9;'>current</b> <span style='color:#94a3b8; font-size:10px;' title='2026-11-01 08:00:00'>v1 · user · 11-01 08:00</span><br>MiderHive 图谱视图开发",
+                                                                    "text": "<b style='color:#0ea5e9;'>current</b> <span style='color:#94a3b8; font-size:10px;' title='<stamp>'>v1 · user · <rel></span><br>MiderHive 图谱视图开发",
                                                                     "vis": true
                                                                 }
                                                             ],
@@ -196,9 +211,9 @@
                                                     "en": true,
                                                     "geom": [
                                                         0,
-                                                        99,
-                                                        1192,
-                                                        230
+                                                        111,
+                                                        1196,
+                                                        235
                                                     ],
                                                     "kids": [
                                                         {
@@ -207,8 +222,8 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                150,
-                                                                38
+                                                                109,
+                                                                43
                                                             ],
                                                             "vis": true
                                                         },
@@ -217,8 +232,8 @@
                                                             "en": true,
                                                             "geom": [
                                                                 0,
-                                                                38,
-                                                                1192,
+                                                                43,
+                                                                1196,
                                                                 192
                                                             ],
                                                             "kids": [
@@ -228,7 +243,7 @@
                                                                     "geom": [
                                                                         14,
                                                                         10,
-                                                                        1164,
+                                                                        1168,
                                                                         170
                                                                     ],
                                                                     "vis": true
@@ -244,9 +259,9 @@
                                                     "en": true,
                                                     "geom": [
                                                         0,
-                                                        339,
-                                                        1192,
-                                                        230
+                                                        356,
+                                                        1196,
+                                                        235
                                                     ],
                                                     "kids": [
                                                         {
@@ -255,8 +270,8 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                150,
-                                                                38
+                                                                109,
+                                                                43
                                                             ],
                                                             "vis": true
                                                         },
@@ -265,8 +280,8 @@
                                                             "en": true,
                                                             "geom": [
                                                                 0,
-                                                                38,
-                                                                1192,
+                                                                43,
+                                                                1196,
                                                                 192
                                                             ],
                                                             "kids": [
@@ -276,7 +291,7 @@
                                                                     "geom": [
                                                                         14,
                                                                         10,
-                                                                        1164,
+                                                                        1168,
                                                                         170
                                                                     ],
                                                                     "vis": true
@@ -292,9 +307,9 @@
                                                     "en": true,
                                                     "geom": [
                                                         0,
-                                                        579,
-                                                        1192,
-                                                        230
+                                                        601,
+                                                        1196,
+                                                        235
                                                     ],
                                                     "kids": [
                                                         {
@@ -303,8 +318,8 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                150,
-                                                                38
+                                                                109,
+                                                                43
                                                             ],
                                                             "vis": true
                                                         },
@@ -313,8 +328,8 @@
                                                             "en": true,
                                                             "geom": [
                                                                 0,
-                                                                38,
-                                                                1192,
+                                                                43,
+                                                                1196,
                                                                 192
                                                             ],
                                                             "kids": [
@@ -324,7 +339,7 @@
                                                                     "geom": [
                                                                         14,
                                                                         10,
-                                                                        1164,
+                                                                        1168,
                                                                         170
                                                                     ],
                                                                     "vis": true
@@ -340,9 +355,9 @@
                                                     "en": true,
                                                     "geom": [
                                                         0,
-                                                        819,
-                                                        1192,
-                                                        230
+                                                        846,
+                                                        1196,
+                                                        235
                                                     ],
                                                     "kids": [
                                                         {
@@ -351,8 +366,8 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                150,
-                                                                38
+                                                                109,
+                                                                43
                                                             ],
                                                             "vis": true
                                                         },
@@ -361,8 +376,8 @@
                                                             "en": true,
                                                             "geom": [
                                                                 0,
-                                                                38,
-                                                                1192,
+                                                                43,
+                                                                1196,
                                                                 192
                                                             ],
                                                             "kids": [
@@ -372,7 +387,248 @@
                                                                     "geom": [
                                                                         14,
                                                                         10,
-                                                                        1164,
+                                                                        1168,
+                                                                        170
+                                                                    ],
+                                                                    "vis": true
+                                                                }
+                                                            ],
+                                                            "vis": true
+                                                        }
+                                                    ],
+                                                    "vis": true
+                                                },
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        0,
+                                                        1196,
+                                                        101
+                                                    ],
+                                                    "kids": [
+                                                        {
+                                                            "class": "QToolButton",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                0,
+                                                                109,
+                                                                43
+                                                            ],
+                                                            "vis": true
+                                                        },
+                                                        {
+                                                            "class": "QWidget",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                43,
+                                                                1196,
+                                                                58
+                                                            ],
+                                                            "kids": [
+                                                                {
+                                                                    "class": "QLabel",
+                                                                    "en": true,
+                                                                    "geom": [
+                                                                        14,
+                                                                        10,
+                                                                        1168,
+                                                                        36
+                                                                    ],
+                                                                    "text": "<b style='color:#0ea5e9;'>current</b> <span style='color:#94a3b8; font-size:10px;' title='<stamp>'>v1 · user · <rel></span><br>MiderHive 图谱视图开发",
+                                                                    "vis": true
+                                                                }
+                                                            ],
+                                                            "vis": true
+                                                        }
+                                                    ],
+                                                    "vis": true
+                                                },
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        111,
+                                                        1196,
+                                                        235
+                                                    ],
+                                                    "kids": [
+                                                        {
+                                                            "class": "QToolButton",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                0,
+                                                                109,
+                                                                43
+                                                            ],
+                                                            "vis": true
+                                                        },
+                                                        {
+                                                            "class": "QWidget",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                43,
+                                                                1196,
+                                                                192
+                                                            ],
+                                                            "kids": [
+                                                                {
+                                                                    "class": "QWidget",
+                                                                    "en": true,
+                                                                    "geom": [
+                                                                        14,
+                                                                        10,
+                                                                        1168,
+                                                                        170
+                                                                    ],
+                                                                    "vis": true
+                                                                }
+                                                            ],
+                                                            "vis": true
+                                                        }
+                                                    ],
+                                                    "vis": true
+                                                },
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        356,
+                                                        1196,
+                                                        235
+                                                    ],
+                                                    "kids": [
+                                                        {
+                                                            "class": "QToolButton",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                0,
+                                                                109,
+                                                                43
+                                                            ],
+                                                            "vis": true
+                                                        },
+                                                        {
+                                                            "class": "QWidget",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                43,
+                                                                1196,
+                                                                192
+                                                            ],
+                                                            "kids": [
+                                                                {
+                                                                    "class": "QWidget",
+                                                                    "en": true,
+                                                                    "geom": [
+                                                                        14,
+                                                                        10,
+                                                                        1168,
+                                                                        170
+                                                                    ],
+                                                                    "vis": true
+                                                                }
+                                                            ],
+                                                            "vis": true
+                                                        }
+                                                    ],
+                                                    "vis": true
+                                                },
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        601,
+                                                        1196,
+                                                        235
+                                                    ],
+                                                    "kids": [
+                                                        {
+                                                            "class": "QToolButton",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                0,
+                                                                109,
+                                                                43
+                                                            ],
+                                                            "vis": true
+                                                        },
+                                                        {
+                                                            "class": "QWidget",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                43,
+                                                                1196,
+                                                                192
+                                                            ],
+                                                            "kids": [
+                                                                {
+                                                                    "class": "QWidget",
+                                                                    "en": true,
+                                                                    "geom": [
+                                                                        14,
+                                                                        10,
+                                                                        1168,
+                                                                        170
+                                                                    ],
+                                                                    "vis": true
+                                                                }
+                                                            ],
+                                                            "vis": true
+                                                        }
+                                                    ],
+                                                    "vis": true
+                                                },
+                                                {
+                                                    "class": "QWidget",
+                                                    "en": true,
+                                                    "geom": [
+                                                        0,
+                                                        846,
+                                                        1196,
+                                                        235
+                                                    ],
+                                                    "kids": [
+                                                        {
+                                                            "class": "QToolButton",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                0,
+                                                                109,
+                                                                43
+                                                            ],
+                                                            "vis": true
+                                                        },
+                                                        {
+                                                            "class": "QWidget",
+                                                            "en": true,
+                                                            "geom": [
+                                                                0,
+                                                                43,
+                                                                1196,
+                                                                192
+                                                            ],
+                                                            "kids": [
+                                                                {
+                                                                    "class": "QWidget",
+                                                                    "en": true,
+                                                                    "geom": [
+                                                                        14,
+                                                                        10,
+                                                                        1168,
                                                                         170
                                                                     ],
                                                                     "vis": true
@@ -397,7 +653,7 @@
                                         0,
                                         0,
                                         100,
-                                        30
+                                        10
                                     ],
                                     "kids": [
                                         {
@@ -407,7 +663,7 @@
                                                 0,
                                                 0,
                                                 100,
-                                                30
+                                                10
                                             ],
                                             "vis": false
                                         }
@@ -419,10 +675,10 @@
                                     "class": "QWidget",
                                     "en": true,
                                     "geom": [
-                                        1204,
+                                        1208,
                                         0,
-                                        14,
-                                        772
+                                        10,
+                                        746
                                     ],
                                     "kids": [
                                         {
@@ -431,8 +687,8 @@
                                             "geom": [
                                                 0,
                                                 0,
-                                                14,
-                                                772
+                                                10,
+                                                746
                                             ],
                                             "vis": true
                                         }
@@ -455,9 +711,9 @@
             "en": true,
             "geom": [
                 0,
-                884,
-                1236,
-                14
+                886,
+                1240,
+                10
             ],
             "kids": [
                 {
@@ -466,8 +722,8 @@
                     "geom": [
                         0,
                         0,
-                        1236,
-                        14
+                        1240,
+                        10
                     ],
                     "vis": false
                 }
@@ -479,10 +735,10 @@
             "class": "QWidget",
             "en": true,
             "geom": [
-                1236,
+                1240,
                 0,
-                14,
-                884
+                10,
+                886
             ],
             "kids": [
                 {
@@ -491,8 +747,8 @@
                     "geom": [
                         0,
                         0,
-                        14,
-                        884
+                        10,
+                        886
                     ],
                     "vis": false
                 }

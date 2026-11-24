@@ -125,16 +125,21 @@ Step "swap $OutDir.new -> $OutDir"
 if (Test-Path $outAbs) { Remove-Item -Recurse -Force $outAbs }
 Rename-Item -Path $newAbs -NewName (Split-Path -Leaf $outAbs)
 
+# Each line is one complete string. Do not write "text" + (expr) inside the array
+# literal: PowerShell binds the comma before the plus sign, so the rest of the
+# array becomes the right operand and the lines come out split.
+$stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$dirtyNote = if ($dirty) { " + UNCOMMITTED CHANGES" } else { "" }
 $info = @(
-    "MiderHive dev build",
-    "version : $version",
-    "commit  : $commit ($branch)" + $(if ($dirty) { " + UNCOMMITTED CHANGES" } else { "" }),
-    "config  : $Configuration, built from $BuildDir",
-    "deployed: " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"),
-    "",
-    "Run miderhive.exe. It uses the normal data directory (%USERPROFILE%\.miderhive) and",
-    "port 8787 unless MIDERHIVE_HOME / MIDERHIVE_PORT say otherwise. agent-cli.exe,",
-    "platformd.exe and miderhive-mcp.exe sit next to it. Not an installer: nothing is",
+    "MiderHive dev build"
+    "version : $version"
+    "commit  : $commit ($branch)$dirtyNote"
+    "config  : $Configuration, built from $BuildDir"
+    "deployed: $stamp"
+    ""
+    "Run miderhive.exe. It uses the normal data directory (%USERPROFILE%\.miderhive) and"
+    "port 8787 unless MIDERHIVE_HOME / MIDERHIVE_PORT say otherwise. agent-cli.exe,"
+    "platformd.exe and miderhive-mcp.exe sit next to it. Not an installer: nothing is"
     "added to the Start menu and no file outside this folder is written by the deploy."
 )
 Set-Content -Path (Join-Path $outAbs "BUILD_INFO.txt") -Value $info -Encoding ASCII

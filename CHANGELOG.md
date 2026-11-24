@@ -22,6 +22,68 @@ join the hive over HTTP or MCP.
 > `%USERPROFILE%\.miderhive`). The old `AGENTHIVE_*` / `ZCODE_*` names and the old data
 > directory are recognised and migrated automatically.
 
+## [Unreleased]
+
+### Fixed
+All of the following were found by the UI harness once it rendered real fonts, applied the
+application stylesheet and compared pixels between runs (see Added). None of them is a
+functional failure; they are controls that lost their styling or UI state that did not
+survive the 3-second refresh.
+- **Empty-state call-to-action buttons looked like plain text** (knowledge, errors, skills and
+  memory panels: "＋ New entry", "＋ Report an error", "＋ Register a skill", "＋ Write a
+  memory"). The empty-state container set a selector-less stylesheet
+  (`background:transparent; border:none;`). In Qt such declarations apply to the widget **and
+  every descendant**, and an ancestor's stylesheet beats the application stylesheet, so the
+  primary button lost its fill and border. Containers now use `ui::setSelfStyleSheet()`
+  (`#objectName { … }`), which applies to the widget itself only.
+- **Buttons in the dashboard's banners lost their fill** (health banner, onboarding banner):
+  same selector-less pattern on the banner containers.
+- **The onboarding banner had no background and drew a box inside its box.** Its stylesheet used
+  `@warnbg@`, a placeholder `ui::th()` did not know, so Qt could not parse the stylesheet at all
+  (one "Could not parse stylesheet" warning per rebuild). Its `QWidget { … }` rule also framed
+  the label inside it. `warnbg` is now a derived colour like `okbg` / `errbg`, and the banner
+  styles only itself.
+- **The "per-agent usage" bars re-animated on every refresh** (every 3 seconds they swept from
+  zero): the chart was re-fed on each poll. The bar charts now ignore a call whose entries are
+  unchanged, which also stops the usage panel's trend and model charts from re-animating.
+- **Usage panel, per-agent table**: the selected row jumped to another row on every refresh, and
+  a sort order chosen by clicking a header was reset, because the table was rebuilt and
+  re-sorted on each poll. It is rebuilt only when the data changes, and the selection is
+  restored by agent name.
+- **The audit log tree jumped back to the top on every refresh**, and day groups the user had
+  collapsed were re-expanded. The tree is rebuilt only when the records change; on a real change
+  the scroll position, the current row and the collapsed days are restored.
+- The graph's initial layout no longer depends on the global `std::rand()` state: the canvas has
+  its own fixed-seed generator, so the same data starts from the same arrangement on every
+  launch. "Re-layout" still produces a fresh arrangement.
+
+### Added
+- **The UI harness is now a regression gate** (47 scenes; `continue-on-error` is removed from CI
+  once the runner has been confirmed to match). It starts the workbench exactly as
+  `gui/main.cpp` does (application font, global stylesheet, built-in HTTP service), loads fonts
+  (the offscreen platform loads none by default, so every screenshot was boxes), freezes the
+  display clock and seeds "now minus fixed offsets", points tool detection at a fixed fake
+  environment, and refreshes a panel synchronously before capturing it. Two runs on fresh data
+  directories produce byte-identical snapshots and golden images.
+- New invariant rules: standard controls must be reachable by Tab (the Tab order is part of each
+  baseline); stylesheets must not contain unreplaced `@token@` placeholders; a container's
+  stylesheet rule must not reach the controls inside it; user state (selection, filter text,
+  scroll position, combo box choice) must survive an automatic refresh.
+- Baseline differences now report where they differ; every scene is captured as a screenshot
+  and listed in `build/ui_harness/ui_report.html`; CI uploads the snapshots and the report as the
+  `ui-harness` artifact.
+- `scripts/ui_harness_rounds.py`: runs the harness N times on fresh data directories and
+  requires every snapshot and golden image to be byte-identical across rounds.
+- `ui::displayNow()` (GUI) and `GraphPanel::settleLayout()` are test seams: the first lets the
+  harness freeze the clock through `MIDERHIVE_UI_NOW`, the second runs the force-directed layout
+  to its stop condition synchronously. Neither affects normal use.
+
+### Changed
+- Baselines in `tests/baseline/` were re-recorded. The previous ones recorded what was installed
+  on the machine they were made on (nine tools), local-time timestamps and stale panel content;
+  they could never match another machine.
+- `scripts/verify_gui_selftest.py` gives the GUI self-test a font directory too.
+
 ## [1.6.1] - 2026-11-24
 
 Patch release. It reverts a regression in 1.6.0 that broke ZCode onboarding and closes a set of

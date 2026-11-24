@@ -1,11 +1,23 @@
 {
     "class": "QScrollArea",
     "en": true,
+    "focus": [
+        "QLineEdit「搜索知识库（关键词或自然语言）…」",
+        "QCheckBox「语义搜索」",
+        "QLineEdit「按标签过滤」",
+        "QPushButton#primary「搜索」",
+        "QPushButton「＋ 新建条目」",
+        "QTableWidget",
+        "QLineEdit「结果即筛…」",
+        "QTextBrowser",
+        "QComboBox「v1 — cursor (<rel>)」",
+        "QPushButton「追加新版本」"
+    ],
     "geom": [
         0,
         0,
         1250,
-        898
+        896
     ],
     "kids": [
         {
@@ -15,7 +27,7 @@
                 0,
                 0,
                 1250,
-                898
+                896
             ],
             "kids": [
                 {
@@ -25,7 +37,7 @@
                         0,
                         0,
                         1250,
-                        898
+                        896
                     ],
                     "kids": [
                         {
@@ -33,7 +45,7 @@
                             "en": true,
                             "geom": [
                                 16,
-                                16,
+                                20,
                                 38,
                                 38
                             ],
@@ -47,7 +59,7 @@
                                 82,
                                 16,
                                 1152,
-                                20
+                                27
                             ],
                             "text": "知识库",
                             "vis": true
@@ -57,9 +69,9 @@
                             "en": true,
                             "geom": [
                                 82,
-                                39,
+                                46,
                                 1152,
-                                15
+                                16
                             ],
                             "text": "经验 / 方案 / 踩坑统一沉淀，关键词与语义双模式检索，版本只追加不覆盖",
                             "vis": true
@@ -69,7 +81,7 @@
                             "en": true,
                             "geom": [
                                 66,
-                                21,
+                                25,
                                 4,
                                 28
                             ],
@@ -80,17 +92,17 @@
                             "en": true,
                             "geom": [
                                 16,
-                                78,
-                                931,
-                                32
+                                86,
+                                940,
+                                35
                             ],
                             "kids": [
                                 {
                                     "class": "QLineEditIconButton",
                                     "en": true,
                                     "geom": [
-                                        905,
-                                        7,
+                                        914,
+                                        8,
                                         22,
                                         18
                                     ],
@@ -104,10 +116,10 @@
                             "class": "QCheckBox",
                             "en": true,
                             "geom": [
-                                959,
-                                85,
+                                968,
+                                94,
                                 79,
-                                18
+                                19
                             ],
                             "text": "语义搜索",
                             "vis": true
@@ -116,18 +128,18 @@
                             "class": "QLineEdit",
                             "en": true,
                             "geom": [
-                                892,
-                                122,
-                                160,
-                                32
+                                958,
+                                134,
+                                132,
+                                35
                             ],
                             "kids": [
                                 {
                                     "class": "QLineEditIconButton",
                                     "en": true,
                                     "geom": [
-                                        134,
-                                        7,
+                                        106,
+                                        8,
                                         22,
                                         18
                                     ],
@@ -141,10 +153,10 @@
                             "class": "QPushButton",
                             "en": true,
                             "geom": [
-                                1050,
-                                78,
+                                1059,
+                                86,
                                 60,
-                                31
+                                36
                             ],
                             "name": "primary",
                             "text": "搜索",
@@ -154,10 +166,10 @@
                             "class": "QPushButton",
                             "en": true,
                             "geom": [
-                                1122,
-                                78,
-                                112,
-                                31
+                                1131,
+                                86,
+                                103,
+                                36
                             ],
                             "text": "＋ 新建条目",
                             "vis": true
@@ -167,22 +179,22 @@
                             "en": true,
                             "geom": [
                                 16,
-                                122,
-                                429,
-                                32
+                                134,
+                                225,
+                                35
                             ],
                             "name": "muted",
-                            "text": "总条目 5 · 今日新增 0 · 热门标签: sqlite(3) ci(1) ",
+                            "text": "总条目 5 · 今日新增 5 · 热门标签: sqlite(3) ci(1) ",
                             "vis": true
                         },
                         {
                             "class": "QLabel",
                             "en": true,
                             "geom": [
-                                854,
-                                122,
+                                920,
+                                134,
                                 26,
-                                32
+                                35
                             ],
                             "text": "标签",
                             "vis": true
@@ -192,19 +204,19 @@
                             "en": true,
                             "geom": [
                                 16,
-                                166,
+                                181,
                                 1218,
-                                716
+                                699
                             ],
                             "kids": [
                                 {
                                     "class": "QWidget",
                                     "en": true,
                                     "geom": [
-                                        212,
+                                        680,
                                         0,
-                                        1006,
-                                        716
+                                        538,
+                                        699
                                     ],
                                     "kids": [
                                         {
@@ -213,10 +225,10 @@
                                             "geom": [
                                                 9,
                                                 9,
-                                                988,
-                                                15
+                                                520,
+                                                18
                                             ],
-                                            "text": "<b>今天天气不错</b> · 作者: cursor · 版本 v1 · 分类: 生活 · 时间: 11-01 08:00 (2026-11-01 08:00:00)",
+                                            "text": "<b>今天天气不错</b> · 作者: cursor · 版本 v1 · 分类: 生活 · 时间: <rel> (<stamp>)",
                                             "vis": true
                                         },
                                         {
@@ -224,9 +236,9 @@
                                             "en": true,
                                             "geom": [
                                                 9,
-                                                30,
-                                                988,
-                                                639
+                                                33,
+                                                520,
+                                                615
                                             ],
                                             "kids": [
                                                 {
@@ -243,10 +255,10 @@
                                                             "class": "QLabel",
                                                             "en": true,
                                                             "geom": [
-                                                                0,
-                                                                0,
-                                                                100,
-                                                                30
+                                                                39,
+                                                                14,
+                                                                22,
+                                                                0
                                                             ],
                                                             "text": "",
                                                             "vis": false
@@ -255,10 +267,10 @@
                                                             "class": "QLabel",
                                                             "en": true,
                                                             "geom": [
-                                                                0,
-                                                                0,
-                                                                100,
-                                                                30
+                                                                10,
+                                                                17,
+                                                                80,
+                                                                0
                                                             ],
                                                             "text": "还没有任何知识条目",
                                                             "vis": false
@@ -267,10 +279,10 @@
                                                             "class": "QLabel",
                                                             "en": true,
                                                             "geom": [
-                                                                0,
-                                                                0,
-                                                                100,
-                                                                30
+                                                                10,
+                                                                20,
+                                                                80,
+                                                                0
                                                             ],
                                                             "text": "知识库存放团队沉淀的经验与方案，供所有 Agent 检索引用；Agent 也可通过 POST /api/knowledge 直接写入。",
                                                             "vis": false
@@ -279,9 +291,9 @@
                                                             "class": "QPushButton",
                                                             "en": true,
                                                             "geom": [
-                                                                0,
-                                                                0,
-                                                                100,
+                                                                10,
+                                                                23,
+                                                                80,
                                                                 30
                                                             ],
                                                             "name": "primary",
@@ -289,6 +301,7 @@
                                                             "vis": false
                                                         }
                                                     ],
+                                                    "name": "__self50",
                                                     "vis": false
                                                 },
                                                 {
@@ -297,8 +310,8 @@
                                                     "geom": [
                                                         0,
                                                         0,
-                                                        988,
-                                                        639
+                                                        520,
+                                                        615
                                                     ],
                                                     "kids": [
                                                         {
@@ -307,8 +320,8 @@
                                                             "geom": [
                                                                 9,
                                                                 9,
-                                                                970,
-                                                                621
+                                                                502,
+                                                                597
                                                             ],
                                                             "name": "qt_scrollarea_viewport",
                                                             "vis": true
@@ -320,7 +333,7 @@
                                                                 0,
                                                                 0,
                                                                 100,
-                                                                30
+                                                                10
                                                             ],
                                                             "kids": [
                                                                 {
@@ -330,7 +343,7 @@
                                                                         0,
                                                                         0,
                                                                         100,
-                                                                        30
+                                                                        10
                                                                     ],
                                                                     "vis": false
                                                                 }
@@ -344,7 +357,7 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                100,
+                                                                10,
                                                                 30
                                                             ],
                                                             "kids": [
@@ -354,7 +367,7 @@
                                                                     "geom": [
                                                                         0,
                                                                         0,
-                                                                        100,
+                                                                        10,
                                                                         30
                                                                     ],
                                                                     "vis": false
@@ -374,9 +387,9 @@
                                             "en": true,
                                             "geom": [
                                                 9,
-                                                675,
-                                                883,
-                                                32
+                                                654,
+                                                415,
+                                                35
                                             ],
                                             "kids": [
                                                 {
@@ -388,119 +401,20 @@
                                                         100,
                                                         30
                                                     ],
-                                                    "kids": [
-                                                        {
-                                                            "class": "QComboBoxListView",
-                                                            "en": true,
-                                                            "geom": [
-                                                                0,
-                                                                0,
-                                                                640,
-                                                                480
-                                                            ],
-                                                            "kids": [
-                                                                {
-                                                                    "class": "QWidget",
-                                                                    "en": true,
-                                                                    "geom": [
-                                                                        5,
-                                                                        5,
-                                                                        630,
-                                                                        470
-                                                                    ],
-                                                                    "name": "qt_scrollarea_viewport",
-                                                                    "vis": false
-                                                                },
-                                                                {
-                                                                    "class": "QWidget",
-                                                                    "en": true,
-                                                                    "geom": [
-                                                                        0,
-                                                                        0,
-                                                                        100,
-                                                                        30
-                                                                    ],
-                                                                    "kids": [
-                                                                        {
-                                                                            "class": "QScrollBar",
-                                                                            "en": true,
-                                                                            "geom": [
-                                                                                0,
-                                                                                0,
-                                                                                100,
-                                                                                30
-                                                                            ],
-                                                                            "vis": false
-                                                                        }
-                                                                    ],
-                                                                    "name": "qt_scrollarea_hcontainer",
-                                                                    "vis": false
-                                                                },
-                                                                {
-                                                                    "class": "QWidget",
-                                                                    "en": true,
-                                                                    "geom": [
-                                                                        0,
-                                                                        0,
-                                                                        100,
-                                                                        30
-                                                                    ],
-                                                                    "kids": [
-                                                                        {
-                                                                            "class": "QScrollBar",
-                                                                            "en": true,
-                                                                            "geom": [
-                                                                                0,
-                                                                                0,
-                                                                                100,
-                                                                                30
-                                                                            ],
-                                                                            "vis": false
-                                                                        }
-                                                                    ],
-                                                                    "name": "qt_scrollarea_vcontainer",
-                                                                    "vis": false
-                                                                }
-                                                            ],
-                                                            "vis": false
-                                                        },
-                                                        {
-                                                            "class": "QComboBoxPrivateScroller",
-                                                            "en": true,
-                                                            "geom": [
-                                                                0,
-                                                                0,
-                                                                100,
-                                                                30
-                                                            ],
-                                                            "vis": false
-                                                        },
-                                                        {
-                                                            "class": "QComboBoxPrivateScroller",
-                                                            "en": true,
-                                                            "geom": [
-                                                                0,
-                                                                0,
-                                                                100,
-                                                                30
-                                                            ],
-                                                            "vis": false
-                                                        }
-                                                    ],
                                                     "vis": false
                                                 }
                                             ],
-                                            "text": "v1 — cursor (11-01 08:00)",
+                                            "text": "v1 — cursor (<rel>)",
                                             "vis": true
                                         },
                                         {
                                             "class": "QPushButton",
                                             "en": true,
                                             "geom": [
-                                                898,
-                                                675,
+                                                430,
+                                                654,
                                                 99,
-                                                31
+                                                36
                                             ],
                                             "text": "追加新版本",
                                             "vis": true
@@ -515,8 +429,8 @@
                                     "geom": [
                                         0,
                                         0,
-                                        213,
-                                        716
+                                        681,
+                                        699
                                     ],
                                     "kids": [
                                         {
@@ -524,9 +438,9 @@
                                             "en": true,
                                             "geom": [
                                                 9,
-                                                47,
-                                                195,
-                                                650
+                                                52,
+                                                663,
+                                                638
                                             ],
                                             "name": "qt_scrollarea_viewport",
                                             "vis": true
@@ -537,7 +451,7 @@
                                             "geom": [
                                                 0,
                                                 0,
-                                                100,
+                                                10,
                                                 30
                                             ],
                                             "kids": [
@@ -547,7 +461,7 @@
                                                     "geom": [
                                                         0,
                                                         0,
-                                                        100,
+                                                        10,
                                                         30
                                                     ],
                                                     "vis": false
@@ -561,9 +475,9 @@
                                             "en": true,
                                             "geom": [
                                                 9,
-                                                47,
+                                                52,
                                                 0,
-                                                650
+                                                638
                                             ],
                                             "kids": [
                                                 {
@@ -573,7 +487,7 @@
                                                         0,
                                                         0,
                                                         0,
-                                                        650
+                                                        638
                                                     ],
                                                     "name": "qt_scrollarea_viewport",
                                                     "vis": false
@@ -585,7 +499,7 @@
                                                         0,
                                                         0,
                                                         100,
-                                                        30
+                                                        10
                                                     ],
                                                     "kids": [
                                                         {
@@ -595,7 +509,7 @@
                                                                 0,
                                                                 0,
                                                                 100,
-                                                                30
+                                                                10
                                                             ],
                                                             "vis": false
                                                         }
@@ -609,7 +523,7 @@
                                                     "geom": [
                                                         0,
                                                         0,
-                                                        100,
+                                                        10,
                                                         30
                                                     ],
                                                     "kids": [
@@ -619,7 +533,7 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                100,
+                                                                10,
                                                                 30
                                                             ],
                                                             "vis": false
@@ -637,8 +551,8 @@
                                             "geom": [
                                                 9,
                                                 9,
-                                                195,
-                                                38
+                                                663,
+                                                43
                                             ],
                                             "kids": [
                                                 {
@@ -647,8 +561,8 @@
                                                     "geom": [
                                                         0,
                                                         0,
-                                                        195,
-                                                        38
+                                                        663,
+                                                        43
                                                     ],
                                                     "name": "qt_scrollarea_viewport",
                                                     "vis": true
@@ -660,7 +574,7 @@
                                                         0,
                                                         0,
                                                         100,
-                                                        30
+                                                        10
                                                     ],
                                                     "kids": [
                                                         {
@@ -670,7 +584,7 @@
                                                                 0,
                                                                 0,
                                                                 100,
-                                                                30
+                                                                10
                                                             ],
                                                             "vis": false
                                                         }
@@ -684,7 +598,7 @@
                                                     "geom": [
                                                         0,
                                                         0,
-                                                        100,
+                                                        10,
                                                         30
                                                     ],
                                                     "kids": [
@@ -694,7 +608,7 @@
                                                             "geom": [
                                                                 0,
                                                                 0,
-                                                                100,
+                                                                10,
                                                                 30
                                                             ],
                                                             "vis": false
@@ -713,7 +627,7 @@
                                                 1,
                                                 1,
                                                 0,
-                                                38
+                                                42
                                             ],
                                             "vis": false
                                         },
@@ -722,8 +636,8 @@
                                             "en": true,
                                             "geom": [
                                                 9,
-                                                697,
-                                                195,
+                                                680,
+                                                693,
                                                 10
                                             ],
                                             "kids": [
@@ -733,14 +647,14 @@
                                                     "geom": [
                                                         0,
                                                         0,
-                                                        195,
+                                                        693,
                                                         10
                                                     ],
-                                                    "vis": true
+                                                    "vis": false
                                                 }
                                             ],
                                             "name": "qt_scrollarea_hcontainer",
-                                            "vis": true
+                                            "vis": false
                                         }
                                     ],
                                     "rows": 5,
@@ -762,10 +676,10 @@
                                     "class": "QSplitterHandle",
                                     "en": true,
                                     "geom": [
-                                        210,
+                                        678,
                                         0,
                                         5,
-                                        716
+                                        699
                                     ],
                                     "name": "qt_splithandle_",
                                     "vis": true
@@ -777,18 +691,18 @@
                             "class": "QLineEdit",
                             "en": true,
                             "geom": [
-                                1064,
-                                122,
-                                170,
-                                32
+                                1102,
+                                134,
+                                132,
+                                35
                             ],
                             "kids": [
                                 {
                                     "class": "QLineEditIconButton",
                                     "en": true,
                                     "geom": [
-                                        144,
-                                        7,
+                                        106,
+                                        8,
                                         22,
                                         18
                                     ],
@@ -810,7 +724,7 @@
             "en": true,
             "geom": [
                 0,
-                888,
+                886,
                 1240,
                 10
             ],
@@ -837,7 +751,7 @@
                 1240,
                 0,
                 10,
-                888
+                886
             ],
             "kids": [
                 {
@@ -847,7 +761,7 @@
                         0,
                         0,
                         10,
-                        888
+                        886
                     ],
                     "vis": false
                 }

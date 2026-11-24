@@ -137,21 +137,43 @@ jobs:
             throw "GUI self-test failed - onboarding / health banner / key rotation regressed"
           }
 
-      # UI/UX 评测 harness（LLM eval 式）：46 场景结构快照 vs 入库基线（硬段：
-      # 文本/结构/可见性，跨机稳定；几何软段仅本地）+ 不变量规则 + 快捷键矩阵。
-      # 像素金样本机限定，CI 不跑。基线随功能改动 --update-baseline 后入库 review。
+      # UI/UX 评测 harness（LLM eval 式）：结构快照 + Tab 焦点链 vs 入库基线 + 不变量规则
+      # + 状态保持探测。金样像素是本机信号，CI 不比。基线随功能改动 --update-baseline 后入库 review。
+      # 输出落 build/ui_harness/（快照、截图、HTML 报告），下一步上传为产物：报差异时
+      # 要看得到差在哪（此前 CI 上有 30 处差异却没有任何可查的产物）。
       - name: UI harness baseline check (offscreen)
         shell: pwsh
-        continue-on-error: true   # 首期观察跑稳定性，转必过后移除
+        # 观察期：基线重录后先确认 CI runner 上也逐字一致，再去掉这一行转为必过。
+        # 即便在观察期，步骤结论也如实记为失败（exit 非零），并贴出汇总行——
+        # 此前只 Write-Host 一句警告，27 处差异照样显示 success
+        continue-on-error: true
         env:
           MIDERHIVE_HOME: ${{ runner.temp }}\miderhive_uiharness
           QT_QPA_PLATFORM: offscreen
         run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)  # harness 输出 UTF-8
           $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
-          build\src\gui\Release\ui_harness.exe
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "##vso[task.logissue type=warning]UI harness detected diffs vs baseline (review tests/baseline/)"
+          New-Item -ItemType Directory -Force -Path build\ui_harness | Out-Null
+          build\src\gui\Release\ui_harness.exe 2>&1 | Tee-Object -FilePath build\ui_harness\console.log
+          $code = $LASTEXITCODE
+          $summary = Select-String -Path build\ui_harness\console.log -Pattern '==== ui_harness' | Select-Object -Last 1
+          $text = if ($summary) { $summary.Line } else { 'no summary line' }
+          if ($code -ne 0) {
+            Write-Host "##vso[task.logissue type=error]UI harness FAILED (exit $code): $text"
+            Write-Host "##vso[task.logissue type=error]See the 'ui-harness' artifact (snapshots, report, console.log) for what differs."
+          } else {
+            Write-Host "##vso[task.logissue type=notice]UI harness passed: $text"
           }
+          exit $code
+
+      - name: Upload UI harness snapshots and report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ui-harness
+          path: build/ui_harness/
+          if-no-files-found: warn
+          retention-days: 14
 
       # 同一条主线的后端口径：预配身份、心跳上线、欢迎记忆、密钥缓存丢失诊断、轮换后旧钥立即失效
       - name: Onboarding and key-rotation self-test
