@@ -6,14 +6,23 @@
   Refreshed every time work lands, so there is always one up-to-date executable
   to run and to debug. Uses the everyday dev build tree (no clean rebuild):
     1. build the four shipped targets (skippable with -SkipBuild)
-    2. refuse if a program is still running from the output folder
-    3. cmake --install into dist.new (windeployqt puts the Qt runtime next to the exe)
-    4. assert the folder is runnable; copy PDBs when the configuration produced any
-    5. write BUILD_INFO.txt (version, commit, uncommitted-changes flag, deploy time)
-    6. swap dist.new -> dist
-    7. smoke test: start the deployed exe offscreen on a scratch data directory and
+    2. install into dist.new (windeployqt puts the Qt runtime next to the exe)
+    3. assert the folder is runnable; copy PDBs when the configuration produced any
+    4. write BUILD_INFO.txt (version, commit, uncommitted-changes flag, deploy time)
+    5. update dist from dist.new
+    6. smoke test: start the deployed exe offscreen on a scratch data directory and
        a free port, read the version back from /api/health, stop it
   Releases still go through scripts\package.ps1 (clean build, MSI, ZIP, checksums).
+
+  Step 5 when nothing runs from the output folder replaces the folder whole. When a
+  program does run from it, the deploy still goes ahead: Windows refuses to overwrite
+  a running exe or a loaded DLL but allows renaming it, so every locked file of the old
+  build is moved into dist\_previous-build-xxxxxxxx and the new one takes its path. The
+  running instance is not disturbed and keeps the previous build; the next launch gets
+  the new one. A side folder that nothing uses any more is deleted by a later deploy.
+  A file some other program holds open (a debugger on a PDB, a scanner) cannot be
+  replaced at all; it is left as it is and listed as NOT updated in the output and in
+  BUILD_INFO.txt.
 
   The default configuration is RelWithDebInfo: the same optimisations as Release
   (/O2) plus debug symbols, so breakpoints in this code base work in a debugger
@@ -82,15 +91,18 @@ foreach ($name in $programs.Keys) {
     }
 }
 
-# The swap below deletes the old folder. That cannot work while an exe or DLL in it
-# is loaded, and silently leaving a half-old build behind would be worse than stopping.
+# Programs running from the output folder do not stop the deploy (see the header), but
+# they decide how dist is updated below, so they are listed here.
 $running = @(Get-CimInstance Win32_Process | Where-Object {
     $_.ExecutablePath -and $programs.Contains($_.Name) -and
     $_.ExecutablePath.StartsWith($outAbs + $dirSep, [System.StringComparison]::OrdinalIgnoreCase)
 })
+$runningNote = ""
+$stuckNote = ""
 if ($running.Count -gt 0) {
     $list = ($running | ForEach-Object { "$($_.Name) (PID $($_.ProcessId))" }) -join ", "
-    throw "$list is still running from $OutDir. Close it first (tray icon -> quit), then run this script again. Nothing was changed."
+    Write-Host "note: $list is running from $OutDir. The files it uses will be moved into a _previous-build-* side folder; it keeps running the previous build until it is restarted." -ForegroundColor Yellow
+    $runningNote = "deployed while $list was running from this folder: it keeps the previous build until restarted (its files were kept in a _previous-build-* side folder)"
 }
 
 Step "install into $OutDir.new"
@@ -172,9 +184,117 @@ try {
     Write-Host "warning: could not read git state ($($_.Exception.Message))"
 }
 
-Step "swap $OutDir.new -> $OutDir"
-if (Test-Path $outAbs) { Remove-Item -Recurse -Force $outAbs }
-Rename-Item -Path $newAbs -NewName (Split-Path -Leaf $outAbs)
+Step "update $OutDir from $OutDir.new"
+$replaced = $false
+if (-not (Test-Path -LiteralPath $outAbs)) {
+    Rename-Item -LiteralPath $newAbs -NewName (Split-Path -Leaf $outAbs)
+    $replaced = $true
+} elseif ($running.Count -eq 0) {
+    # Nothing of ours runs from it: replace the folder whole, stale files included. Something
+    # else may still hold a file open (a debugger, a scanner); then fall through to the
+    # file-by-file update below, which restores whatever the failed removal already took.
+    try {
+        Remove-Item -LiteralPath $outAbs -Recurse -Force -ErrorAction Stop
+        Rename-Item -LiteralPath $newAbs -NewName (Split-Path -Leaf $outAbs) -ErrorAction Stop
+        $replaced = $true
+    } catch {
+        Write-Host "note: could not replace $OutDir as a whole ($($_.Exception.Message)); updating it file by file." -ForegroundColor Yellow
+    }
+}
+if (-not $replaced) {
+    if (-not (Test-Path -LiteralPath $outAbs)) {
+        # A failed whole-folder replacement above may already have removed it
+        New-Item -ItemType Directory -Force -Path $outAbs | Out-Null
+    }
+    # In use. Windows refuses to overwrite a running exe or a loaded DLL, but it does
+    # allow renaming it: every locked file of the old build is moved into a side folder
+    # first, then the new one goes to the original path. The running instance keeps its
+    # (moved) files and is not disturbed; the next launch gets the new build.
+    $tag = [guid]::NewGuid().ToString("N").Substring(0, 8)
+    # Side folders of earlier deploys. Whatever nothing uses any more goes now; a file that
+    # is still in use stays (and so does its folder).
+    Get-ChildItem -LiteralPath $outAbs -Directory |
+        Where-Object { $_.Name -match "^_previous-build-[0-9a-f]{8}$" } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    $aside = Join-Path $outAbs ("_previous-build-" + $tag)
+    $incoming = @(Get-ChildItem -LiteralPath $newAbs -Recurse -File)
+    # 1) Which of them are in use: an exclusive-open probe fails while an exe or DLL is mapped.
+    $locked = @()
+    foreach ($f in $incoming) {
+        $dest = Join-Path $outAbs $f.FullName.Substring($newAbs.Length + 1)
+        if (-not (Test-Path -LiteralPath $dest)) { continue }
+        $probe = $null
+        try { $probe = [System.IO.File]::Open($dest, "Open", "ReadWrite", "None") }
+        catch { $locked += $f.FullName.Substring($newAbs.Length + 1) }
+        finally { if ($probe) { $probe.Close() } }
+    }
+    # 2) Move those aside, one file at a time. The files of a running program can always be
+    #    moved. One held by something else (a debugger on a PDB, a scanner) may not be: it is
+    #    left where it is and reported below, and the rest of the build is still updated.
+    $moved = @()
+    $stuck = @()
+    foreach ($rel in $locked) {
+        $target = Join-Path $aside $rel
+        $targetDir = Split-Path -Parent $target
+        if (-not (Test-Path -LiteralPath $targetDir)) {
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        }
+        try {
+            Move-Item -LiteralPath (Join-Path $outAbs $rel) -Destination $target -ErrorAction Stop
+            $moved += $rel
+        } catch {
+            $stuck += $rel
+        }
+    }
+    if ($moved.Count -eq 0) {
+        Remove-Item -LiteralPath $aside -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # 3) Put the new build in place, executables last.
+    $ordered = @($incoming | Sort-Object @{ Expression = { if ($_.Extension -eq ".exe") { 1 } else { 0 } } }, FullName)
+    foreach ($f in $ordered) {
+        $rel = $f.FullName.Substring($newAbs.Length + 1)
+        if ($stuck -contains $rel) { continue }   # still held open: cannot be replaced this time
+        $dest = Join-Path $outAbs $rel
+        $destDir = Split-Path -Parent $dest
+        if (-not (Test-Path -LiteralPath $destDir)) {
+            # A plugin folder the previous build did not have
+            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+        }
+        $placed = $false
+        foreach ($attempt in 1..6) {
+            try {
+                Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
+                $placed = $true
+                break
+            } catch {
+                Start-Sleep -Milliseconds 400   # real-time scanners hold fresh files for a moment
+            }
+        }
+        if (-not $placed) {
+            throw "could not place $rel in $OutDir. The folder now holds a mix of the old and the new build: close every program running from it and run this script again."
+        }
+    }
+    # 4) Files of the old build that the new one does not have. Ones still in use stay.
+    Get-ChildItem -LiteralPath $outAbs -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring($outAbs.Length + 1)
+        if ($rel -notmatch "^_previous-build-" -and -not (Test-Path -LiteralPath (Join-Path $newAbs $rel))) {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Remove-Item -Recurse -Force $newAbs
+    if ($moved.Count -gt 0) {
+        Write-Host ("  {0} file(s) in use were moved to {1}" -f $moved.Count, (Split-Path -Leaf $aside)) -ForegroundColor Yellow
+    } else {
+        Write-Host "  no file had to be moved aside" -ForegroundColor Yellow
+    }
+    if ($stuck.Count -gt 0) {
+        # Honest about what is not new: the smoke test below starts the exe, but a stale
+        # file is still a stale file.
+        $stuckList = $stuck -join ", "
+        Write-Host "warning: not updated, held open by another program: $stuckList" -ForegroundColor Yellow
+        $stuckNote = "NOT updated, another program holds them open: $stuckList"
+    }
+}
 
 # Each line is one complete string. Do not write "text" + (expr) inside the array
 # literal: PowerShell binds the comma before the plus sign, so the rest of the
@@ -188,6 +308,10 @@ $info = @(
     "config  : $Configuration, built from $BuildDir"
     "symbols : $symbolStatus"
     "deployed: $stamp"
+)
+if ($runningNote) { $info += "note    : $runningNote" }
+if ($stuckNote) { $info += "note    : $stuckNote" }
+$info += @(
     ""
     "Run"
     "  miderhive.exe  - double-click, or run it from a terminal. It uses the normal data"

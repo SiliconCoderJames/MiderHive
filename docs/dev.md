@@ -144,4 +144,4 @@ harness 是 CI 的必过项，有意的界面改动会让它变红。这是设�
 
 ## 4. 更新 `dist`
 
-每次有新进展，`dist` 都会被重新部署：`powershell -ExecutionPolicy Bypass -File scripts\deploy_dev.ps1`（先编译再部署；加 `-SkipBuild` 只部署）。如果 `dist\miderhive.exe` 正在运行，脚本会拒绝覆盖——先从托盘退出。
+每次有新进展，`dist` 都会被重新部署：`powershell -ExecutionPolicy Bypass -File scripts\deploy_dev.ps1`（先编译再部署；加 `-SkipBuild` 只部署）。`dist\miderhive.exe` 开着也能部署：Windows 不让覆盖运行中的 exe 和已加载的 DLL，但允许改名，脚本会把正被占用的旧文件挪进 `dist\_previous-build-xxxxxxxx\`，新文件放到原位。开着的那个实例不受影响、继续跑旧构建，**重启它才是新构建**（`dist\BUILD_INFO.txt` 里会写明）。没人再占用的 `_previous-build-*` 文件夹会在下次部署时自动删除。

@@ -185,6 +185,15 @@ structure, not layout, and knew nothing about hit testing, number formats or dis
   plus debug symbols, so the copy in `dist\` can be run and attached to a debugger. It used to
   deploy Release, which carries no PDBs. The result of the symbol check and short run/debug
   instructions are written into `dist\BUILD_INFO.txt`.
+- `scripts/deploy_dev.ps1` also deploys while `dist\miderhive.exe` is running. It used to refuse
+  and leave the old build in place until the program was closed. Files in use are moved into
+  `dist\_previous-build-xxxxxxxx` (Windows allows renaming a running exe or a loaded DLL, not
+  overwriting it), so the running instance keeps the previous build undisturbed and the next
+  launch gets the new one. A side folder that nothing uses any more is deleted by a later
+  deploy. A file that some other program holds open (a debugger on a PDB, a scanner) is left as
+  it is and listed as NOT updated in the output and in `BUILD_INFO.txt`; when nothing of ours
+  runs from `dist`, the folder is still replaced whole. All four paths were run against a
+  scratch output folder, and the in-use path against the real `dist` with the workbench open.
 - Baselines in `tests/baseline/` were re-recorded. The previous ones recorded what was installed
   on the machine they were made on (nine tools), local-time timestamps and stale panel content;
   they could never match another machine.
