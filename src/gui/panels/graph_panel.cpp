@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <random>
 #include <thread>
 
 #include <QCheckBox>
@@ -103,6 +104,7 @@ public:
     void relayout() {
         // 重新布局：位置全部重掷 + 重启物理 + 视口复位（审计 L4：用户平移很远
         // 后点重布局，节点落在视口外会看似按钮失效）
+        rng_.seed(std::random_device{}());  // 每次点都是一份新布局
         for (auto& n : nodes_) {
             const double ang = rand01() * 6.2832;
             n.x = 300 + 200 * std::cos(ang);
@@ -119,6 +121,17 @@ public:
     int nodeCount() const { return static_cast<int>(nodes_.size()); }
     int edgeCount() const { return static_cast<int>(edges_.size()); }
     bool running() const { return running_; }
+
+    // 同步把物理跑到它自己的停止条件。给测试用：UI harness 要的是可复现的最终布局，
+    // 不能取决于拍摄前定时器恰好跑了多少帧（阻尼较弱，5 个节点也要跑几秒才停——
+    // 两次运行因此差 1% 的像素）。有上限，万一不振荡收敛也不至于卡死。
+    void settle(int maxTicks = 50000) {
+        int n = 0;
+        while (running_ && n < maxTicks) {
+            tick();
+            ++n;
+        }
+    }
 
 protected:
     // 单帧物理：斥力 O(n²)（n≤300 安全）+ 边弹簧 + 轻向心力，阻尼 0.85
@@ -171,7 +184,10 @@ protected:
         }
     }
 
-    double rand01() { return static_cast<double>(std::rand()) / RAND_MAX; }
+    // 画布自己的随机源，固定种子：初始摆放只取决于数据与操作顺序，同一份数据每次
+    // 打开图谱的布局都一样（位置有记忆可循）。原先用全局 std::rand()——第三方库内部
+    // 也会消耗同一个全局状态，初始抖动随运行而变
+    double rand01() { return std::uniform_real_distribution<double>(0.0, 1.0)(rng_); }
 
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
@@ -311,6 +327,7 @@ private:
     QTimer* simTimer_ = nullptr;
     bool running_ = false;
     int settled_ = 0;
+    std::mt19937 rng_{0x9E3779B9u};  // 初始摆放的随机源（固定种子；relayout 时重新播种）
     double scale_ = 1.0;
     double panX_ = 0, panY_ = 0;
     bool panning_ = false;
@@ -433,6 +450,10 @@ QString GraphPanel::digestHintText() {
         "滚轮缩放 · 拖拽平移 · 点击节点看详情 · 拖动节点可固定位置。",
         "Nodes = latest entries (size = degree, color = category); edges = vector similarity. "
         "Wheel to zoom · drag to pan · click a node for details · drag a node to pin it.");
+}
+
+void GraphPanel::settleLayout() {
+    static_cast<GraphCanvas*>(graphView_)->settle();
 }
 
 void GraphPanel::refresh() {

@@ -73,4 +73,7 @@ private:
     QTableWidget* agentTable_ = nullptr;
     QStackedWidget* tableStack_ = nullptr;
     ui::InlineEmpty* tableEmpty_ = nullptr;
+    // 上一次填进明细表的内容签名：没变就不重建（否则每 3s 刷新都让选中行跳走、
+    // 用户点表头选的排序被重置）
+    QString lastTableSig_;
 };

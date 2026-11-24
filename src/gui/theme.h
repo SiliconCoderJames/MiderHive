@@ -153,7 +153,9 @@ inline QColor usageColor(double ratio) {
 }
 
 // ---- 样式串主题化 ----
-// 1) @token@ → 当前主题色（selbg/okbg/errbg 等派生色自动计算，@mono@ → 等宽字体族）
+// 1) @token@ → 当前主题色（selbg/okbg/errbg/warnbg 等派生色自动计算，@mono@ → 等宽字体族）。
+//    这里没有的标记会原样留在样式表里，Qt 随即整条解析失败（控件失去样式）——新增
+//    派生色必须加进这张表；UI harness 有规则检查残留的 @token@
 // 2) font-size:Npx → 按当前基准字号等比缩放（字体大小可调）
 inline QString th(QString s) {
     const Theme& t = theme();
@@ -188,6 +190,13 @@ inline QString th(QString s) {
                        .arg(t.danger.red())
                        .arg(t.danger.green())
                        .arg(t.danger.blue())},
+        // 总览页的接入提示条用的是 @warnbg@，这张表里原先没有它：占位符原样留在样式
+        // 表里，整条样式表解析失败——提示条没有底色，里面的「一键接入」按钮成了一块
+        // 看不见文字的黑块（UI harness 的 qss-unsubstituted-token 规则抓到的）
+        {"warnbg", QString("rgba(%1,%2,%3,50)")
+                        .arg(t.warn.red())
+                        .arg(t.warn.green())
+                        .arg(t.warn.blue())},
     };
     for (const auto& kv : map) s.replace(QString("@%1@").arg(kv.first), kv.second);
 

@@ -27,4 +27,7 @@ private:
     QPushButton* refreshBtn_ = nullptr;  // 工具条「筛选」
     QTreeWidget* tree_ = nullptr;
     std::vector<ah::AuditRecord> records_;
+    // 上一次重建时间线的内容签名：没变就不重建（否则每 3s 刷新都清掉滚动位置、
+    // 选中行，并把用户折叠的日期分组重新展开）
+    QString lastSig_;
 };

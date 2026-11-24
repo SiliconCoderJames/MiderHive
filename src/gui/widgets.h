@@ -41,6 +41,21 @@
 
 namespace ui {
 
+// 只作用于控件自身的样式表。不带选择器的声明（如 "background:transparent;"）会被 Qt
+// 作用于本控件**及其全部子孙**，而且祖先样式表压过全局样式表——容器里的按钮、输入框
+// 会因此丢掉全局样式：空状态的主按钮只剩一行文字，告警横幅里的按钮丢了底色。
+// 容器一律走这里；没有 objectName 的控件自动分配一个。
+// （UI harness 规则 qss-rule-leaks-to-controls 检查这一类写法。）
+inline void setSelfStyleSheet(QWidget* w, const QString& declarations) {
+    QString name = w->objectName();
+    if (name.isEmpty()) {
+        static int serial = 0;
+        name = QStringLiteral("__self%1").arg(++serial);
+        w->setObjectName(name);
+    }
+    w->setStyleSheet(QStringLiteral("#%1 { %2 }").arg(name, declarations));
+}
+
 // 卡片悬停高亮：进入边框变强调色（AgentCard / 通用 QFrame 卡片）
 inline void hoverGlow(QFrame* frame, const char* objectName) {
     frame->setAttribute(Qt::WA_Hover);
@@ -250,7 +265,9 @@ public:
     InlineEmpty(const QString& iconKind, const QString& title, const QString& hint,
                 QWidget* parent = nullptr)
         : QFrame(parent) {
-        setStyleSheet("background:transparent; border:none;");
+        // 只作用于自身：这里原先是不带选择器的 "background:transparent; border:none;"，
+        // 会沿树波及 setAction() 放进来的主按钮——「＋ 新建条目」只剩一行文字
+        setSelfStyleSheet(this, QStringLiteral("background:transparent; border:none;"));
         auto* lay = new QVBoxLayout(this);
         lay->setContentsMargins(10, 14, 10, 14);
         lay->setSpacing(6);
@@ -616,6 +633,10 @@ public:
         update();
     }
     void setEntries(const QVector<QPair<QString, qint64>>& entries) {
+        // 内容没变就不重设：否则每次轮询刷新都把条形从 0 重新扫掠一遍，卡片一直在抖。
+        // 调用方（总览、用量面板）各有各的刷新节奏，这道判断放在控件自己身上最稳
+        // （UI harness 的像素金样：同一场景两次拍摄，一次满长、一次刚起步）
+        if (entries == entries_) return;
         entries_ = entries;
         if (anim_) anim_->stop();
         auto* anim = new QVariantAnimation(this);
@@ -848,6 +869,10 @@ public:
         update();
     }
     void setEntries(const QVector<QPair<QString, qint64>>& entries) {
+        // 内容没变就不重设：否则每次轮询刷新都把条形从 0 重新扫掠一遍，卡片一直在抖。
+        // 调用方（总览、用量面板）各有各的刷新节奏，这道判断放在控件自己身上最稳
+        // （UI harness 的像素金样：同一场景两次拍摄，一次满长、一次刚起步）
+        if (entries == entries_) return;
         entries_ = entries;
         if (anim_) anim_->stop();
         auto* anim = new QVariantAnimation(this);

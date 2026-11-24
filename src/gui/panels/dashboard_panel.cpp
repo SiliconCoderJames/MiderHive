@@ -26,8 +26,10 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
                 "Budget, agent status, event stream and alerts at a glance");
 
     // ---- 健康横幅（防呆）：紧跟页头，出问题时用户第一眼就能看到修复入口 ----
+    // 两个容器都只用"作用于自身"的样式表：不带选择器的声明会沿树波及横幅里的按钮，
+    // 把它们的全局样式（底色、主按钮渐变）冲掉
     healthBox_ = new QWidget(this);
-    healthBox_->setStyleSheet("background:transparent;");
+    ui::setSelfStyleSheet(healthBox_, QStringLiteral("background:transparent;"));
     healthLay_ = new QVBoxLayout(healthBox_);
     healthLay_->setContentsMargins(0, 0, 0, 0);
     healthLay_->setSpacing(6);
@@ -36,7 +38,7 @@ DashboardPanel::DashboardPanel(ah::Platform& platform, QWidget* parent)
 
     // ---- 接入提示条：检测到"已装未接入"的工具时出现（一键批量接入）----
     onboardBox_ = new QWidget(this);
-    onboardBox_->setStyleSheet("background:transparent;");
+    ui::setSelfStyleSheet(onboardBox_, QStringLiteral("background:transparent;"));
     onboardLay_ = new QVBoxLayout(onboardBox_);
     onboardLay_->setContentsMargins(0, 0, 0, 0);
     onboardLay_->setSpacing(6);
@@ -305,8 +307,10 @@ void DashboardPanel::refreshOnboardBanner() {
     }
 
     auto* row = new QWidget(onboardBox_);
-    row->setStyleSheet(
-        ui::th("QWidget { background:@warnbg@; border:1px solid @warn@; border-radius:8px; }"));
+    // 只作用于横幅自身。原先写的是 "QWidget { … }"：它同样命中横幅里的文字标签和
+    // 「一键接入」按钮——标签被套上一层同款边框（框里套框），主按钮丢了渐变底
+    ui::setSelfStyleSheet(
+        row, ui::th("background:@warnbg@; border:1px solid @warn@; border-radius:8px;"));
     auto* rl = new QHBoxLayout(row);
     rl->setContentsMargins(12, 8, 12, 8);
     auto* text = new QLabel(
@@ -603,12 +607,15 @@ void DashboardPanel::refresh() {
         budgetAlertLevel_ = QString::fromStdString(sum.alert_level);
 
         QVector<QPair<QString, qint64>> bars;
-        lastAgentBars_.clear();
-        for (const auto& [name, tokens] : sum.per_agent) {
+        for (const auto& [name, tokens] : sum.per_agent)
             bars.append({QString::fromStdString(name), tokens});
-            lastAgentBars_.append({QString::fromStdString(name), tokens});
+        // 内容变化才重绘（与下面的趋势图、模型图同一纪律）。少了这道判断时，每次轮询
+        // 刷新都会让条形从 0 重新扫掠一遍——用量卡一直在抖（UI harness 的像素金样：
+        // 同一场景两次拍摄，一次满长、一次刚起步）
+        if (bars != lastAgentBars_) {
+            lastAgentBars_ = bars;
+            usageChart_->setEntries(bars);
         }
-        usageChart_->setEntries(bars);
 
         // 预算卡右侧数字列：已用 / 剩余 / 占比 三行等宽数字（原来只有环内一行，信息量太低）。
         // 口径随模式切换；豁免量在 tooltip 里如实带出

@@ -19,6 +19,9 @@ public:
     explicit GraphPanel(ah::Platform& platform, QWidget* parent = nullptr);
     void refresh() override;
     void retranslate() override;
+    // 把力导向布局同步跑到稳定（测试用：UI harness 拍摄前调用，拿到可复现的最终布局；
+    // 用户的实时动画不受影响——它照旧由定时器逐帧驱动）
+    void settleLayout();
 
 private:
     void showNodeDetail(const QString& uuid);

@@ -4,6 +4,9 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QPushButton>
+#include <QScrollBar>
+#include <QSet>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
 #include "../gui_util.h"
@@ -132,7 +135,30 @@ void LogsPanel::refresh() {
         return;
     }
 
-    // 时间线分组
+    // 时间线分组。每 3 秒轮询都会走到这里：内容没变就不重建——滚动位置、选中行、
+    // 用户折叠的日期分组原样保留。内容变了才重建，并把这三样按原样还原；否则用户
+    // 正往下翻日志，一刷新就被拽回顶部（UI harness 的状态保持探测）
+    QString sig;
+    for (const auto& r : records_)
+        sig += QString::fromStdString(r.created_at) + "|" + QString::fromStdString(r.actor) +
+               "|" + QString::fromStdString(r.action) + "|" + QString::fromStdString(r.target) +
+               "|" + QString::fromStdString(r.detail) + "\n";
+    if (sig == lastSig_) return;
+    lastSig_ = sig;
+
+    const int scrollBefore = tree_->verticalScrollBar()->value();
+    const auto rowKey = [](QTreeWidgetItem* it) {
+        QStringList key;
+        if (it)
+            for (int c = 0; c < it->columnCount(); ++c) key << it->text(c);
+        return key;
+    };
+    const QStringList currentKey = rowKey(tree_->currentItem());
+    QSet<QString> collapsedDays;
+    for (int i = 0; i < tree_->topLevelItemCount(); ++i)
+        if (!tree_->topLevelItem(i)->isExpanded())
+            collapsedDays << tree_->topLevelItem(i)->text(0);
+
     tree_->clear();
     QTreeWidgetItem* dayItem = nullptr;
     QString curDay;
@@ -165,6 +191,27 @@ void LogsPanel::refresh() {
         for (int c = 0; c < 5; ++c) row->setFlags(row->flags() & ~Qt::ItemIsEditable);
     }
     tree_->expandToDepth(0);
+    // 还原用户折叠过的日期分组
+    for (int i = 0; i < tree_->topLevelItemCount(); ++i)
+        if (collapsedDays.contains(tree_->topLevelItem(i)->text(0)))
+            tree_->topLevelItem(i)->setExpanded(false);
     applyTreeFilter(tree_, filterEdit_->text());  // 树已重建，重放即时过滤态
+    // 还原当前行（按五列文字找）与滚动位置——放在过滤之后：过滤会改变内容高度
+    if (!currentKey.isEmpty()) {
+        for (int d = 0; d < tree_->topLevelItemCount() && !tree_->currentItem(); ++d) {
+            QTreeWidgetItem* day = tree_->topLevelItem(d);
+            for (int r = -1; r < day->childCount(); ++r) {
+                QTreeWidgetItem* it = r < 0 ? day : day->child(r);
+                bool same = it->columnCount() == currentKey.size();
+                for (int c = 0; same && c < currentKey.size(); ++c)
+                    same = it->text(c) == currentKey[c];
+                if (same) {
+                    tree_->setCurrentItem(it);
+                    break;
+                }
+            }
+        }
+    }
+    tree_->verticalScrollBar()->setValue(scrollBefore);
     countLabel_->setText(i18n::trs("共 %1 条", "%1 records").arg(formatNum(static_cast<qint64>(records_.size()))));
 }

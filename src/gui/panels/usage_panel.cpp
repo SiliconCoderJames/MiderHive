@@ -9,6 +9,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
@@ -380,54 +381,87 @@ void UsagePanel::refresh() {
     modelChart_->setEntries(models);
 
     // ---- Agent 明细表：占比列按用量着色，精确值进 tooltip，数字列等宽 ----
-    agentTable_->setSortingEnabled(false);  // 填充期间禁排序，行号与数据对齐
-    const int rows = static_cast<int>(bd.per_agent.size());
-    agentTable_->setRowCount(rows);
-    // 数字列等宽：多行数字上下对齐，量级差异一眼可比（仪表盘惯例）
-    QFont monoFont = agentTable_->font();
-    monoFont.setFamily(ui::mono());
-    for (int i = 0; i < rows; ++i) {
-        const auto& r = bd.per_agent[size_t(i)];
-        const double share =
-            bd.total_tokens > 0 ? 100.0 * double(r.tokens) / double(bd.total_tokens) : 0.0;
-        auto* name = new QTableWidgetItem(QString::fromStdString(r.agent));
-        name->setToolTip(QString("%1 · in %2 / out %3")
-                             .arg(QString::fromStdString(r.agent))
-                             .arg(formatNum(r.in))
-                             .arg(formatNum(r.out)));
-        auto* inItem = new QTableWidgetItem(ui::fmtCompact(r.in));
-        inItem->setToolTip(formatNum(r.in));
-        inItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        inItem->setFont(monoFont);
-        auto* outItem = new QTableWidgetItem(ui::fmtCompact(r.out));
-        outItem->setToolTip(formatNum(r.out));
-        outItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        outItem->setFont(monoFont);
-        auto* totalItem = new QTableWidgetItem(ui::fmtCompact(r.tokens));
-        totalItem->setToolTip(formatNum(r.tokens));
-        totalItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        totalItem->setFont(monoFont);
-        auto* callsItem = new QTableWidgetItem(QString::number(r.calls));
-        callsItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        callsItem->setFont(monoFont);
-        auto* shareItem = new QTableWidgetItem(QString("%1%").arg(share, 0, 'f', 1));
-        shareItem->setForeground(ui::usageColor(share / 100.0));
-        shareItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        shareItem->setFont(monoFont);
-        // 排序按数值而非文本：把原始值藏进 data(Qt::UserRole)
-        inItem->setData(Qt::UserRole, qlonglong(r.in));
-        outItem->setData(Qt::UserRole, qlonglong(r.out));
-        totalItem->setData(Qt::UserRole, qlonglong(r.tokens));
-        callsItem->setData(Qt::UserRole, qlonglong(r.calls));
-        agentTable_->setItem(i, 0, name);
-        agentTable_->setItem(i, 1, inItem);
-        agentTable_->setItem(i, 2, outItem);
-        agentTable_->setItem(i, 3, totalItem);
-        agentTable_->setItem(i, 4, callsItem);
-        agentTable_->setItem(i, 5, shareItem);
+    // 内容没变就不重建。每次轮询都 setRowCount + 新建全部条目 + 重新排序的话：选中行
+    // 会跳到别的行、用户点表头选的排序被重置回"按合计降序"（UI harness 的状态保持
+    // 探测）。真要重建时，按 Agent 名字把选中行找回来。
+    QString tableSig;
+    for (const auto& r : bd.per_agent)
+        tableSig += QString("%1|%2|%3|%4|%5;")
+                        .arg(QString::fromStdString(r.agent))
+                        .arg(r.in)
+                        .arg(r.out)
+                        .arg(r.tokens)
+                        .arg(r.calls);
+    if (tableSig != lastTableSig_) {
+        lastTableSig_ = tableSig;
+        QStringList selectedNames;
+        for (const auto* item : agentTable_->selectedItems())
+            if (item->column() == 0) selectedNames << item->text();
+        const QString currentName =
+            agentTable_->currentItem() ? agentTable_->item(agentTable_->currentRow(), 0)->text() : QString();
+
+        agentTable_->setSortingEnabled(false);  // 填充期间禁排序，行号与数据对齐
+        const int rows = static_cast<int>(bd.per_agent.size());
+        agentTable_->setRowCount(rows);
+        // 数字列等宽：多行数字上下对齐，量级差异一眼可比（仪表盘惯例）
+        QFont monoFont = agentTable_->font();
+        monoFont.setFamily(ui::mono());
+        for (int i = 0; i < rows; ++i) {
+            const auto& r = bd.per_agent[size_t(i)];
+            const double share =
+                bd.total_tokens > 0 ? 100.0 * double(r.tokens) / double(bd.total_tokens) : 0.0;
+            auto* name = new QTableWidgetItem(QString::fromStdString(r.agent));
+            name->setToolTip(QString("%1 · in %2 / out %3")
+                                 .arg(QString::fromStdString(r.agent))
+                                 .arg(formatNum(r.in))
+                                 .arg(formatNum(r.out)));
+            auto* inItem = new QTableWidgetItem(ui::fmtCompact(r.in));
+            inItem->setToolTip(formatNum(r.in));
+            inItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            inItem->setFont(monoFont);
+            auto* outItem = new QTableWidgetItem(ui::fmtCompact(r.out));
+            outItem->setToolTip(formatNum(r.out));
+            outItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            outItem->setFont(monoFont);
+            auto* totalItem = new QTableWidgetItem(ui::fmtCompact(r.tokens));
+            totalItem->setToolTip(formatNum(r.tokens));
+            totalItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            totalItem->setFont(monoFont);
+            auto* callsItem = new QTableWidgetItem(QString::number(r.calls));
+            callsItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            callsItem->setFont(monoFont);
+            auto* shareItem = new QTableWidgetItem(QString("%1%").arg(share, 0, 'f', 1));
+            shareItem->setForeground(ui::usageColor(share / 100.0));
+            shareItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            shareItem->setFont(monoFont);
+            // 排序按数值而非文本：把原始值藏进 data(Qt::UserRole)
+            inItem->setData(Qt::UserRole, qlonglong(r.in));
+            outItem->setData(Qt::UserRole, qlonglong(r.out));
+            totalItem->setData(Qt::UserRole, qlonglong(r.tokens));
+            callsItem->setData(Qt::UserRole, qlonglong(r.calls));
+            agentTable_->setItem(i, 0, name);
+            agentTable_->setItem(i, 1, inItem);
+            agentTable_->setItem(i, 2, outItem);
+            agentTable_->setItem(i, 3, totalItem);
+            agentTable_->setItem(i, 4, callsItem);
+            agentTable_->setItem(i, 5, shareItem);
+        }
+        agentTable_->setSortingEnabled(true);
+        if (rows > 0) agentTable_->sortItems(3, Qt::DescendingOrder);  // 默认按合计降序
+
+        // 重建前的选中行按名字找回来
+        int currentRestored = -1;
+        for (int row = 0; row < agentTable_->rowCount(); ++row) {
+            const QString name = agentTable_->item(row, 0)->text();
+            if (selectedNames.contains(name)) agentTable_->selectRow(row);
+            if (name == currentName) currentRestored = row;
+        }
+        if (currentRestored >= 0)
+            agentTable_->setCurrentCell(currentRestored, 0,
+                                        selectedNames.isEmpty() ? QItemSelectionModel::NoUpdate
+                                                                : QItemSelectionModel::Current);
     }
-    agentTable_->setSortingEnabled(true);
-    if (rows > 0) agentTable_->sortItems(3, Qt::DescendingOrder);  // 默认按合计降序
+    const int rows = static_cast<int>(bd.per_agent.size());
     // 空状态：该筛选下没有数据时给"怎么放宽"的出路，而不是一张空表
     tableStack_->setCurrentWidget(rows == 0 ? static_cast<QWidget*>(tableEmpty_)
                                            : static_cast<QWidget*>(agentTable_));

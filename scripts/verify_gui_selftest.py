@@ -134,6 +134,16 @@ def main() -> int:
     env["MIDERHIVE_PORT"] = str(port)
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["QT_LOGGING_TO_CONSOLE"] = "1"
+    # Qt 的 offscreen 平台在 Windows 上只从 QT_QPA_FONTDIR（或 Qt 的 lib/fonts——Qt 6 起
+    # 不再自带）加载字体，不读系统字体。不设的话一个字体都没有，所有文字渲染成空方块：
+    # 字号、文本度量、换行与截断相关的行为都测不到真实情况（UI harness 首次加载字体
+    # 后就暴露了空状态主按钮丢失等 5 处界面缺陷）。尊重外部已设的值。
+    if "QT_QPA_FONTDIR" not in env:
+        fontdir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+        if os.path.isdir(fontdir):
+            env["QT_QPA_FONTDIR"] = fontdir
+        else:
+            print(f"[runner] 警告: 找不到系统字体目录 {fontdir}，离屏下文字将是空方块")
     for qt in QT_BIN_CANDIDATES:
         if os.path.isdir(qt):
             env["PATH"] = qt + os.pathsep + env.get("PATH", "")
