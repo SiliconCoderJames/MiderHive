@@ -226,6 +226,7 @@ DSH、Hermes）可以完全跳过裸 HTTP 流程：自带 `miderhive-mcp` stdio 
 | [docs/mcp.md](docs/mcp.md) | MCP 接入（Claude Code / Claude Desktop / Cursor）、工具清单、手动排障 |
 | [docs/hardening-report.md](docs/hardening-report.md) | 已知安全边界与加固清单 |
 | [docs/brand.md](docs/brand.md) | 品牌规范——色板、六边形母题、语气；改 UI 前先读 |
+| [docs/dev.md](docs/dev.md) | 开发指南——运行与调试工作台（`dist\` 里是带调试符号的构建）、跑测试、改了界面之后如何重录基线 |
 | [release/README.md](release/README.md) | 发版流程：打包、更新清单、校验和 |
 
 ## 架构
@@ -305,18 +306,28 @@ Windows 图标缓存，运行 `ie4uinit.exe -show` 或重启资源管理器。
 
 ## 质量与验证
 
-- 单元测试 **1,661 项检查**（[`tests/`](tests/)，由 `ctest` 跑；其中约 1,000 项是同一个读回断言
-  在播种循环里重复，按"约 500 条独立断言"理解更准确）：SHA-256 与常量时间密钥比较、版本比较、
+- 单元测试 **2,454 项检查**（[`tests/`](tests/)，由 `ctest` 跑；其中约 1,000 项是同一个读回断言
+  在播种循环里重复）：SHA-256 与常量时间密钥比较、版本比较、
   嵌入器、出站 URL 校验、平台端到端、鉴权与消息可见性加固回归、旧库升级迁移、按维度分表与
   旧向量表迁移、FTS5 关键词检索、语义标签过滤召回、库结构版本门与维度↔provider 绑定；
-- 集成验证 **44 项断言**（[scripts/feasibility_check.py](scripts/feasibility_check.py)）：
+  接入开关与总闸、LLM 接入（双协议、流式、截断检测）、周预算双口径与自动摘要（失败后按间隔退避、
+  连续失败即暂停、不越过预算线）、知识图谱、接入向导的每个默认身份都能签发；
+- 集成验证 **45 项断言**（[scripts/feasibility_check.py](scripts/feasibility_check.py)）：
   模拟多 Agent 全生命周期，含中文检索、异步任务状态机、幂等上报、用量告警；
-- **离屏 GUI 全链路自测 72 项断言**（[scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py)，
+- **离屏 GUI 全链路自测 79 项断言**（[scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py)，
   构建目标 `gui_selftest`）：无头驱动真实工作台界面，覆盖首启引导 → Agent 上线 →
   「接入成功」+ 欢迎记忆 → 密钥丢失健康横幅 → 轮换修复（旧钥 401/新钥 200）→ 设置重入。
   另覆盖：**八种客户端各自的配置格式**、**配置写入器**（新建 / 合并保留他人条目 /
   遇到坏 JSON 拒绝且不改动 / 重复写入替换而非追加；全部在重定向的配置根里跑，不碰真实配置），
   以及把界面真的切到英文后断言**所有控件文案（标签/按钮/下拉/表头/占位符/tooltip）无中文残留**；
+- **UI/UX 评测 47 个场景**（构建目标 `ui_harness`，[scripts/ui_harness.ps1](scripts/ui_harness.ps1)）：
+  九个面板各自的空态 / 有数据 / 读失败态，加主题、语言、字号抽查，逐个与入库基线
+  （[`tests/baseline/`](tests/baseline/)）对比控件结构、文案和 Tab 焦点顺序；另查一组界面规则
+  （英文模式无中文残留、空态有引导、标准控件能用 Tab 到达、样式表、破坏性确认默认选"否"），
+  并探测用户的选中行、筛选文字、滚动位置能否活过一次自动刷新。换一台机器、换一天结果必须逐字一致——
+  CI runner 上已验证；
+- 返回值检查（[scripts/check_bool_returns.py](scripts/check_bool_returns.py)）：
+  数据库与服务层调用的布尔返回值必须被使用，忽略必须写明理由——"不静默失败"的机检防线；
 - 平台接入/密钥自测 **14 项断言**（[scripts/test_onboarding_and_safety.py](scripts/test_onboarding_and_safety.py)）：
   预配身份、心跳上线、欢迎记忆、密钥丢失诊断与轮换语义（HTTP 实测）；
 - 加固回归：保留身份不可注册、注册角色白名单、点对点消息读隔离、请求体 1 MiB 上限、
@@ -330,10 +341,13 @@ ctest --test-dir build -C Release                 # 单元测试
 python scripts/feasibility_check.py 8787          # 集成验证（需先启动工作台）
 python scripts/verify_gui_selftest.py             # 离屏 GUI 全链路自测（无需人工，CI 也跑）
 python scripts/test_onboarding_and_safety.py      # 平台接入/密钥轮换（HTTP 实测，CI 也跑）
+powershell -ExecutionPolicy Bypass -File scripts\ui_harness.ps1   # UI/UX 评测（CI 也跑，必过）
+powershell -ExecutionPolicy Bypass -File scripts\ci_local.ps1     # 以上全部在本地跑一遍——推送前必跑
 ```
 
-以上**全部由 CI 在每次推送与 PR 上执行**——构建、单元测试、可行性检查、MCP 检查，以及这两条自测。
-换句话说：首次接入引导、健康横幅或密钥轮换一旦回归，CI 直接变红，不会带着问题发版。
+以上**全部由 CI 在每次推送与 PR 上执行**——构建、单元测试、可行性检查、MCP 检查、两条自测、
+UI/UX 评测与返回值检查。换句话说：首次接入引导、健康横幅、密钥轮换或任何一个面板的界面一旦回归，
+CI 直接变红，不会带着问题发版。
 
 > 注：`docs/hardening-report.md` 中的 ASan / 浸泡数据是作者本机一次性实测结果，仓库内没有对应的
 > 可复现脚本与 CI 任务（`soak_test.py` 不含内存采样），请以"本机实测"而非"可复现结论"理解。
@@ -349,6 +363,9 @@ cmake --build build --config Release
 ```
 
 - 无 Qt 时加 `-DBUILD_GUI=OFF`，只构建核心 + CLI；Qt 路径不同时改 `-DCMAKE_PREFIX_PATH`。
+- 日常开发不必手动拷 DLL：`powershell -ExecutionPolicy Bypass -File scripts\deploy_dev.ps1` 会把当前构建
+  （RelWithDebInfo，带调试符号，可直接附加调试器）连同 Qt 运行库部署到 `dist\`。运行、调试、跑测试与
+  改界面后的验证流程见 [docs/dev.md](docs/dev.md)。
 - 第三方依赖（sqlite-vec、nlohmann/json、cpp-httplib）由 FetchContent 自动拉取；
   GitHub 不可达时先跑 `powershell -File scripts\fetch-deps.ps1` 预取到 `vendor/`。
   SQLite amalgamation 走 sqlite.org 直链下载（脚本未预取），离线环境可自行放入 `vendor/`。

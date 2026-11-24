@@ -69,7 +69,7 @@ jobs:
       - name: Unit tests
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Integration feasibility check (44 assertions)
+      - name: Integration feasibility check (45 assertions)
         shell: pwsh
         env:
           MIDERHIVE_MASTER_KEY: ci-test-master-key-not-a-secret

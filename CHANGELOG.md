@@ -56,6 +56,10 @@ survive the 3-second refresh.
 - The graph's initial layout no longer depends on the global `std::rand()` state: the canvas has
   its own fixed-seed generator, so the same data starts from the same arrangement on every
   launch. "Re-layout" still produces a fresh arrangement.
+- `scripts/e2e_collaboration_test.py` had been failing since 1.2.2 and nobody noticed: its step 10
+  expected agent A to see agent B's row in `GET /api/audit`, but since 1.2.2 that endpoint is
+  scoped per agent. The step now checks the scoping itself (A sees only its own rows) and, when
+  `MH_ZCODE_KEY` is set, that the manager sees everything. The other 22 steps pass again.
 
 ### Added
 - **The UI harness is a required check** (47 scenes; it fails CI and `scripts/ci_local.ps1`
@@ -80,12 +84,26 @@ survive the 3-second refresh.
 - `ui::displayNow()` (GUI) and `GraphPanel::settleLayout()` are test seams: the first lets the
   harness freeze the clock through `MIDERHIVE_UI_NOW`, the second runs the force-directed layout
   to its stop condition synchronously. Neither affects normal use.
+- `scripts/ui_harness.ps1`: the UI harness in one command, with the same invocation as CI, and
+  the path of its report (`-Filter`, `-UpdateBaseline`, `-OpenReport`).
+- `scripts/check_symbols.py`: asks DbgHelp whether an executable can be debugged at source level
+  (does the PDB belong to this exact build, do line numbers resolve). `scripts/deploy_dev.ps1`
+  runs it on every deploy.
+- `docs/dev.md`: how to run, debug and test the workbench, with every command tried on a real
+  build; linked from both READMEs.
 
 ### Changed
+- `scripts/deploy_dev.ps1` deploys RelWithDebInfo by default: the same optimisation as Release
+  plus debug symbols, so the copy in `dist\` can be run and attached to a debugger. It used to
+  deploy Release, which carries no PDBs. The result of the symbol check and short run/debug
+  instructions are written into `dist\BUILD_INFO.txt`.
 - Baselines in `tests/baseline/` were re-recorded. The previous ones recorded what was installed
   on the machine they were made on (nine tools), local-time timestamps and stale panel content;
   they could never match another machine.
 - `scripts/verify_gui_selftest.py` gives the GUI self-test a font directory too.
+- The numbers under "Quality and verification" in both READMEs were stale; they now read 2,454
+  unit-test checks, 45 integration assertions and 79 GUI assertions, and list the UI harness and
+  the bool-return check.
 
 ## [1.6.1] - 2026-11-24
 

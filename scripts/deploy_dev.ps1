@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-  Deploy the current build as a runnable workbench in one fixed folder: dist\MiderHive.exe
+  Deploy the current build as a runnable, debuggable workbench in one fixed folder: dist\miderhive.exe
 
 .DESCRIPTION
   Refreshed every time work lands, so there is always one up-to-date executable
-  to run. Uses the everyday dev build tree (no clean rebuild):
+  to run and to debug. Uses the everyday dev build tree (no clean rebuild):
     1. build the four shipped targets (skippable with -SkipBuild)
     2. refuse if a program is still running from the output folder
     3. cmake --install into dist.new (windeployqt puts the Qt runtime next to the exe)
@@ -14,6 +14,15 @@
     7. smoke test: start the deployed exe offscreen on a scratch data directory and
        a free port, read the version back from /api/health, stop it
   Releases still go through scripts\package.ps1 (clean build, MSI, ZIP, checksums).
+
+  The default configuration is RelWithDebInfo: the same optimisations as Release
+  (/O2) plus debug symbols, so breakpoints in this code base work in a debugger
+  while the program runs at release speed. Release builds carry no PDBs and cannot
+  be debugged at source level. CI and the official packages stay on Release; pass
+  -Configuration Release to deploy that instead.
+
+  How to run and debug the result is written into dist\BUILD_INFO.txt and, in
+  more detail, in docs/dev.md.
 
   The smoke test never touches your real settings: it runs on a scratch data
   directory, draws no window, and is stopped well before the 5-second mark where
@@ -31,7 +40,11 @@
 #>
 param(
     [string]$BuildDir = "build",
-    [string]$Configuration = "Release",
+    # RelWithDebInfo = release speed + PDBs, so the deployed exe can be debugged
+    # at source level. Release carries no symbols; CI and the official packages
+    # stay on Release. A Debug configuration cannot be used with the prebuilt Qt
+    # (it would link the debug C runtime against Qt's release DLLs).
+    [string]$Configuration = "RelWithDebInfo",
     [string]$OutDir = "dist",
     [string]$QtPrefix = "C:/Qt/6.8.3/msvc2022_64",
     [switch]$SkipBuild,
@@ -97,10 +110,48 @@ $required = @(
 $missing = @($required | Where-Object { -not (Test-Path (Join-Path $newAbs $_)) })
 if ($missing.Count -gt 0) { throw "deploy is incomplete, missing: $($missing -join ', ')" }
 
-# Symbols for debugger sessions. Release does not produce any today; RelWithDebInfo does.
+# Symbols for debugger sessions. Release does not produce any; RelWithDebInfo does.
+$symbols = @()
 foreach ($name in $programs.Keys) {
-    $pdb = Join-Path $BuildDir (Join-Path $programs[$name] (Join-Path $Configuration ($name -replace "\.exe$", ".pdb")))
-    if (Test-Path $pdb) { Copy-Item $pdb $newAbs -Force }
+    $pdbName = $name -replace "\.exe$", ".pdb"
+    $pdb = Join-Path $BuildDir (Join-Path $programs[$name] (Join-Path $Configuration $pdbName))
+    if (Test-Path $pdb) {
+        Copy-Item $pdb $newAbs -Force
+        $symbols += $pdbName
+    }
+}
+
+# "Debuggable" is checked, not assumed: a PDB that belongs to another build is
+# rejected by debuggers just like a missing one. scripts\check_symbols.py asks
+# DbgHelp whether the copied PDB matches this exe and resolves source lines.
+# Done before the swap so a bad result is visible while the old dist is still there.
+$symbolStatus = "no (built without debug info: breakpoints in a debugger will not bind)"
+if ($symbols.Count -gt 0) {
+    $symbolStatus = $symbols -join ", "
+    $checker = Join-Path $root "scripts\check_symbols.py"
+    if ((Get-Command python -ErrorAction SilentlyContinue) -and (Test-Path $checker)) {
+        $savedPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"   # python on stderr must not abort the deploy
+        try {
+            $checkOutput = & python $checker (Join-Path $newAbs "miderhive.exe") 2>&1
+            $checkCode = $LASTEXITCODE
+        } catch {
+            $checkCode = 2
+            $checkOutput = $_.Exception.Message
+        } finally {
+            $ErrorActionPreference = $savedPreference
+        }
+        if ($checkCode -eq 0) {
+            $symbolStatus += " - verified against miderhive.exe (DbgHelp: match, line numbers resolve)"
+            Write-Host "  OK  miderhive.pdb matches miderhive.exe; breakpoints in src\ will bind"
+        } else {
+            $symbolStatus += " - NOT verified against miderhive.exe"
+            Write-Host "warning: the copied symbols were not verified against miderhive.exe." -ForegroundColor Yellow
+            Write-Host (($checkOutput | Select-Object -Last 2) -join [Environment]::NewLine)
+        }
+    } else {
+        $symbolStatus += " - not verified (scripts\check_symbols.py or python not available)"
+    }
 }
 
 $version = "unknown"
@@ -135,12 +186,25 @@ $info = @(
     "version : $version"
     "commit  : $commit ($branch)$dirtyNote"
     "config  : $Configuration, built from $BuildDir"
+    "symbols : $symbolStatus"
     "deployed: $stamp"
     ""
-    "Run miderhive.exe. It uses the normal data directory (%USERPROFILE%\.miderhive) and"
-    "port 8787 unless MIDERHIVE_HOME / MIDERHIVE_PORT say otherwise. agent-cli.exe,"
-    "platformd.exe and miderhive-mcp.exe sit next to it. Not an installer: nothing is"
-    "added to the Start menu and no file outside this folder is written by the deploy."
+    "Run"
+    "  miderhive.exe  - double-click, or run it from a terminal. It uses the normal data"
+    "                   directory (%USERPROFILE%\.miderhive) and port 8787 unless"
+    "                   MIDERHIVE_HOME / MIDERHIVE_PORT say otherwise."
+    "  agent-cli.exe, platformd.exe, miderhive-mcp.exe sit next to it."
+    "  Not an installer: nothing is added to the Start menu and no file outside this"
+    "  folder is written by the deploy."
+    ""
+    "Debug (source-level, needs the symbols above)"
+    "  1. Start miderhive.exe yourself."
+    "  2. Visual Studio: Debug > Attach to Process... > pick miderhive.exe."
+    "  3. Open a file under src\ and set breakpoints. Variables may read as"
+    "     'optimized away': this build runs at release speed."
+    "  To keep a debug session away from your real data, start it on a scratch profile:"
+    "    PowerShell:  `$env:MIDERHIVE_HOME=`"`$env:TEMP\mh-scratch`"; `$env:MIDERHIVE_PORT=`"8790`"; .\miderhive.exe"
+    "  More (tests, UI harness, demo data, mock LLM): docs/dev.md in the repository."
 )
 Set-Content -Path (Join-Path $outAbs "BUILD_INFO.txt") -Value $info -Encoding ASCII
 

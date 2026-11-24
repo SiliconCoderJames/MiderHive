@@ -14,15 +14,18 @@ MiderHive 端到端协作测试（独立运行，仅用 Python 标准库）。
   7  调用记录入库核验   GET  /api/skills/<name>/invocations
   8  B 写入错误日志     POST /api/errors
   9  A 查询错误日志     GET  /api/errors?status=open —— 必须看到 B 的记录
- 10  协作页事件流核验   GET  /api/audit             —— 必须含 error.report 事件
+ 10  可见性收敛         GET  /api/audit             —— 普通 Agent A 看不到别人的行（v1.2.2 起的规则）
+10b 管理者视角         GET  /api/audit             —— 含 B 的 error.report（需 MH_ZCODE_KEY，否则跳过）
  11  附加：B 读取共享记忆 GET /api/memory?section=project（验证共享可见性）
 
 环境变量：
   MH_BASE        平台地址（默认 http://127.0.0.1:8790）
   MH_MASTER_KEY  主密钥（默认 e2e-master-key，须与服务端一致）
+  MH_ZCODE_KEY   管理者 zcode 的密钥（可选；设置了才核对步骤 10b。在数据目录
+                 config\agents.json 的 "zcode" 字段）
   MH_AGENT_A / MH_AGENT_B / MH_SKILL   名称前缀（默认 alpha-e2e / beta-e2e / e2e-hello）
 
-用法：
+用法（对一个用 MIDERHIVE_MASTER_KEY=e2e-master-key 启动的平台实例）：
   python scripts/e2e_collaboration_test.py
 退出码：0=全部通过；1=在首个失败步骤停止。
 """
@@ -183,13 +186,26 @@ def main():
          hit is not None and hit.get("title") == title and hit.get("severity") == "warning",
          f"open 错误共 {len(data)} 条，命中 reporter={hit.get('reporter') if hit else '未找到'}")
 
-    # ---- 10 协作页事件流（/api/audit，总览页数据源）----
-    data = expect_env(call("GET", "/api/audit?limit=200", name=AGENT_A, key=key_a), "协作页事件流")
-    ev = next((r for r in data if r.get("action") == "error.report" and r.get("target") == err_uuid), None)
-    kinds = sorted({r.get("action", "") for r in data})
-    step(10, "协作页 API（/api/audit）返回 B 的错误上报事件",
-         ev is not None and ev.get("actor") == AGENT_B,
-         f"事件流共 {len(data)} 条，动作类型={kinds}")
+    # ---- 10 协作页事件流（/api/audit）----
+    # v1.2.2 起 /api/audit 按 viewer 收敛：普通 Agent 只能看到自己作为主体的行，
+    # 管理者（zcode）与工作台看全量。这条脚本此前断言 A 能看到 B 的行，自 v1.2.2 起
+    # 一直停在这一步——它不在 CI 里，所以没人发现。
+    data = expect_env(call("GET", "/api/audit?limit=200", name=AGENT_A, key=key_a), "A 视角的事件流")
+    foreign = sorted({r.get("actor") for r in data if r.get("actor") != AGENT_A})
+    step(10, "可见性收敛：普通 Agent A 的事件流里没有别人的行", len(data) > 0 and not foreign,
+         f"A 视角共 {len(data)} 条，出现的其他主体={foreign or '无'}")
+    # 管理者视角应看到全量。/api/audit 只认 Agent 身份（主密钥不能直接当管理者用），
+    # 脚本手里没有 zcode 的密钥：设置了 MH_ZCODE_KEY 才核对（数据目录 config/agents.json
+    # 的 "zcode"），否则如实标为跳过。
+    zcode_key = os.environ.get("MH_ZCODE_KEY", "")
+    if zcode_key:
+        data = expect_env(call("GET", "/api/audit?limit=200", name="zcode", key=zcode_key), "管理者视角的事件流")
+        ev = next((r for r in data if r.get("action") == "error.report" and r.get("target") == err_uuid), None)
+        step("10b", "管理者视角的事件流返回 B 的错误上报事件",
+             ev is not None and ev.get("actor") == AGENT_B,
+             f"事件流共 {len(data)} 条，命中 actor={ev.get('actor') if ev else '未找到'}")
+    else:
+        print("[SKIP] 步骤 10b 管理者视角的事件流 —— 未设置 MH_ZCODE_KEY")
 
     # ---- 11 附加：B 读取 A 写的共享记忆（共享可见性）----
     data = expect_env(call("GET", "/api/memory?section=project", name=AGENT_B, key=key_b), "B 读取共享记忆")

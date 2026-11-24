@@ -245,6 +245,7 @@ Four everyday loops, all over the same API:
 | [docs/mcp.md](docs/mcp.md) | MCP setup for Claude / Claude Desktop / ChatGPT-Codex / Factory Droid / DSH / Hermes / Cursor / Copilot, the 27-tool inventory, manual troubleshooting |
 | [docs/hardening-report.md](docs/hardening-report.md) | Known security boundaries and the hardening checklist |
 | [docs/brand.md](docs/brand.md) | Brand guidelines — palette, hexagon motif, tone; read before touching the UI |
+| [docs/dev.md](docs/dev.md) | Developer guide (Chinese) — running and debugging the workbench (`dist\` holds a build with debug symbols), running the tests, re-recording UI baselines after a UI change |
 | [release/README.md](release/README.md) | How releases are cut: packaging, update manifest, checksums |
 
 ## Architecture
@@ -334,20 +335,23 @@ the same over HTTP. Restore lives in the same place (master key required).
 
 ## Quality and verification
 
-- **1,661 unit-test checks** ([`tests/`](tests/), run by `ctest`; one bulk-seeding loop repeats a
-  single read-back assertion ~1,000 times, so read it as roughly 500 distinct assertions rather than
-  1,661 independent ones): SHA-256 and constant-time key comparison, version comparison,
+- **2,454 unit-test checks** ([`tests/`](tests/), run by `ctest`; one bulk-seeding loop repeats a
+  single read-back assertion ~1,000 times): SHA-256 and constant-time key comparison, version comparison,
   embedder, outbound URL guard, platform end-to-end, auth and message-visibility hardening
   regressions, legacy database migration, per-dimension vector tables + legacy vector-table
   migration, FTS5 keyword search (Chinese substring, case folding, legacy index rebuild),
-  semantic tag-filter recall, the schema-version gate and dimension↔provider binding;
-- **44 integration assertions** ([scripts/feasibility_check.py](scripts/feasibility_check.py)):
+  semantic tag-filter recall, the schema-version gate and dimension↔provider binding; connection
+  switches and the global gate, LLM access (both protocols, streaming, truncation detection), the
+  weekly budget in both modes and auto digest (back-off after a failure, suspension after repeated
+  failures, never overshooting the budget), the knowledge graph, and that every default identity
+  the onboarding wizard offers can be issued;
+- **45 integration assertions** ([scripts/feasibility_check.py](scripts/feasibility_check.py)):
   a full multi-agent lifecycle including Chinese retrieval, the async task state machine,
   idempotent reporting and usage alerts;
 - Hardening regressions: reserved identities cannot be registered, registration role allow-list,
   point-to-point message read isolation, 1 MiB request-body cap, unified 400 envelope for field
   type errors — each covered by unit tests and verified over HTTP;
-- **72 offscreen GUI assertions** ([scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py),
+- **79 offscreen GUI assertions** ([scripts/verify_gui_selftest.py](scripts/verify_gui_selftest.py),
   build target `gui_selftest`): drives the real workbench UI headlessly through first-run
   onboarding → agent online → "Connected" popup + welcome memory → keyfile-loss health banner →
   rotate-key fix (old key 401, new key 200) → Settings re-entry. It also verifies **every client's
@@ -355,6 +359,17 @@ the same over HTTP. Restore lives in the same place (master key required).
   refuse-on-corrupt-JSON / replace-instead-of-append, all against a redirected config root) and
   switches the live window to English to assert **no Chinese text remains in any widget**
   (labels, buttons, combos, headers, placeholders and tooltips);
+- **47 UI/UX scenes** (build target `ui_harness`, run by [scripts/ui_harness.ps1](scripts/ui_harness.ps1)):
+  each of the nine panels in its empty, seeded and read-failure state, plus theme, language and
+  font-size sweeps, compared with the reviewed baselines in [`tests/baseline/`](tests/baseline/) —
+  widget structure, texts and the Tab order. Invariant rules on top (no Chinese left in English
+  mode, empty states offer guidance, standard controls are reachable by Tab, stylesheets,
+  destructive confirmations default to "No"), and a probe that the user's selected row, filter
+  text and scroll position survive an automatic refresh. Another machine or another day has to
+  give byte-identical snapshots — verified on the CI runner;
+- Bool-return discipline ([scripts/check_bool_returns.py](scripts/check_bool_returns.py)): the
+  `bool` result of every database and service call must be used, and an intentional ignore must
+  say why — the machine-checked half of "no silent failures";
 - **14 platform assertions** ([scripts/test_onboarding_and_safety.py](scripts/test_onboarding_and_safety.py)):
   provisioning, heartbeat, welcome memory, keyfile-loss diagnostics and key-rotation semantics
   over HTTP;
@@ -369,11 +384,14 @@ ctest --test-dir build -C Release                 # unit tests
 python scripts/feasibility_check.py 8787          # integration (workbench must be running)
 python scripts/verify_gui_selftest.py             # offscreen GUI end-to-end (no human needed; CI runs it too)
 python scripts/test_onboarding_and_safety.py      # platform onboarding/key-rotation over HTTP (CI runs it too)
+powershell -ExecutionPolicy Bypass -File scripts\ui_harness.ps1   # UI/UX scenes (CI runs it too; required)
+powershell -ExecutionPolicy Bypass -File scripts\ci_local.ps1     # all of the above locally — run before pushing
 ```
 
 **CI enforces all of the above** on every push and pull request — build, unit tests, the feasibility
-and MCP checks, and both self-tests. A regression in the first-run onboarding, the health banner or
-key rotation turns the badge red instead of shipping.
+and MCP checks, both self-tests, the UI/UX scenes and the bool-return check. A regression in the
+first-run onboarding, the health banner, key rotation or any panel's UI turns the badge red
+instead of shipping.
 
 > Note: the ASan and soak figures in `docs/hardening-report.md` are one-off local measurements by
 > the author. The repository has no reproducible script or CI job for them (`soak_test.py` does no
@@ -395,6 +413,11 @@ cmake --build build --config Release
 ```
 
 - Use `-DBUILD_GUI=OFF` to build core + CLI without Qt; point `-DCMAKE_PREFIX_PATH` at your Qt kit.
+- For day-to-day development you do not need to copy DLLs by hand:
+  `powershell -ExecutionPolicy Bypass -File scripts\deploy_dev.ps1` deploys the current build together
+  with the Qt runtime into `dist\` (RelWithDebInfo: release speed plus debug symbols, so a debugger can
+  be attached). Running, debugging, testing and the UI-baseline workflow are covered in
+  [docs/dev.md](docs/dev.md).
 - Third-party dependencies (sqlite-vec, nlohmann/json, cpp-httplib) are fetched automatically by
   FetchContent; when GitHub is unreachable, run `powershell -File scripts\fetch-deps.ps1` first to
   prefetch them into `vendor/`. The SQLite amalgamation is downloaded straight from sqlite.org
