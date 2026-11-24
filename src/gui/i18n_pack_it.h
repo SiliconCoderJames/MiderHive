@@ -1574,6 +1574,16 @@ inline const std::unordered_map<std::string_view, std::string_view>& it() {
          "il budget rimanente non basta per un'altra esecuzione"},
         {"没有新活动",
          "niente di nuovo da riassumere"},
+        {"昨日无数据",
+         "Nessun dato per ieri"},
+        {"该筛选下没有错误",
+         "Nessun errore con questo filtro"},
+        {"把状态 / 严重度切回「全部」查看其它错误",
+         "Riportare stato / gravità su “Tutti” per vedere gli altri errori"},
+        {"还没有可关联的知识条目",
+         "Ancora nessuna voce di conoscenza da collegare"},
+        {"在知识库写入条目后，这里自动按语义相似度连成图谱",
+         "Non appena la base di conoscenza contiene voci, queste compaiono qui, collegate per somiglianza semantica"},
     };
     return k;
 }

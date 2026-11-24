@@ -98,7 +98,7 @@
                                     "geom": [
                                         14,
                                         6,
-                                        19,
+                                        15,
                                         23
                                     ],
                                     "text": "",
@@ -108,9 +108,9 @@
                                     "class": "QLabel",
                                     "en": true,
                                     "geom": [
-                                        41,
+                                        37,
                                         6,
-                                        1083,
+                                        1087,
                                         23
                                     ],
                                     "text": "本机服务未运行：Agent 现在无法接入工作台。",
@@ -129,10 +129,11 @@
                                     "vis": true
                                 }
                             ],
+                            "name": "__QFrame_5e97",
                             "vis": true
                         }
                     ],
-                    "name": "__self1",
+                    "name": "__QWidget_696a",
                     "vis": true
                 },
                 {
@@ -181,11 +182,11 @@
                                     "vis": true
                                 }
                             ],
-                            "name": "__self10",
+                            "name": "__QWidget_7fe4",
                             "vis": true
                         }
                     ],
-                    "name": "__self2",
+                    "name": "__QWidget_696a",
                     "vis": true
                 },
                 {
@@ -496,7 +497,7 @@
                                 218,
                                 15
                             ],
-                            "text": "较昨日",
+                            "text": "昨日无数据",
                             "vis": true
                         },
                         {
@@ -894,7 +895,7 @@
                                     "vis": false
                                 }
                             ],
-                            "name": "__self3",
+                            "name": "__QFrame_8b90",
                             "vis": false
                         }
                     ],
@@ -1020,7 +1021,7 @@
                                             "vis": false
                                         }
                                     ],
-                                    "name": "__self4",
+                                    "name": "__QFrame_8b90",
                                     "vis": false
                                 },
                                 {
@@ -1068,9 +1069,9 @@
                                     "en": true,
                                     "geom": [
                                         197,
-                                        14,
+                                        80,
                                         22,
-                                        62
+                                        22
                                     ],
                                     "text": "",
                                     "vis": true
@@ -1080,9 +1081,9 @@
                                     "en": true,
                                     "geom": [
                                         10,
-                                        82,
+                                        108,
                                         396,
-                                        61
+                                        16
                                     ],
                                     "text": "暂无错误，一切正常",
                                     "vis": true
@@ -1092,15 +1093,15 @@
                                     "en": true,
                                     "geom": [
                                         10,
-                                        149,
+                                        130,
                                         396,
-                                        62
+                                        15
                                     ],
                                     "text": "预算越线或 Agent 报错时会在这里分级告警",
                                     "vis": true
                                 }
                             ],
-                            "name": "__self5",
+                            "name": "__QFrame_8b90",
                             "vis": true
                         }
                     ],

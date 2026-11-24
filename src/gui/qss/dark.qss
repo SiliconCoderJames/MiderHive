@@ -184,6 +184,14 @@ QPushButton#danger:hover {
     color: @danger@;
 }
 QPushButton#danger:pressed { background-color: @errbg@; color: @danger@; }
+/* 危险按钮也要有禁用态：ID 选择器的优先级压过下面的 QPushButton:disabled，禁用的
+   「拒绝任务」看上去和能点时一模一样（实心红） */
+QPushButton#danger:disabled {
+    background-color: @card@;
+    border-color: @line@;
+    color: @muted@;
+    font-weight: normal;
+}
 /* 禁用态必须比可用态明显更暗：原先两者底色相同，只有文字变灰，用户分不清能不能点 */
 QPushButton:disabled {
     background-color: @card@;

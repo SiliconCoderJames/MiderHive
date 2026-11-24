@@ -3,7 +3,6 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
-#include <QHash>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QMessageBox>
@@ -12,9 +11,43 @@
 #include <QSplitter>
 #include <QVBoxLayout>
 
+#include <iterator>
+
 #include "../gui_util.h"
 #include "../i18n.h"
 #include "../widgets.h"
+
+namespace {
+// 枚举的展示名（中文, 英文, 存储值）。筛选项、表格、详情栏共用这一份：此前筛选项
+// 直接显示存储值（open / warning），表格里却是「未解决」「警告」——同一个值两种写法
+struct EnumName {
+    const char* zh;
+    const char* en;
+    const char* value;
+};
+constexpr EnumName kSeverity[] = {{"信息", "info", "info"},
+                                  {"警告", "warning", "warning"},
+                                  {"错误", "error", "error"},
+                                  {"严重", "critical", "critical"}};
+constexpr EnumName kStatus[] = {{"未解决", "open", "open"},
+                                {"排查中", "investigating", "investigating"},
+                                {"已解决", "resolved", "resolved"}};
+
+template <size_t N>
+QString enumText(const EnumName (&table)[N], const std::string& value) {
+    for (const auto& e : table)
+        if (value == e.value) return i18n::trs(e.zh, e.en);
+    return QString::fromStdString(value);  // 认不出的值原样显示，不吞信息
+}
+
+// 筛选下拉：首项「全部」不过滤，其余项显示本地化名称、存储值放进 item data 回传后端
+template <size_t N>
+void fillFilterCombo(QComboBox* combo, const EnumName (&table)[N]) {
+    combo->addItem(i18n::trs("全部", "All"));
+    for (const auto& e : table)
+        combo->addItem(i18n::trs(e.zh, e.en), QString::fromLatin1(e.value));
+}
+}  // namespace
 
 ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
     : PanelBase(platform, parent) {
@@ -27,13 +60,9 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
 
     auto* toolbar = new QHBoxLayout;
     statusCombo_ = new QComboBox(this);
-    // 首项是"不过滤"的展示项，只用于显示（下标 0 → 后端空筛选），故可安全翻译；
-    // 其余项是后端枚举值（open/investigating/resolved），按下标 > 0 原样回传，不译
-    statusCombo_->addItem(i18n::trs("全部", "All"));
-    statusCombo_->addItems({"open", "investigating", "resolved"});
+    fillFilterCombo(statusCombo_, kStatus);
     severityCombo_ = new QComboBox(this);
-    severityCombo_->addItem(i18n::trs("全部", "All"));
-    severityCombo_->addItems({"info", "warning", "error", "critical"});
+    fillFilterCombo(severityCombo_, kSeverity);
     resolveBtn_ = new QPushButton(i18n::trs("登记解决", "Mark Resolved"), this);
     statusLabel_ = new QLabel(i18n::trs("状态:", "Status:"), this);
     severityLabel_ = new QLabel(i18n::trs("严重度:", "Severity:"), this);
@@ -76,6 +105,8 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
     auto* right = new QWidget(splitter);
     auto* rl = new QVBoxLayout(right);
     infoLabel_ = new QLabel(right);
+    // 标题、上报者、来源都是用户输入，长了要换行：不换行会顶出详情栏被裁掉
+    infoLabel_->setWordWrap(true);
     rl->addWidget(infoLabel_);
     detail_ = new QTextBrowser(right);
     rl->addWidget(detail_, 1);
@@ -103,12 +134,13 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
 void ErrorsPanel::showDetail(int row) {
     if (row < 0 || row >= static_cast<int>(errors_.size())) return;
     const auto& e = errors_[static_cast<size_t>(row)];
+    // 富文本：用户输入逐项转义；状态用展示名，与表格、筛选项同一种写法
     infoLabel_->setText(i18n::trs("<b>%1</b> · 上报者: %2 · 来源: %3 · 状态: %4",
                                   "<b>%1</b> · reporter: %2 · source: %3 · status: %4")
-                            .arg(QString::fromStdString(e.title).toHtmlEscaped())
-                            .arg(QString::fromStdString(e.reporter))
-                            .arg(QString::fromStdString(e.source))
-                            .arg(QString::fromStdString(e.status)));
+                            .arg(QString::fromStdString(e.title).toHtmlEscaped(),
+                                 QString::fromStdString(e.reporter).toHtmlEscaped(),
+                                 QString::fromStdString(e.source).toHtmlEscaped(),
+                                 enumText(kStatus, e.status)));
     QString text = QString::fromStdString(e.detail);
     if (!e.stack_trace.empty())
         text += i18n::trs("\n\n---- 堆栈 ----\n", "\n\n---- Stack trace ----\n") +
@@ -121,12 +153,12 @@ void ErrorsPanel::showDetail(int row) {
 }
 
 void ErrorsPanel::refresh() {
-    std::string status = statusCombo_->currentIndex() > 0
-                             ? statusCombo_->currentText().toStdString()
-                             : "";
-    std::string severity = severityCombo_->currentIndex() > 0
-                               ? severityCombo_->currentText().toStdString()
-                               : "";
+    // 存储值取自 item data（显示的是本地化名称，不能拿显示文字回传后端）
+    const auto filterValue = [](QComboBox* c) {
+        return c->currentIndex() > 0 ? c->currentData().toString().toStdString() : std::string();
+    };
+    const std::string status = filterValue(statusCombo_);
+    const std::string severity = filterValue(severityCombo_);
     // 刷新前按 uuid 记住选中：行号在重建后不可靠——3 秒自动刷新 + 新错误插到
     // 顶端会让同一行号指向另一条记录，"登记解决"此前会写到错误的条目上
     QString prevUuid;
@@ -144,25 +176,11 @@ void ErrorsPanel::refresh() {
     table_->setRowCount(static_cast<int>(errors_.size()));
     for (size_t i = 0; i < errors_.size(); ++i) {
         const auto& e = errors_[i];
-        // 枚举本地化（展示层映射，存储仍英文枚举；对照 filters 下拉的同键先例）
-        static const QHash<QString, std::pair<const char*, const char*>> kSev{
-            {{"critical", {"严重", "critical"}},
-             {"error", {"错误", "error"}},
-             {"warning", {"警告", "warning"}},
-             {"info", {"信息", "info"}}}};
-        static const QHash<QString, std::pair<const char*, const char*>> kStatus{
-            {{"open", {"未解决", "open"}},
-             {"investigating", {"排查中", "investigating"}},
-             {"resolved", {"已解决", "resolved"}}}};
-        QString sev = QString::fromStdString(e.severity);
-        QString status = QString::fromStdString(e.status);
-        const auto sevIt = kSev.constFind(sev);
-        const auto statusIt = kStatus.constFind(status);
+        // 枚举本地化（展示层映射，存储仍英文枚举）
+        const std::string sev = e.severity;
         setRow(table_, static_cast<int>(i),
-               {sevIt == kSev.cend() ? sev : i18n::trs(sevIt->first, sevIt->second),
-                QString::fromStdString(e.title), QString::fromStdString(e.reporter),
-                statusIt == kStatus.cend() ? status
-                                           : i18n::trs(statusIt->first, statusIt->second),
+               {enumText(kSeverity, sev), QString::fromStdString(e.title),
+                QString::fromStdString(e.reporter), enumText(kStatus, e.status),
                 relTime(QString::fromStdString(e.created_at))});
         // 严重度着色：critical 红 / error 橙 / warning 黄 / info 灰
         QColor c = sev == "critical" ? ui::danger()
@@ -177,7 +195,8 @@ void ErrorsPanel::refresh() {
     }
     fitTableColumns(table_, 1);  // 标题列吃剩余空间，避免窄列被截断 / 出现横向滚动条
     // 恢复选中到同一条记录（范式与 skills_panel 一致），详情栏同步——程序化
-    // selectRow 不会触发 cellClicked
+    // selectRow 不会触发 cellClicked。此前没有默认选中：列表里有错误，右侧详情栏
+    // 却是一整块空白（知识库、技能库都是默认选中第一行）
     int restoreRow = -1;
     if (!prevUuid.isEmpty())
         for (size_t i = 0; i < errors_.size(); ++i)
@@ -185,10 +204,30 @@ void ErrorsPanel::refresh() {
                 restoreRow = static_cast<int>(i);
                 break;
             }
+    if (restoreRow < 0 && !errors_.empty()) restoreRow = 0;
     if (restoreRow >= 0) {
         table_->selectRow(restoreRow);
         showDetail(restoreRow);
+    } else {
+        // 筛选后一条不剩：清掉上一条的详情，别在空列表旁边留着旧内容
+        infoLabel_->setText(QString());
+        detail_->setPlainText(QString());
     }
+    // 没有选中行时「登记解决」无事可做，直接禁用。此前它一直可点，点了再弹
+    // 「请先选择一条错误」的消息框
+    resolveBtn_->setEnabled(restoreRow >= 0);
+    // 空列表分两种：真的一条错误都没有，或者只是当前筛选下没有。后者不能写
+    // 「一切正常 ✓」——用户按「已解决」筛出空列表时，未解决的错误可能还有一堆
+    const bool filtered = !status.empty() || !severity.empty();
+    emptyState_->titleLabel()->setText(
+        filtered ? i18n::trs("该筛选下没有错误", "No errors under this filter")
+                 : i18n::trs("暂无错误，一切正常 ✓", "No errors — all clear ✓"));
+    emptyState_->hintLabel()->setText(
+        filtered ? i18n::trs("把状态 / 严重度切回「全部」查看其它错误",
+                             "Set status / severity back to \"All\" to see other errors")
+                 : i18n::trs("Agent 运行中上报的错误会自动汇总到这里，按严重度分级，处理完登记解决说明。",
+                             "Errors reported by agents are collected here, ranked by severity; "
+                             "record a resolution note once handled."));
     emptyState_->setVisible(errors_.empty());
     splitter_->setVisible(!errors_.empty());
     applyTableFilter(table_, filterEdit_->text());  // 行已重建，重放即时过滤态
@@ -203,9 +242,19 @@ void ErrorsPanel::retranslate() {
     PanelBase::retranslate();
     statusLabel_->setText(i18n::trs("状态:", "Status:"));
     severityLabel_->setText(i18n::trs("严重度:", "Severity:"));
-    // 只改首项文案：其余项是后端枚举值，改了会把筛选值一并改坏
+    // 只改文字不改下标：枚举值在 item data 里，显示名随语言变
     if (statusCombo_->count() > 0) statusCombo_->setItemText(0, i18n::trs("全部", "All"));
+    for (size_t i = 0; i < std::size(kStatus); ++i)
+        if (int(i) + 1 < statusCombo_->count())
+            statusCombo_->setItemText(static_cast<int>(i) + 1, i18n::trs(kStatus[i].zh, kStatus[i].en));
     if (severityCombo_->count() > 0) severityCombo_->setItemText(0, i18n::trs("全部", "All"));
+    for (size_t i = 0; i < std::size(kSeverity); ++i)
+        if (int(i) + 1 < severityCombo_->count())
+            severityCombo_->setItemText(static_cast<int>(i) + 1,
+                                        i18n::trs(kSeverity[i].zh, kSeverity[i].en));
+    // 当前选中那条的详情（状态展示名）也跟着换语言
+    if (int row = table_->currentRow(); row >= 0 && row < static_cast<int>(errors_.size()))
+        showDetail(row);
     resolveBtn_->setText(i18n::trs("登记解决", "Mark Resolved"));
     // 即时过滤框由 gui_util 的 makeTableFilter 建好（构造期已按当时语言取词），这里补齐重译
     filterEdit_->setPlaceholderText(i18n::trs("输入即筛…", "Type to filter…"));
@@ -228,8 +277,8 @@ void ErrorsPanel::retranslate() {
 void ErrorsPanel::onResolve() {
     int row = table_->currentRow();
     if (row < 0 || row >= static_cast<int>(errors_.size())) {
-        QMessageBox::information(this, i18n::trs("解决", "Resolve"),
-                             i18n::trs("请先选择一条错误", "Select an error first"));
+        // 按钮在无选中行时已禁用，这里只是兜底（如快捷键）：用 toast，不弹模态框
+        ui::Toast::show(this, i18n::trs("请先选择一条错误", "Select an error first"), false);
         return;
     }
     // 按值拷贝：对话框 exec 的模态事件循环里 3s 自动刷新会重建 errors_（新错误

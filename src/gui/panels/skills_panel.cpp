@@ -58,7 +58,8 @@ SkillsPanel::SkillsPanel(ah::Platform& platform, QWidget* parent)
                                       i18n::trs("状态", "Status"), i18n::trs("使用热度", "Usage Heat")});
     fitTableColumns(table_, 6);  // 使用热度列吃剩余空间，其余按内容宽
     polishTable(table_);
-    table_->resizeColumnsToContents();
+    // 不要再调 resizeColumnsToContents()：它把拉伸列也打回内容宽，列就只铺到表格的
+    // 一半，右边剩一块空白（选中行的底色也到那里为止）。ResizeToContents 自己会跟着内容变
     attachTableContextMenu(table_);
     splitter->addWidget(table_);
     // 即时过滤框：置于「注册技能」左侧，需在 table_ 就绪后创建
@@ -203,11 +204,12 @@ void SkillsPanel::refresh() {
         setRow(table_, static_cast<int>(i),
                {QString::fromStdString(s.name), QString::fromStdString(s.display_name),
                 QString::fromStdString(s.category), QString::fromStdString(s.owner_agent),
-                QString::number(s.version), QString::fromStdString(s.status), heatStr});
+                QString("v%1").arg(s.version), QString::fromStdString(s.status), heatStr});
         if (!prevSelected.isEmpty() && prevSelected == QString::fromStdString(s.name))
             restoreRow = static_cast<int>(i);
     }
-    table_->resizeColumnsToContents();  // 按实际内容重算列宽，避免截断
+    // 这里不再 resizeColumnsToContents()：列是 ResizeToContents 模式，行一插入就自己
+    // 按内容重算；再手动调一遍反而把拉伸列打回内容宽（见构造函数里的说明）
     applyTableFilter(table_, filterEdit_->text());  // 行已重建，重放即时过滤态
     if (restoreRow >= 0) {
         detailStack_->setCurrentWidget(detail_);

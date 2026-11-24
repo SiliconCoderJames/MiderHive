@@ -11,6 +11,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QSet>
 
 #include "../gui_util.h"
 #include "../i18n.h"
@@ -29,6 +30,20 @@ const std::vector<MemorySection> kSections{
     {"偏好记录", "Preferences", "preference"}, {"设备环境", "Environment", "environment"},
     {"工作习惯", "Work habits", "work_style"},
 };
+
+// 一条记忆的富文本行：键（强调色）、版本 · 作者 · 相对时间（小字，悬停看精确时刻）、值
+QString rowHtml(const ah::MemoryEntry& m) {
+    const QString raw = QString::fromStdString(m.created_at);
+    return ui::th(
+        QString("<b style='color:@accent@;'>%1</b>"
+                " <span style='color:@muted@; font-size:10px;' title='%6'>v%2 · %3 · %4</span><br>%5")
+            .arg(QString::fromStdString(m.key).toHtmlEscaped())
+            .arg(m.version)
+            .arg(QString::fromStdString(m.author))
+            .arg(relTime(raw))
+            .arg(QString::fromStdString(m.value).toHtmlEscaped().left(200))
+            .arg(localStamp(raw)));
+}
 }  // namespace
 
 MemoryPanel::MemoryPanel(ah::Platform& platform, QWidget* parent)
@@ -86,13 +101,37 @@ void MemoryPanel::refresh() {
                               .arg(formatNum(static_cast<qint64>(entries_.size())))
                               .arg(lastRaw.isEmpty() ? QString("—") : relTime(lastRaw)));
 
-    // 重建五区块折叠卡片
+    // 区块卡片只在条目集合变化时重建。此前每次轮询（3 秒）都把五张卡片全部销毁重建：
+    // 用户折起来的区块会自己弹开，控件也一遍遍地白建。相对时间这类随钟变的文案
+    // 在位更新（见下），不需要重建。签名带上语言：切换语言后文案要重来一遍
+    QString sig;
+    for (const auto& m : entries_)
+        sig += QString::fromStdString(m.section) + '\x1f' + QString::fromStdString(m.key) + '\x1f' +
+               QString::number(m.version) + '\x1f' + QString::fromStdString(m.author) + '\x1e';
+    sig += '\x1d' + QString::number(static_cast<int>(i18n::g_lang));
+    if (sig != sectionsSig_) {
+        sectionsSig_ = sig;
+        rebuildSections();
+    }
+    for (size_t i = 0; i < entries_.size() && i < rowLabels_.size(); ++i)
+        rowLabels_[i]->setText(rowHtml(entries_[i]));
+}
+
+void MemoryPanel::rebuildSections() {
+    // 记下用户折起来了哪些区块，重建后原样折回去
+    QSet<QString> collapsed;
+    for (auto it = cards_.cbegin(); it != cards_.cend(); ++it)
+        if (!it.value()->expanded()) collapsed.insert(it.key());
     while (sectionsLay_->count() > 1) {  // 末尾是 stretch
         QLayoutItem* it = sectionsLay_->takeAt(0);
         if (it->widget()) it->widget()->deleteLater();
         delete it;
     }
-    // 全库为空时：先给一条"模块是什么 + 显眼的写入入口"，再进各区块的空状态
+    cards_.clear();
+    rowLabels_.assign(entries_.size(), nullptr);
+    // 全库为空时：先给一条"模块是什么 + 显眼的写入入口"，再进各区块的空状态。
+    // 插入位置每次重算（stretch 之前）——只算一次的话后面每张卡都插到同一个下标，
+    // 区块顺序就整个倒过来
     if (entries_.empty()) {
         auto* guide = new ui::InlineEmpty(
             "memory",
@@ -107,43 +146,41 @@ void MemoryPanel::refresh() {
         sectionsLay_->insertWidget(sectionsLay_->count() - 1, guide);
     }
     for (const auto& sec : kSections) {
-        std::vector<ah::MemoryEntry> group;
-        for (const auto& m : entries_)
-            if (m.section == sec.key) group.push_back(m);
         auto* content = new QWidget(this);
         auto* cl = new QVBoxLayout(content);
         cl->setContentsMargins(14, 10, 14, 12);
         cl->setSpacing(6);
-        if (group.empty()) {
-            // 空状态：蜂巢母题 + 出路提示（品牌触点，见 docs/brand.md §3）
-            auto* empty = new ui::HexEmptyState(
-                i18n::trs("该区块暂无记忆", "No memories in this section yet"),
-                i18n::trs("通过 memory set 或工具栏写入第一条，所有 Agent 共享",
-                          "Add the first entry via memory set or the toolbar — shared by all agents"),
+        bool any = false;
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            const auto& m = entries_[i];
+            if (m.section != sec.key) continue;
+            any = true;
+            auto* row = new QLabel(rowHtml(m), content);
+            row->setTextFormat(Qt::RichText);
+            row->setWordWrap(true);
+            cl->addWidget(row);
+            rowLabels_[i] = row;
+        }
+        if (!any) {
+            // 空区块只给一行朴素提示（带出路）。此前每个空区块各放一幅大号六边形插画：
+            // 一屏里同一个插画重复四次，真正有内容的那一条反而被淹没
+            auto* hint = new QLabel(
+                i18n::trs("该区块暂无记忆", "No memories in this section yet") + " · " +
+                    i18n::trs("通过 memory set 或工具栏写入第一条，所有 Agent 共享",
+                              "Add the first entry via memory set or the toolbar — shared by "
+                              "all agents"),
                 content);
-            cl->addWidget(empty);
-        } else {
-            for (const auto& m : group) {
-                const QString raw = QString::fromStdString(m.created_at);
-                auto* row = new QLabel(ui::th(
-                    QString("<b style='color:@accent@;'>%1</b>"
-                            " <span style='color:@muted@; font-size:10px;' title='%6'>v%2 · %3 · %4</span><br>%5")
-                        .arg(QString::fromStdString(m.key).toHtmlEscaped())
-                        .arg(m.version)
-                        .arg(QString::fromStdString(m.author))
-                        .arg(relTime(raw))
-                        .arg(QString::fromStdString(m.value).toHtmlEscaped().left(200))
-                        .arg(localStamp(raw))),
-                    content);
-                row->setTextFormat(Qt::RichText);
-                row->setWordWrap(true);
-                cl->addWidget(row);
-            }
+            hint->setWordWrap(true);
+            hint->setStyleSheet(ui::th("color:@muted@; font-size:12px;"));
+            cl->addWidget(hint);
         }
         cl->addStretch(1);
-        sectionsLay_->insertWidget(sectionsLay_->count() - 1,
-                                   new ui::SectionCard(i18n::trs(sec.zh, sec.en), content, this));
+        auto* card = new ui::SectionCard(i18n::trs(sec.zh, sec.en), content, this);
+        cards_.insert(sec.key, card);
+        sectionsLay_->insertWidget(sectionsLay_->count() - 1, card);
     }
+    for (auto it = cards_.cbegin(); it != cards_.cend(); ++it)
+        if (collapsed.contains(it.key())) it.value()->setExpanded(false);
 }
 
 void MemoryPanel::retranslate() {

@@ -48,6 +48,7 @@
 //
 // 运行环境：QT_QPA_PLATFORM=offscreen（CI/包装脚本设置；harness 自身兜底 qputenv）
 // + Qt 的 bin 在 PATH 上（DLL 与插件依赖）。像素金样与截图在 build/ui_harness/。
+#include <QAbstractAnimation>
 #include <QApplication>
 #include <QBuffer>
 #include <QCheckBox>
@@ -96,6 +97,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -609,14 +611,40 @@ std::vector<Violation> runRules(const QString& sceneId, QWidget* panel, int visi
                                "application stylesheet: " + m.captured()});
         }
     }
-    // R7 容器的样式表规则会沿树波及到交互控件。
+    // R11 按钮变体（QPushButton#primary、#danger …）必须自带禁用态。ID 选择器的优先级
+    // 压过通用的 QPushButton:disabled：危险按钮没有 #danger:disabled 时，禁用的
+    // 「拒绝任务」看上去和能点时一模一样（实心红）。只看全局样式表，查一次
+    {
+        static bool variantChecked = false;
+        if (!variantChecked) {
+            variantChecked = true;
+            static const QRegularExpression comment(R"((?s)/\*.*?\*/)");
+            static const QRegularExpression variant(
+                QStringLiteral(R"(QPushButton#([A-Za-z_][A-Za-z0-9_-]*)(:disabled)?\s*\{)"));
+            QString sheet = qApp->styleSheet();
+            sheet.remove(comment);
+            QSet<QString> base, disabledState;  // 有基础规则的变体 / 另有禁用态规则的变体
+            auto it = variant.globalMatch(sheet);
+            while (it.hasNext()) {
+                const auto m = it.next();
+                (m.captured(2).isEmpty() ? base : disabledState).insert(m.captured(1));
+            }
+            for (const QString& name : base)
+                if (!disabledState.contains(name))
+                    out.push_back({"button-variant-no-disabled-state", "QPushButton#" + name});
+        }
+    }
+    // R7 容器的样式表规则会沿树波及到子孙。
     // Qt 的层叠规则是祖先样式表压过全局样式表，而 (a) 不带选择器的声明（如
     // "background:transparent;"）作用于本控件**及其全部子孙**，(b) 纯类型选择器（如
-    // "QWidget { … }"、"QFrame { … }"）命中所有该类型的子孙。两者都会让容器里的按钮、
-    // 输入框丢掉全局样式：空状态的主按钮只剩一行文字，告警横幅里的按钮丢了底色，
-    // 提示条里的主按钮丢了渐变。只想影响自身的写法是 ui::setSelfStyleSheet
-    // （#objectName { … }）。叶子控件（标签、自绘控件）上的声明没有子孙可波及，不报；
-    // 带颜色/字号等非盒模型属性的规则在别处判定，这里只看波及范围。
+    // "QWidget { … }"、"QFrame { … }"）命中所有该类型的子孙。后果分两种：
+    //   - 波及按钮、输入框：它们丢掉全局样式——空状态的主按钮只剩一行文字，告警
+    //     横幅里的按钮丢了底色，提示条里的主按钮丢了渐变；
+    //   - 带背景/边框/内边距的规则波及任何可见子孙：总览的告警卡给自己画左侧色条
+    //     （"QFrame { border-left: 4px solid … }"），它的图标标签和文字标签也都是
+    //     QFrame 子类，于是一张卡上并排出现三道竖条。
+    // 只想影响自身的写法是 ui::setSelfStyleSheet（#objectName { … }）。叶子控件上的
+    // 声明没有子孙可波及，不报。
     {
         static const char* const kInteractive[] = {"QAbstractButton", "QComboBox", "QLineEdit",
                                                    "QAbstractSpinBox", "QTextEdit",
@@ -624,46 +652,144 @@ std::vector<Violation> runRules(const QString& sceneId, QWidget* panel, int visi
         static const QRegularExpression comment(R"(/\*.*?\*/)");
         static const QRegularExpression rule(R"(([^{}]*)\{([^{}]*)\})");
         static const QRegularExpression bareType(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$"));
+        // 盒模型属性。"background: transparent" 不算：把它带给子控件是无害的（通常正是
+        // 为了抵消全局样式表的页面底色），只有涂了颜色、画了边框、加了内外边距的规则
+        // 波及子孙才会画出多余的东西
+        static const QRegularExpression transparentBg(
+            QStringLiteral(R"((^|;)\s*background(-color)?\s*:\s*(transparent|none)\s*(;|$))"));
+        static const QRegularExpression boxProperty(
+            QStringLiteral(R"((^|;)\s*(background|border|padding|margin)[a-z-]*\s*:)"));
+        const auto isBox = [](QString decls) {
+            QString d = ";" + decls.simplified() + ";";
+            d.remove(transparentBg);
+            return boxProperty.match(d).hasMatch();
+        };
         std::function<void(QWidget*)> walk = [&](QWidget* w) {
             QString ss = w->styleSheet();
             ss.remove(comment);
             QStringList selectors;  // 本控件样式表里会波及子孙的写法（原样，供报告）
             QStringList types;       // …及其命中的类型
+            QStringList boxes;       // …其中带背景/边框/内边距的规则，非空 = 也波及普通子孙
             if (ss.contains('{')) {
                 auto it = rule.globalMatch(ss);
                 while (it.hasNext()) {
                     const auto m = it.next();
+                    const bool box = isBox(m.captured(2));
                     for (const QString& sel : m.captured(1).split(','))
                         if (bareType.match(sel.trimmed()).hasMatch()) {
                             selectors << sel.trimmed() + " { … }";
                             types << sel.trimmed();
+                            boxes << (box ? m.captured(2).simplified().left(40) : QString());
                         }
                 }
             } else if (!ss.trimmed().isEmpty()) {
                 selectors << ss.simplified().left(40);
                 types << QStringLiteral("QWidget");  // 无选择器 = 全部子孙
+                boxes << (isBox(ss) ? ss.simplified().left(40) : QString());
             }
             for (int i = 0; i < types.size(); ++i) {
                 // 只看泛型容器类型。写 "QComboBox { padding… }""QPushButton { … }" 的意图
                 // 就是给里面的那类控件定样式，是合理用法
                 if (types[i] != QStringLiteral("QWidget") && types[i] != QStringLiteral("QFrame"))
                     continue;
+                const QByteArray typeName = types[i].toLatin1();
+                QWidget* firstControl = nullptr;
+                QWidget* firstBox = nullptr;
                 for (QWidget* d : w->findChildren<QWidget*>()) {
+                    if (!d->inherits(typeName.constData())) continue;
                     bool interactive = false;
                     for (const char* cls : kInteractive)
                         if (d->inherits(cls)) {
                             interactive = true;
                             break;
                         }
-                    if (!interactive || !d->inherits(types[i].toLatin1().constData())) continue;
+                    if (interactive && !firstControl) firstControl = d;
+                    const bool qtInternal = d->objectName().startsWith("qt_");
+                    if (!boxes[i].isEmpty() && !qtInternal && d->isVisible() && !firstBox)
+                        firstBox = d;
+                }
+                const auto describe = [](QWidget* d) {
                     const auto* btn = qobject_cast<QAbstractButton*>(d);
+                    return QString::fromLatin1(d->metaObject()->className()) +
+                           (btn ? "「" + btn->text() + "」" : QString());
+                };
+                if (firstControl)
                     out.push_back({"qss-rule-leaks-to-controls",
-                                   QString("%1[%2] → %3 %4")
+                                   QString("%1[%2] → %3")
                                        .arg(QString::fromLatin1(w->metaObject()->className()),
-                                            selectors[i],
-                                            QString::fromLatin1(d->metaObject()->className()),
-                                            btn ? "「" + btn->text() + "」" : QString())});
-                    break;
+                                            selectors[i], describe(firstControl))});
+                if (firstBox)
+                    out.push_back({"qss-box-rule-leaks-to-children",
+                                   QString("%1[%2 { %3 }] → %4")
+                                           .arg(QString::fromLatin1(w->metaObject()->className()),
+                                                types[i], boxes[i], describe(firstBox))});
+            }
+            for (QObject* c : w->children())
+                if (auto* cw = qobject_cast<QWidget*>(c)) walk(cw);
+        };
+        walk(panel);
+    }
+    // R10 卡片/磁贴里的普通容器必须自带透明底。全局样式表给所有 QWidget 涂页面底色
+    // （QWidget { background-color: @bg@; }），一个没有自己样式的 QWidget 放进卡片里，
+    // 就在卡片底色上再涂一块页面底色——"卡中卡"暗框（用量页预算卡里的摘要区就是）。
+    // 仓库里已有多处逐个打补丁（"background:transparent"），这里把它变成一条规则：
+    // 祖先里有卡片或磁贴的"裸 QWidget"必须有 background 声明。
+    // 卡片/磁贴 = QGroupBox，或既不是滚动区也不是 QLabel 的 QFrame 子类（自定义卡片）。
+    // 滚动区（QScrollArea、表格、树）也是 QFrame 子类，但不是卡片，不能算。
+    {
+        std::function<void(QWidget*, bool)> walk = [&](QWidget* w, bool insideCard) {
+            const bool cardHere =
+                insideCard || w->inherits("QGroupBox") ||
+                (w->inherits("QFrame") && !w->inherits("QAbstractScrollArea") &&
+                 !w->inherits("QLabel") && !w->inherits("QSplitter") &&
+                 !w->inherits("QStackedWidget"));
+            // 必须用 typeid 判断"恰好是 QWidget"：没有 Q_OBJECT 的自绘控件（图谱画布、
+            // 环形进度等）在 metaObject() 里报的类名同样是 "QWidget"，但它们自己涂底色
+            const bool plain = typeid(*w) == typeid(QWidget);
+            if (insideCard && plain && w->isVisible() &&
+                !w->styleSheet().contains("background") && w->objectName().isEmpty()) {
+                out.push_back({"widget-paints-page-color-inside-card",
+                               QString("位置 %1,%2（%3×%4）")
+                                   .arg(w->x())
+                                   .arg(w->y())
+                                   .arg(w->width())
+                                   .arg(w->height())});
+            }
+            for (QObject* c : w->children())
+                if (auto* cw = qobject_cast<QWidget*>(c)) walk(cw, cardHere);
+        };
+        walk(panel, false);
+    }
+    // R9 可见控件必须由父控件的布局管理。不在布局里的控件停在创建时的位置，父控件一布局
+    // 它就和别的控件重叠——用量页的「自动摘要沉淀」复选框因此被微调框整个盖住，而 harness
+    // 报 PASS：结构快照只记文本和可见性，看不见重叠。这是用户看截图发现的。
+    // 只查"父控件有布局"的情形：父控件没有布局，说明它的子控件是手工定位的（自绘复合
+    // 控件），不在此列。Qt 自己的内部子控件（qt_ 前缀）与对鼠标透明的手工覆盖层不算。
+    {
+        std::function<void(QLayout*, QSet<QWidget*>&)> collect =
+            [&](QLayout* lay, QSet<QWidget*>& managed) {
+                for (int i = 0; i < lay->count(); ++i) {
+                    QLayoutItem* item = lay->itemAt(i);
+                    if (auto* w = item->widget()) managed.insert(w);
+                    if (auto* sub = item->layout()) collect(sub, managed);
+                }
+            };
+        std::function<void(QWidget*)> walk = [&](QWidget* w) {
+            if (w->layout()) {
+                QSet<QWidget*> managed;
+                collect(w->layout(), managed);
+                for (QObject* c : w->children()) {
+                    auto* cw = qobject_cast<QWidget*>(c);
+                    if (!cw || cw->isWindow() || !cw->isVisible()) continue;
+                    if (cw->objectName().startsWith("qt_")) continue;
+                    if (cw->testAttribute(Qt::WA_TransparentForMouseEvents)) continue;
+                    if (managed.contains(cw)) continue;
+                    out.push_back({"widget-not-in-layout",
+                                   QString("%1 里的 %2（位置 %3,%4）")
+                                       .arg(QString::fromLatin1(w->metaObject()->className()),
+                                            focusKey(cw))
+                                       .arg(cw->x())
+                                       .arg(cw->y())});
                 }
             }
             for (QObject* c : w->children())
@@ -846,6 +972,24 @@ void settlePage(QWidget* page) {
         if (auto* gp = dynamic_cast<GraphPanel*>(w)) gp->settleLayout();
     });
     for (int i = 0; i < 4; ++i) QApplication::processEvents(QEventLoop::AllEvents, 50);
+    // 动画跳到终态。条形扫掠（450ms）、数字滚动这类由定时器驱动的动画，拍之前跑了
+    // 几个节拍，拍到的就是几分之一长度：全量跑时停在约一半，--filter 只跑一个面板时
+    // 停在起步那一帧——同一份代码，金样两张图。用户 450ms 之后看到的是终态，拍的也
+    // 该是终态（无限循环的动画没有终态，不动）
+    eachWidget([&](QWidget* w) {
+        for (QAbstractAnimation* a : w->findChildren<QAbstractAnimation*>()) {
+            if (a->state() != QAbstractAnimation::Running) continue;
+            const int total = a->totalDuration();
+            if (total > 0) a->setCurrentTime(total);
+        }
+    });
+    // 回收刷新里被移出布局、等着 deleteLater 的旧控件。总览的告警卡每次刷新都整批重建：
+    // 延迟删除执行之前，旧卡仍是可见子控件、停在旧位置上。不回收就拍，快照和截图里都
+    // 混着销毁在即的旧控件——基线里的告警卡一度是真实数量的两倍（规则 R9 抓到的）。
+    for (int i = 0; i < 2; ++i) {
+        QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QApplication::processEvents(QEventLoop::AllEvents, 30);
+    }
 }
 
 // ---- 状态保持（交互五项之一）----
@@ -1233,6 +1377,8 @@ int main(int argc, char** argv) {
         // 图谱画布的力导向模拟由定时器驱动，收敛后自动停帧；没跑完就拍，像素随拍摄
         // 时刻变。多泵几秒让它收敛（收敛后是定点，多出来的时间不改变画面）
         for (int i = 0; i < 30; ++i) QApplication::processEvents(QEventLoop::AllEvents, 100);
+        // 泵事件的这几秒里轮询定时器照常触发（面板会再刷新一轮），拍之前再落定一次
+        settlePage(panel);
         const QPixmap pm = panel->grab();
         QBuffer buf;
         buf.open(QIODevice::WriteOnly);

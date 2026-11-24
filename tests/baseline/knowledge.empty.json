@@ -10,8 +10,7 @@
         "QTableWidget",
         "QLineEdit「结果即筛…」",
         "QPushButton#primary「＋ 新建条目」",
-        "QComboBox",
-        "QPushButton「追加新版本」"
+        "QComboBox"
     ],
     "geom": [
         0,
@@ -257,9 +256,9 @@
                                                     "en": true,
                                                     "geom": [
                                                         234,
-                                                        14,
+                                                        250,
                                                         22,
-                                                        180
+                                                        22
                                                     ],
                                                     "text": "",
                                                     "vis": true
@@ -269,9 +268,9 @@
                                                     "en": true,
                                                     "geom": [
                                                         10,
-                                                        200,
+                                                        278,
                                                         470,
-                                                        180
+                                                        16
                                                     ],
                                                     "text": "还没有任何知识条目",
                                                     "vis": true
@@ -281,9 +280,9 @@
                                                     "en": true,
                                                     "geom": [
                                                         10,
-                                                        386,
+                                                        300,
                                                         470,
-                                                        180
+                                                        30
                                                     ],
                                                     "text": "知识库存放团队沉淀的经验与方案，供所有 Agent 检索引用；Agent 也可通过 POST /api/knowledge 直接写入。",
                                                     "vis": true
@@ -293,7 +292,7 @@
                                                     "en": true,
                                                     "geom": [
                                                         193,
-                                                        572,
+                                                        336,
                                                         103,
                                                         30
                                                     ],
@@ -302,7 +301,7 @@
                                                     "vis": true
                                                 }
                                             ],
-                                            "name": "__self7",
+                                            "name": "__QFrame_8b90",
                                             "vis": true
                                         }
                                     ],
@@ -335,7 +334,7 @@
                                 },
                                 {
                                     "class": "QPushButton",
-                                    "en": true,
+                                    "en": false,
                                     "geom": [
                                         400,
                                         654,

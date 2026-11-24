@@ -8,12 +8,6 @@
         "QToolButton「▾  偏好记录」",
         "QToolButton「▾  设备环境」",
         "QToolButton「▾  工作习惯」",
-        "QPushButton#primary「＋ 写入记忆」",
-        "QToolButton「▾  项目档案」",
-        "QToolButton「▾  决策日志」",
-        "QToolButton「▾  偏好记录」",
-        "QToolButton「▾  设备环境」",
-        "QToolButton「▾  工作习惯」",
         "QPushButton#primary「编辑 / 新增（生成新版本）」",
         "QPushButton「查看历史版本」",
         "QScrollArea"
@@ -135,8 +129,8 @@
                             "geom": [
                                 0,
                                 0,
-                                1208,
-                                1354
+                                1218,
+                                746
                             ],
                             "kids": [
                                 {
@@ -145,7 +139,7 @@
                                     "geom": [
                                         0,
                                         0,
-                                        1196,
+                                        1206,
                                         129
                                     ],
                                     "kids": [
@@ -153,7 +147,7 @@
                                             "class": "QLabel",
                                             "en": true,
                                             "geom": [
-                                                587,
+                                                592,
                                                 14,
                                                 22,
                                                 22
@@ -167,7 +161,7 @@
                                             "geom": [
                                                 10,
                                                 42,
-                                                1176,
+                                                1186,
                                                 16
                                             ],
                                             "text": "用户记忆还是空的",
@@ -179,7 +173,7 @@
                                             "geom": [
                                                 10,
                                                 64,
-                                                1176,
+                                                1186,
                                                 15
                                             ],
                                             "text": "记忆分项目档案 / 决策日志 / 偏好记录 / 设备环境 / 工作习惯五大区块，所有 Agent 共享同一份；写下第一条，协作就有了共同的背景。",
@@ -189,7 +183,7 @@
                                             "class": "QPushButton",
                                             "en": true,
                                             "geom": [
-                                                546,
+                                                551,
                                                 85,
                                                 103,
                                                 30
@@ -199,7 +193,7 @@
                                             "vis": true
                                         }
                                     ],
-                                    "name": "__self12",
+                                    "name": "__QFrame_8b90",
                                     "vis": true
                                 },
                                 {
@@ -208,8 +202,8 @@
                                     "geom": [
                                         0,
                                         139,
-                                        1196,
-                                        235
+                                        1206,
+                                        81
                                     ],
                                     "kids": [
                                         {
@@ -229,22 +223,24 @@
                                             "geom": [
                                                 0,
                                                 43,
-                                                1196,
-                                                192
+                                                1206,
+                                                38
                                             ],
                                             "kids": [
                                                 {
-                                                    "class": "QWidget",
+                                                    "class": "QLabel",
                                                     "en": true,
                                                     "geom": [
                                                         14,
                                                         10,
-                                                        1168,
-                                                        170
+                                                        1178,
+                                                        16
                                                     ],
+                                                    "text": "该区块暂无记忆 · 通过 memory set 或工具栏写入第一条，所有 Agent 共享",
                                                     "vis": true
                                                 }
                                             ],
+                                            "name": "__QWidget_a350",
                                             "vis": true
                                         }
                                     ],
@@ -255,9 +251,9 @@
                                     "en": true,
                                     "geom": [
                                         0,
-                                        384,
-                                        1196,
-                                        235
+                                        230,
+                                        1206,
+                                        81
                                     ],
                                     "kids": [
                                         {
@@ -277,22 +273,24 @@
                                             "geom": [
                                                 0,
                                                 43,
-                                                1196,
-                                                192
+                                                1206,
+                                                38
                                             ],
                                             "kids": [
                                                 {
-                                                    "class": "QWidget",
+                                                    "class": "QLabel",
                                                     "en": true,
                                                     "geom": [
                                                         14,
                                                         10,
-                                                        1168,
-                                                        170
+                                                        1178,
+                                                        16
                                                     ],
+                                                    "text": "该区块暂无记忆 · 通过 memory set 或工具栏写入第一条，所有 Agent 共享",
                                                     "vis": true
                                                 }
                                             ],
+                                            "name": "__QWidget_a350",
                                             "vis": true
                                         }
                                     ],
@@ -303,9 +301,9 @@
                                     "en": true,
                                     "geom": [
                                         0,
-                                        629,
-                                        1196,
-                                        235
+                                        321,
+                                        1206,
+                                        81
                                     ],
                                     "kids": [
                                         {
@@ -325,22 +323,24 @@
                                             "geom": [
                                                 0,
                                                 43,
-                                                1196,
-                                                192
+                                                1206,
+                                                38
                                             ],
                                             "kids": [
                                                 {
-                                                    "class": "QWidget",
+                                                    "class": "QLabel",
                                                     "en": true,
                                                     "geom": [
                                                         14,
                                                         10,
-                                                        1168,
-                                                        170
+                                                        1178,
+                                                        16
                                                     ],
+                                                    "text": "该区块暂无记忆 · 通过 memory set 或工具栏写入第一条，所有 Agent 共享",
                                                     "vis": true
                                                 }
                                             ],
+                                            "name": "__QWidget_a350",
                                             "vis": true
                                         }
                                     ],
@@ -351,9 +351,9 @@
                                     "en": true,
                                     "geom": [
                                         0,
-                                        874,
-                                        1196,
-                                        235
+                                        412,
+                                        1206,
+                                        81
                                     ],
                                     "kids": [
                                         {
@@ -373,22 +373,24 @@
                                             "geom": [
                                                 0,
                                                 43,
-                                                1196,
-                                                192
+                                                1206,
+                                                38
                                             ],
                                             "kids": [
                                                 {
-                                                    "class": "QWidget",
+                                                    "class": "QLabel",
                                                     "en": true,
                                                     "geom": [
                                                         14,
                                                         10,
-                                                        1168,
-                                                        170
+                                                        1178,
+                                                        16
                                                     ],
+                                                    "text": "该区块暂无记忆 · 通过 memory set 或工具栏写入第一条，所有 Agent 共享",
                                                     "vis": true
                                                 }
                                             ],
+                                            "name": "__QWidget_a350",
                                             "vis": true
                                         }
                                     ],
@@ -399,9 +401,9 @@
                                     "en": true,
                                     "geom": [
                                         0,
-                                        1119,
-                                        1196,
-                                        235
+                                        503,
+                                        1206,
+                                        81
                                     ],
                                     "kids": [
                                         {
@@ -421,325 +423,24 @@
                                             "geom": [
                                                 0,
                                                 43,
-                                                1196,
-                                                192
+                                                1206,
+                                                38
                                             ],
                                             "kids": [
                                                 {
-                                                    "class": "QWidget",
+                                                    "class": "QLabel",
                                                     "en": true,
                                                     "geom": [
                                                         14,
                                                         10,
-                                                        1168,
-                                                        170
+                                                        1178,
+                                                        16
                                                     ],
+                                                    "text": "该区块暂无记忆 · 通过 memory set 或工具栏写入第一条，所有 Agent 共享",
                                                     "vis": true
                                                 }
                                             ],
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QFrame",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        0,
-                                        1196,
-                                        129
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                587,
-                                                14,
-                                                22,
-                                                22
-                                            ],
-                                            "text": "",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                10,
-                                                42,
-                                                1176,
-                                                16
-                                            ],
-                                            "text": "用户记忆还是空的",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QLabel",
-                                            "en": true,
-                                            "geom": [
-                                                10,
-                                                64,
-                                                1176,
-                                                15
-                                            ],
-                                            "text": "记忆分项目档案 / 决策日志 / 偏好记录 / 设备环境 / 工作习惯五大区块，所有 Agent 共享同一份；写下第一条，协作就有了共同的背景。",
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QPushButton",
-                                            "en": true,
-                                            "geom": [
-                                                546,
-                                                85,
-                                                103,
-                                                30
-                                            ],
-                                            "name": "primary",
-                                            "text": "＋ 写入记忆",
-                                            "vis": true
-                                        }
-                                    ],
-                                    "name": "__self13",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        139,
-                                        1196,
-                                        235
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QToolButton",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                109,
-                                                43
-                                            ],
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                43,
-                                                1196,
-                                                192
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        1168,
-                                                        170
-                                                    ],
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        384,
-                                        1196,
-                                        235
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QToolButton",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                109,
-                                                43
-                                            ],
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                43,
-                                                1196,
-                                                192
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        1168,
-                                                        170
-                                                    ],
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        629,
-                                        1196,
-                                        235
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QToolButton",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                109,
-                                                43
-                                            ],
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                43,
-                                                1196,
-                                                192
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        1168,
-                                                        170
-                                                    ],
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        874,
-                                        1196,
-                                        235
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QToolButton",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                109,
-                                                43
-                                            ],
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                43,
-                                                1196,
-                                                192
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        1168,
-                                                        170
-                                                    ],
-                                                    "vis": true
-                                                }
-                                            ],
-                                            "vis": true
-                                        }
-                                    ],
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QWidget",
-                                    "en": true,
-                                    "geom": [
-                                        0,
-                                        1119,
-                                        1196,
-                                        235
-                                    ],
-                                    "kids": [
-                                        {
-                                            "class": "QToolButton",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                0,
-                                                109,
-                                                43
-                                            ],
-                                            "vis": true
-                                        },
-                                        {
-                                            "class": "QWidget",
-                                            "en": true,
-                                            "geom": [
-                                                0,
-                                                43,
-                                                1196,
-                                                192
-                                            ],
-                                            "kids": [
-                                                {
-                                                    "class": "QWidget",
-                                                    "en": true,
-                                                    "geom": [
-                                                        14,
-                                                        10,
-                                                        1168,
-                                                        170
-                                                    ],
-                                                    "vis": true
-                                                }
-                                            ],
+                                            "name": "__QWidget_a350",
                                             "vis": true
                                         }
                                     ],

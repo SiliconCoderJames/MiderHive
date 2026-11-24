@@ -8,6 +8,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFontMetrics>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -39,6 +40,7 @@ public:
         double x = 0, y = 0, vx = 0, vy = 0;
         int degree = 0;
         bool fixed = false;  // 用户拖拽中：物理跳过，位置跟手
+        double labelW = 0;   // 标题在画布字体下的宽度（世界坐标；标签互斥用）
     };
     struct Edge {
         int a = -1, b = -1;
@@ -70,20 +72,24 @@ public:
         nodes_.clear();
         edges_.clear();
         byUuid_.clear();
+        const QFontMetricsF fm(font());
+        ascent_ = fm.ascent();
+        descent_ = fm.descent();
         for (const auto& n : g.nodes) {
             Node node;
             node.uuid = QString::fromStdString(n.uuid);
             node.title = QString::fromStdString(n.title);
             node.category = QString::fromStdString(n.category);
             node.degree = static_cast<int>(n.degree);
+            node.labelW = fm.horizontalAdvance(elide(node.title, 24));
             const auto it = keep.constFind(node.uuid);
             if (it != keep.constEnd()) {
                 node.x = it->x();
                 node.y = it->y();
             } else {
                 const double ang = (nodes_.size() % 12) * 0.5236;  // 錯开初始角
-                node.x = 300 + 120 * std::cos(ang) + (rand01() - 0.5) * 60;
-                node.y = 260 + 120 * std::sin(ang) + (rand01() - 0.5) * 60;
+                node.x = cx() + 120 * std::cos(ang) + (rand01() - 0.5) * 60;
+                node.y = cy() + 120 * std::sin(ang) + (rand01() - 0.5) * 60;
             }
             byUuid_.insert(node.uuid, static_cast<int>(nodes_.size()));
             nodes_.push_back(node);
@@ -97,7 +103,7 @@ public:
         dragIdx_ = byUuid_.value(dragUuid, -1);
         if (dragIdx_ >= 0) nodes_[dragIdx_].fixed = true;  // 拖拽仍在途：恢复固定态
         selected_ = byUuid_.value(selUuid, -1);
-        running_ = true;  // 新拓扑重启物理
+        wake();  // 新拓扑重启物理
         update();
     }
 
@@ -107,13 +113,13 @@ public:
         rng_.seed(std::random_device{}());  // 每次点都是一份新布局
         for (auto& n : nodes_) {
             const double ang = rand01() * 6.2832;
-            n.x = 300 + 200 * std::cos(ang);
-            n.y = 260 + 200 * std::sin(ang);
+            n.x = cx() + 200 * std::cos(ang);
+            n.y = cy() + 200 * std::sin(ang);
             n.vx = n.vy = 0;
         }
         panX_ = panY_ = 0;
         scale_ = 1.0;
-        running_ = true;
+        wake();
     }
 
     void setOnSelect(std::function<void(const QString& uuid)> fn) { onSelect_ = std::move(fn); }
@@ -138,7 +144,7 @@ protected:
     void tick() {
         if (!running_ || nodes_.isEmpty()) return;
         constexpr double kRepulse = 9000.0, kSpring = 0.02, kRest = 130.0, kCenter = 0.003,
-                         kDamp = 0.85, kMinMove = 0.5;
+                         kDamp = 0.85, kMinMove = 0.5, kLabel = 0.12;
         double energy = 0;
         for (int i = 0; i < nodes_.size(); ++i) {
             for (int j = i + 1; j < nodes_.size(); ++j) {
@@ -148,6 +154,32 @@ protected:
                 const double d = std::sqrt(d2);
                 const double f = kRepulse / d2;
                 const double fx = f * dx / d, fy = f * dy / d;
+                nodes_[i].vx -= fx; nodes_[i].vy -= fy;
+                nodes_[j].vx += fx; nodes_[j].vy += fy;
+            }
+        }
+        // 标签互斥：斥力只作用在圆心上，两个节点上下错开半行时圆并不相交，右边的
+        // 标题却叠成了一团（"过滤技巧"压在"今天天气不错"上）。把每个节点的
+        // "圆 + 标题"方框两两比对，相交时沿重叠较浅的那条轴推开
+        QVector<QRectF> boxes;
+        boxes.reserve(nodes_.size());
+        for (const auto& n : nodes_) boxes.append(boxOf(n));
+        for (int i = 0; i < nodes_.size(); ++i) {
+            for (int j = i + 1; j < nodes_.size(); ++j) {
+                const double ox =
+                    std::min(boxes[i].right(), boxes[j].right()) -
+                    std::max(boxes[i].left(), boxes[j].left());
+                const double oy = std::min(boxes[i].bottom(), boxes[j].bottom()) -
+                                  std::max(boxes[i].top(), boxes[j].top());
+                if (ox <= 0 || oy <= 0) continue;
+                double fx = 0, fy = 0;
+                if (ox < oy) {
+                    fx = kLabel * ox;
+                    if (boxes[j].center().x() < boxes[i].center().x()) fx = -fx;
+                } else {
+                    fy = kLabel * oy;
+                    if (boxes[j].center().y() < boxes[i].center().y()) fy = -fy;
+                }
                 nodes_[i].vx -= fx; nodes_[i].vy -= fy;
                 nodes_[j].vx += fx; nodes_[j].vy += fy;
             }
@@ -163,8 +195,8 @@ protected:
         }
         for (auto& n : nodes_) {
             if (n.fixed) { n.vx = n.vy = 0; continue; }
-            n.vx -= (n.x - 300) * kCenter;
-            n.vy -= (n.y - 260) * kCenter;
+            n.vx -= (n.x - cx()) * kCenter;
+            n.vy -= (n.y - cy()) * kCenter;
             n.x += std::clamp(n.vx * kDamp, -20.0, 20.0);
             n.y += std::clamp(n.vy * kDamp, -20.0, 20.0);
             energy += std::fabs(n.vx) + std::fabs(n.vy);
@@ -176,11 +208,13 @@ protected:
             n.x = dragX_; n.y = dragY_;
         }
         update();
+        ++ticks_;
         if (energy < kMinMove * nodes_.size()) {
             ++settled_;
             if (settled_ > 30) running_ = false;  // 收敛后停帧省 CPU
         } else {
             settled_ = 0;
+            if (ticks_ > 6000) running_ = false;  // 约 96 秒仍不收敛：停，别一直占 CPU
         }
     }
 
@@ -196,7 +230,16 @@ protected:
                                     ? palette().window().color()
                                     : QColor(0, 0, 0, 0));
         painter.fillRect(rect(), QColor(0, 0, 0, 24));
-        if (nodes_.isEmpty()) return;
+        if (nodes_.isEmpty()) {
+            // 空画布不是一块黑板：说明这里会出现什么、内容从哪来（与图表空状态同一套画法）
+            ui::paintChartEmpty(painter, rect(),
+                                i18n::trs("还没有可关联的知识条目",
+                                          "No knowledge entries to link yet"),
+                                i18n::trs("在知识库写入条目后，这里自动按语义相似度连成图谱",
+                                          "Entries appear here, linked by semantic similarity, once "
+                                          "the knowledge base has content"));
+            return;
+        }
         painter.save();
         painter.translate(panX_, panY_);
         painter.scale(scale_, scale_);
@@ -243,6 +286,24 @@ protected:
     static QString elide(const QString& s, int n) {
         return s.size() <= n ? s : s.left(n) + "…";
     }
+    // 节点的占位方框（世界坐标）：圆 + 右侧的标题（标题基线在 (x + r + 3, y + 4)，
+    // 见 paintEvent）。标签互斥按它两两比对
+    QRectF boxOf(const Node& n) const {
+        const double r = 6 + std::min(n.degree, 12);
+        const double top = std::min(n.y - r, n.y + 4 - ascent_);
+        const double bottom = std::max(n.y + r, n.y + 4 + descent_);
+        return QRectF(n.x - r, top, 2 * r + 3 + n.labelW, bottom - top);
+    }
+    // 布局中心 = 画布中心。此前写死 (300, 260)：画布比它大得多时，整张图偏在左上角
+    double cx() const { return width() / 2.0; }
+    double cy() const { return height() / 2.0; }
+    // 重启物理（新拓扑、重布局、拖拽）：计数归零。帧数有上限——万一某种拓扑长期
+    // 不收敛，也不至于一直按 16ms 一帧占着 CPU
+    void wake() {
+        running_ = true;
+        settled_ = 0;
+        ticks_ = 0;
+    }
 
     // 世界 → 屏幕：screen = world * scale + pan
     QPointF toScreen(const QPointF& world) const {
@@ -284,7 +345,7 @@ protected:
             dragX_ = w.x();
             dragY_ = w.y();
             nodes_[idx].fixed = true;
-            running_ = true;
+            wake();
             if (onSelect_) onSelect_(nodes_[idx].uuid);
         } else {
             panning_ = true;
@@ -301,9 +362,9 @@ protected:
             dragX_ = w.x();
             dragY_ = w.y();
             // 拖拽中物理可能已收敛停帧（审计 H1）：不重启的话 mouseMove 只改
-            // dragX_/dragY_ 而无人应用到节点——节点视觉上脱手冻结
-            running_ = true;
-            settled_ = 0;
+            // dragX_/dragY_ 而无人应用到节点——节点视觉上脱手冻结。拖多久都不该被
+            // 帧数上限掐停，所以每次移动都把计数归零
+            wake();
         } else if (panning_) {
             panX_ = panStartX_ + (e->position().x() - panStart_.x());
             panY_ = panStartY_ + (e->position().y() - panStart_.y());
@@ -315,8 +376,7 @@ protected:
             if (dragIdx_ >= 0 && dragIdx_ < nodes_.size()) nodes_[dragIdx_].fixed = false;
             dragIdx_ = -1;
             panning_ = false;
-            running_ = true;  // 松手后让物理重新收敛一下
-            settled_ = 0;
+            wake();  // 松手后让物理重新收敛一下
         }
     }
 
@@ -327,6 +387,8 @@ private:
     QTimer* simTimer_ = nullptr;
     bool running_ = false;
     int settled_ = 0;
+    int ticks_ = 0;                // 本轮物理已跑的帧数（上限见 tick）
+    double ascent_ = 12, descent_ = 4;  // 画布字体的升部/降部（setGraph 时量一次）
     std::mt19937 rng_{0x9E3779B9u};  // 初始摆放的随机源（固定种子；relayout 时重新播种）
     double scale_ = 1.0;
     double panX_ = 0, panY_ = 0;
@@ -375,7 +437,6 @@ GraphPanel::GraphPanel(ah::Platform& platform, QWidget* parent) : PanelBase(plat
     auto* canvas = new GraphCanvas(graphCard_);
     graphView_ = canvas;
     gl->addWidget(canvas, 1);
-    root->addWidget(graphCard_, 1);
 
     detailCard_ = new QGroupBox(i18n::trs("节点详情", "Node Details"), this);
     detailCard_->setObjectName("card");
@@ -384,12 +445,15 @@ GraphPanel::GraphPanel(ah::Platform& platform, QWidget* parent) : PanelBase(plat
     dl->setSpacing(6);
     detailTitle_ = new QLabel(this);
     detailTitle_->setWordWrap(true);
+    detailTitle_->setTextFormat(Qt::PlainText);  // 标题是用户输入：按纯文本显示，不做富文本解释
     detailTitle_->setStyleSheet(ui::th("font-size:13px; font-weight:700; color:@text@;"));
     detailMeta_ = new QLabel(this);
     detailMeta_->setWordWrap(true);
+    detailMeta_->setTextFormat(Qt::PlainText);
     detailMeta_->setStyleSheet(ui::th("color:@muted@; font-size:11px;"));
     detailTags_ = new QLabel(this);
     detailTags_->setWordWrap(true);
+    detailTags_->setTextFormat(Qt::PlainText);
     detailTags_->setStyleSheet(ui::th("color:@muted@; font-size:11px;"));
     openKnowledgeBtn_ = new QPushButton(i18n::trs("在知识库中打开", "Open in Knowledge"), this);
     openKnowledgeBtn_->setEnabled(false);
@@ -398,6 +462,8 @@ GraphPanel::GraphPanel(ah::Platform& platform, QWidget* parent) : PanelBase(plat
     dl->addWidget(detailTags_);
     dl->addStretch(1);
     dl->addWidget(openKnowledgeBtn_, 0, Qt::AlignLeft);
+    // 图谱卡只进这一行。此前它先被加进根布局、又被加进 body——Qt 会把它从前者里
+    // 挪出来，结果没错，但读代码的人会以为页面上有两张图
     body->addWidget(graphCard_, 1);
     body->addWidget(detailCard_);
     root->addLayout(body, 1);
@@ -520,15 +586,17 @@ void GraphPanel::applyTagFilter() {
 void GraphPanel::showNodeDetail(const QString& uuid) {
     for (const auto& n : graph_.nodes)
         if (n.uuid == uuid.toStdString()) {
-            detailTitle_->setText(QString::fromStdString(n.title).toHtmlEscaped());
+            detailTitle_->setText(QString::fromStdString(n.title));
+            // 时间与知识库同一写法：相对时间 + 括号里的本地时刻。此前直接截 ISO 串的
+            // 前 16 位，显示的是 UTC（"2026-11-24T08:30"），比用户钟表慢 8 小时
+            const QString raw = QString::fromStdString(n.created_at);
             detailMeta_->setText(
                 QString("%1 · %2 · %3")
-                    .arg(QString::fromStdString(n.category).toHtmlEscaped(),
-                         QString::fromStdString(n.author).toHtmlEscaped(),
-                         QString::fromStdString(n.created_at).left(16)));
+                    .arg(QString::fromStdString(n.category), QString::fromStdString(n.author),
+                         relTime(raw) + " (" + localStamp(raw) + ")"));
             QString tags;
             for (const auto& t : n.tags) tags += "#" + QString::fromStdString(t) + " ";
-            detailTags_->setText(tags.toHtmlEscaped());
+            detailTags_->setText(tags.trimmed());
             openKnowledgeBtn_->setEnabled(true);
             selectedUuid_ = uuid;
             return;

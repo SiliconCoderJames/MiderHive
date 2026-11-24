@@ -65,16 +65,18 @@ QString statusChip(const QString& s) {
                                                                        : ui::note().name()));
     return QString("<span style='color:%1;'>● %2</span>").arg(color).arg(statusLabel(s));
 }
-// 发送者头像圈：取首字符，颜色由名字哈希决定（固定 6 色板）
+// 发送者头像徽标：取首字符，颜色由名字哈希决定（固定 6 色板）。QTextDocument 不支持
+// inline-block / min-width / 横向 padding——此前写的 min-width:18px 不生效，徽标只有
+// 字母本身那么宽、两侧没有留白，紧贴着前面的时间戳，看上去像压在了字上。宽度只能
+// 靠不换行空格撑出来
 QString avatar(const QString& sender) {
     static const char* kPalettes[] = {
         "#0ea5e9", "#22c55e", "#f59e0b", "#a78bfa", "#f472b6", "#34d399"};
     quint32 h = 0;
     for (QChar c : sender) h = h * 31 + c.unicode();
     QString initial = sender.left(1).toUpper().toHtmlEscaped();
-    return QString("<span style='display:inline-block; min-width:18px; text-align:center;"
-                   " background:%1; color:#101010; font-weight:700; border-radius:9px;"
-                   " padding:1px 0;'>%2</span>")
+    return QString("<span style='background:%1; color:#101010; font-weight:700;'"
+                   ">&nbsp;&nbsp;%2&nbsp;&nbsp;</span>")
         .arg(kPalettes[h % 6], initial);
 }
 }  // namespace
@@ -194,12 +196,13 @@ void MessagesPanel::renderChat() {
         bool selected = m.uuid == selectedUuid_;
         QString recipient =
             m.recipient.empty() ? i18n::trs("全员", "everyone") : QString::fromStdString(m.recipient);
-        // 气泡：选中描边高亮；task/question/note 用色区分；头部带头像圈
+        // 气泡：选中描边高亮；task/question/note 用色区分；头部带头像徽标。
+        // 徽标两侧用不换行空格隔开：普通空格紧跟徽标时只有一个字符宽，挤在一起
         html += QString(
                     "<a name='%1'></a>"
                     "<div style='margin:6px 4px;'>"
-                    "<span style='color:@muted@; font-size:10px; font-family:@mono@;'>%2</span> %7 "
-                    "<span style='color:@text@; font-size:11px;'>%3</span>"
+                    "<span style='color:@muted@; font-size:10px; font-family:@mono@;'>%2</span>"
+                    "&nbsp;&nbsp;%7&nbsp;<span style='color:@text@; font-size:11px;'>%3</span>"
                     " <span style='color:@muted@;'>→ %4</span> %5 %6"
                     "<div style='%9'>"
                     "<b>%8</b><br>%10"

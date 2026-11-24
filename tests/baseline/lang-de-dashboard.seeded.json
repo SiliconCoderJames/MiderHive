@@ -80,7 +80,7 @@
                         100,
                         30
                     ],
-                    "name": "__self64",
+                    "name": "__QWidget_696a",
                     "vis": false
                 },
                 {
@@ -129,11 +129,11 @@
                                     "vis": true
                                 }
                             ],
-                            "name": "__self77",
+                            "name": "__QWidget_7fe4",
                             "vis": true
                         }
                     ],
-                    "name": "__self65",
+                    "name": "__QWidget_696a",
                     "vis": true
                 },
                 {
@@ -164,10 +164,10 @@
                             "geom": [
                                 15,
                                 27,
-                                52,
+                                65,
                                 22
                             ],
-                            "text": "3090",
+                            "text": "3,090",
                             "vis": true
                         },
                         {
@@ -382,10 +382,10 @@
                             "geom": [
                                 15,
                                 27,
-                                52,
+                                65,
                                 27
                             ],
-                            "text": "3090",
+                            "text": "3,090",
                             "vis": true
                         },
                         {
@@ -444,7 +444,7 @@
                                 218,
                                 15
                             ],
-                            "text": "Gegenüber gestern",
+                            "text": "Keine Daten von gestern",
                             "vis": true
                         },
                         {
@@ -1068,7 +1068,7 @@
                                     "en": true,
                                     "geom": [
                                         39,
-                                        14,
+                                        13,
                                         22,
                                         0
                                     ],
@@ -1080,7 +1080,7 @@
                                     "en": true,
                                     "geom": [
                                         10,
-                                        18,
+                                        17,
                                         80,
                                         0
                                     ],
@@ -1100,7 +1100,7 @@
                                     "vis": false
                                 }
                             ],
-                            "name": "__self66",
+                            "name": "__QFrame_8b90",
                             "vis": false
                         }
                     ],
@@ -1194,7 +1194,7 @@
                                             "en": true,
                                             "geom": [
                                                 39,
-                                                14,
+                                                13,
                                                 22,
                                                 0
                                             ],
@@ -1206,7 +1206,7 @@
                                             "en": true,
                                             "geom": [
                                                 10,
-                                                18,
+                                                17,
                                                 80,
                                                 0
                                             ],
@@ -1226,7 +1226,7 @@
                                             "vis": false
                                         }
                                     ],
-                                    "name": "__self67",
+                                    "name": "__QFrame_8b90",
                                     "vis": false
                                 },
                                 {
@@ -1274,9 +1274,9 @@
                                     "en": true,
                                     "geom": [
                                         197,
-                                        14,
+                                        52,
                                         22,
-                                        43
+                                        22
                                     ],
                                     "text": "",
                                     "vis": false
@@ -1286,9 +1286,9 @@
                                     "en": true,
                                     "geom": [
                                         10,
-                                        63,
+                                        80,
                                         396,
-                                        42
+                                        16
                                     ],
                                     "text": "Keine Fehler, alles in Ordnung",
                                     "vis": false
@@ -1298,15 +1298,15 @@
                                     "en": true,
                                     "geom": [
                                         10,
-                                        111,
+                                        102,
                                         396,
-                                        43
+                                        15
                                     ],
                                     "text": "Bei Budgetüberschreitung oder Agent-Fehlern erscheinen hier nach Schweregrad gestufte Warnmeldungen",
                                     "vis": false
                                 }
                             ],
-                            "name": "__self68",
+                            "name": "__QFrame_8b90",
                             "vis": false
                         },
                         {
@@ -1344,6 +1344,7 @@
                                     "vis": true
                                 }
                             ],
+                            "name": "__QFrame_47f0",
                             "vis": true
                         },
                         {
@@ -1381,80 +1382,7 @@
                                     "vis": true
                                 }
                             ],
-                            "vis": true
-                        },
-                        {
-                            "class": "QFrame",
-                            "en": true,
-                            "geom": [
-                                31,
-                                45,
-                                416,
-                                109
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        18,
-                                        10,
-                                        15,
-                                        89
-                                    ],
-                                    "text": "",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        41,
-                                        10,
-                                        361,
-                                        89
-                                    ],
-                                    "text": "崩溃示例 — cursor · <rel>",
-                                    "vis": true
-                                }
-                            ],
-                            "vis": true
-                        },
-                        {
-                            "class": "QFrame",
-                            "en": true,
-                            "geom": [
-                                31,
-                                162,
-                                416,
-                                108
-                            ],
-                            "kids": [
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        18,
-                                        10,
-                                        15,
-                                        88
-                                    ],
-                                    "text": "",
-                                    "vis": true
-                                },
-                                {
-                                    "class": "QLabel",
-                                    "en": true,
-                                    "geom": [
-                                        41,
-                                        10,
-                                        361,
-                                        88
-                                    ],
-                                    "text": "MSVC C2062 示例错误 — claude · <rel>",
-                                    "vis": true
-                                }
-                            ],
+                            "name": "__QFrame_dbaf",
                             "vis": true
                         }
                     ],

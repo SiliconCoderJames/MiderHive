@@ -91,6 +91,8 @@ KnowledgePanel::KnowledgePanel(ah::Platform& platform, QWidget* parent)
     auto* right = new QWidget(splitter);
     auto* rl = new QVBoxLayout(right);
     metaLabel_ = new QLabel(right);
+    // 元信息一行放不下就换行：标题、作者、分类都是用户输入，长了会顶出详情栏被裁掉
+    metaLabel_->setWordWrap(true);
     rl->addWidget(metaLabel_);
     detail_ = new QTextBrowser(right);
     // 详情/空状态分页：全库为空时右侧直接给"模块是什么 + 怎么产生内容 + 显眼的新建按钮"
@@ -111,6 +113,7 @@ KnowledgePanel::KnowledgePanel(ah::Platform& platform, QWidget* parent)
     auto* vrow = new QHBoxLayout;
     versionCombo_ = new QComboBox(right);
     addVersionBtn_ = new QPushButton(i18n::trs("追加新版本", "Append Version"), right);
+    addVersionBtn_->setEnabled(false);  // 选中条目后才启用（onSelectEntry）
     vrow->addWidget(versionCombo_, 1);
     vrow->addWidget(addVersionBtn_);
     rl->addLayout(vrow);
@@ -160,15 +163,18 @@ void KnowledgePanel::onSearch() {
         const auto& e = hits_[i].entry;
         QString tags;
         for (const auto& t : e.tags) tags += QString::fromStdString(t) + " ";
+        // 版本写法与详情栏、版本下拉一致（v1）；没有标签的条目给一条占位，不留空白格
         setRow(table_, static_cast<int>(i),
-               {QString::fromStdString(e.title), QString::fromStdString(e.author), tags.trimmed(),
-                QString::number(e.version), relTime(QString::fromStdString(e.created_at))});
+               {QString::fromStdString(e.title), QString::fromStdString(e.author),
+                tags.trimmed().isEmpty() ? QString("—") : tags.trimmed(),
+                QString("v%1").arg(e.version), relTime(QString::fromStdString(e.created_at))});
     }
     fitTableColumns(table_, 0);  // 标题吃剩余空间，其余按内容宽（避免出现横向滚动条）
     applyTableFilter(table_, viewFilter_->text());  // 新结果套用当前过滤
 
-    // 统计摘要：总数 / 今日新增 / 热门标签（"今日"按本地日期，避免与用户时区错位）
-    const QDate todayLocal = QDate::currentDate();
+    // 统计摘要：总数 / 今日新增 / 热门标签（"今日"取显示时钟的本地日期，与相对时间
+    // 同一个钟；时钟被冻结时两边才对得上）
+    const QDate todayLocal = displayNow().date();
     int todayCount = 0;
     std::map<QString, int> tagFreq;
     for (const auto& h : hits_) {
@@ -193,8 +199,10 @@ void KnowledgePanel::onSearch() {
         table_->selectRow(0);
         onSelectEntry(0);
     } else {
-        // 空状态：右侧整栏切到引导页（模块作用 + 如何产生内容 + 新建按钮）
+        // 空状态：右侧整栏切到引导页（模块作用 + 如何产生内容 + 新建按钮）。
+        // 没有条目就没有可追加版本的对象
         detailStack_->setCurrentWidget(emptyState_);
+        addVersionBtn_->setEnabled(false);
     }
 }
 
@@ -204,15 +212,19 @@ void KnowledgePanel::onSelectEntry(int row) {
     const auto& e = hit.entry;
     currentUuid_ = e.uuid;
     detail_->setPlainText(QString::fromStdString(e.content));
+    // 这是一段富文本：标题、作者、分类都是用户输入，逐项转义（带 < 的作者名会把后面吞成标签）
     QString meta = QString("<b>%1</b> · %2: %3 · %4 v%5 · %6: %7 · %8: %9")
-                       .arg(QString::fromStdString(e.title).toHtmlEscaped())
-                       .arg(i18n::trs("作者", "Author"), QString::fromStdString(e.author))
-                       .arg(i18n::trs("版本", "Version"))
+                       .arg(QString::fromStdString(e.title).toHtmlEscaped(),
+                            i18n::trs("作者", "Author"),
+                            QString::fromStdString(e.author).toHtmlEscaped(),
+                            i18n::trs("版本", "Version"))
                        .arg(e.version)
-                       .arg(i18n::trs("分类", "Category"), QString::fromStdString(e.category))
-                       .arg(i18n::trs("时间", "Time"), relTime(QString::fromStdString(e.created_at))
-                                                            + " (" +
-                                                            localStamp(QString::fromStdString(e.created_at)) + ")");
+                       .arg(i18n::trs("分类", "Category"),
+                            QString::fromStdString(e.category).toHtmlEscaped(),
+                            i18n::trs("时间", "Time"),
+                            (relTime(QString::fromStdString(e.created_at)) + " (" +
+                             localStamp(QString::fromStdString(e.created_at)) + ")")
+                                .toHtmlEscaped());
     if (semanticCheck_->isChecked())
         meta += QString(" · %1: %2").arg(i18n::trs("距离", "dist")).arg(hit.score, 0, 'f', 4);
     metaLabel_->setText(meta);

@@ -49,8 +49,17 @@ namespace ui {
 inline void setSelfStyleSheet(QWidget* w, const QString& declarations) {
     QString name = w->objectName();
     if (name.isEmpty()) {
-        static int serial = 0;
-        name = QStringLiteral("__self%1").arg(++serial);
+        // 自动名只由"类名 + 声明内容"决定，与创建顺序、刷新次数无关。此前是全局递增的
+        // 序号：告警卡每次轮询刷新都重建一张，刷新多跑一轮，后面所有控件的序号就整体
+        // 后移——UI harness 的基线（快照里记着控件名）跟着漂移，带 --filter 跑时数字
+        // 也对不上。同类的相邻控件若声明相同会拿到同一个名字：样式表只作用于自己这棵
+        // 子树，兄弟之间互不影响；嵌套的同名容器声明本来就一样
+        QString cls;
+        for (QChar c : QString::fromLatin1(w->metaObject()->className()))
+            cls += (c.isLetterOrNumber() || c == '_') ? c : QLatin1Char('_');
+        const QString sum =
+            QString::number(qChecksum(declarations.toUtf8()), 16).rightJustified(4, QLatin1Char('0'));
+        name = QStringLiteral("__%1_%2").arg(cls, sum);
         w->setObjectName(name);
     }
     w->setStyleSheet(QStringLiteral("#%1 { %2 }").arg(name, declarations));
@@ -116,9 +125,14 @@ inline void paintChartEmpty(QPainter& p, const QRect& r, const QString& title, c
     p.drawText(QRect(r.left() + 8, cy + 26, r.width() - 16, 18), Qt::AlignCenter, hint);
 }
 
-// 紧凑数字：<1万原样，1万~100万 "12.3k"，≥100万 "1.23M"（柱顶标注与环内文字自适应用）
+// 紧凑数字：<1万带千分位，1万~100万 "12.3k"，≥100万 "1.23M"（柱顶标注与环内文字自适应用）。
+// 一万以下此前原样输出：同一个数在总览上一处是 3090，隔壁一列是 3,090
 inline QString fmtCompact(qint64 v) {
-    if (v < 10000) return QString::number(v);
+    if (v < 10000) {
+        QString s = QString::number(v);
+        for (int i = s.size() - 3; i > (v < 0 ? 1 : 0); i -= 3) s.insert(i, ',');
+        return s;
+    }
     const bool mega = v >= 1000000;
     double x = mega ? double(v) / 1000000.0 : double(v) / 1000.0;
     QString s = QString::number(x, 'f', x < 100 ? 1 : 0);
@@ -172,6 +186,11 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {
         if (series_.size() < 2) return;
+        // 少于两个非零点就没有"走势"可言：画出来只是一道从基线竖起的小撇加一小块填充，
+        // 看上去像渲染残留（一周里只有今天有用量时，KPI 磁贴上就是这样）。有趋势再画
+        int nonZero = 0;
+        for (qint64 v : series_) nonZero += v > 0;
+        if (nonZero < 2) return;
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
         const qreal pad = 2.0;
@@ -271,6 +290,10 @@ public:
         auto* lay = new QVBoxLayout(this);
         lay->setContentsMargins(10, 14, 10, 14);
         lay->setSpacing(6);
+        // 上下各垫一段弹性空间：图标、标题、提示按内容高度抱成一团、整体居中。
+        // 不垫的话，多出来的高度被几个"可增长"的标签平分——窗格一高，图标贴顶、
+        // 提示贴底，中间隔着两百多像素，读起来不像一句话
+        lay->addStretch(1);
         auto* icon = new QLabel(this);
         icon->setAlignment(Qt::AlignCenter);
         icon->setPixmap(makeIcon(iconKind, muted(), 22).pixmap(22, 22));
@@ -287,6 +310,7 @@ public:
                                  .arg(dim.red()).arg(dim.green()).arg(dim.blue())
                                  .arg(dim.alpha()));
         lay->addWidget(hint_);
+        lay->addStretch(1);
         lay_ = lay;  // 供 setAction 追加动作按钮
     }
     QLabel* titleLabel() const { return title_; }
@@ -299,7 +323,8 @@ public:
             actionBtn_->setObjectName("primary");
             actionBtn_->setCursor(Qt::PointingHandCursor);
             actionBtn_->setFixedHeight(30);
-            lay_->addWidget(actionBtn_, 0, Qt::AlignHCenter);
+            // 插在末尾那段弹性空间之前：按钮属于中间那一团，不落到窗格底部
+            lay_->insertWidget(lay_->count() - 1, actionBtn_, 0, Qt::AlignHCenter);
         }
         actionBtn_->setText(text);
         lay_->update();
@@ -829,6 +854,16 @@ private:
     bool hovered_ = false;
 };
 
+// 坐标轴顶值：不小于 v 的最小 1 / 2 / 5 × 10^n（3090 → 5000，7 → 10）。中点刻度因此
+// 总是 0.5 / 1 / 2.5 × 10^n，读得出量级；上限 10^18 只为防溢出
+inline qint64 niceCeil(qint64 v) {
+    qint64 mag = 1;
+    while (mag < 100000000000000000LL && v > mag * 10) mag *= 10;
+    for (qint64 m : {mag, 2 * mag, 5 * mag, 10 * mag})
+        if (v <= m) return m;
+    return v;
+}
+
 // ---- 纵向柱状图：每日 Token 趋势，柱体自底部扫掠升起 ----
 // 峰值柱用品牌色蜜金 + 亮色数值，其余强调色纵向渐变；底部日期 MM-DD。
 class VBarChart : public QWidget {
@@ -846,21 +881,12 @@ public:
     }
     void mouseReleaseEvent(QMouseEvent* e) override {
         if (e->button() != Qt::LeftButton || !onClick_) return;
-        const int n = entries_.size();
-        if (n <= 0 || width() <= 4) return;
-        const double slot = double(width() - 4) / n;
-        const int idx = int((e->position().x() - 2) / qMax(1.0, slot));
-        if (idx >= 0 && idx < n) onClick_(idx);
+        const int idx = barAt(e->position().x());
+        if (idx >= 0) onClick_(idx);
     }
     // 悬停柱：tooltip 给出「日期: 数值」，并把该柱提亮
     void mouseMoveEvent(QMouseEvent* e) override {
-        const int n = entries_.size();
-        int next = -1;
-        if (n > 0 && width() > 4) {
-            const double slot = double(width() - 4) / n;
-            const int idx = int((e->position().x() - 2) / qMax(1.0, slot));
-            if (idx >= 0 && idx < n) next = idx;
-        }
+        const int next = barAt(e->position().x());
         if (next == hovered_) return;
         hovered_ = next;
         if (hovered_ >= 0)
@@ -911,13 +937,15 @@ protected:
                                       "accumulates as agents report tokens"));
             return;
         }
-        const int valueH = 18;  // 顶部数值标签区
-        const int labelH = 20;  // 底部日期标签区
-        const int axisW = 34;   // 左侧刻度区：没有刻度的柱状图读不出量级
-        QRectF plot(axisW, valueH, width() - axisW - 2, height() - valueH - labelH);
+        const QRectF plot = plotRect();
         qint64 maxV = 1;
         for (const auto& e : entries_) maxV = qMax(maxV, e.second);
-        // 网格：顶/中/底三条淡虚线 + 左侧量级刻度（顶=峰值，中=一半，底=0）
+        // 轴顶取整到 1 / 2 / 5 × 10^n，刻度落在整值上（0 / 一半 / 轴顶）。此前直接拿
+        // 数据峰值当轴顶：峰值 3090 时一半是 1545，各自四舍五入成 "2k" "3k"——等距的
+        // 刻度配着不等距的数字，读图的人会以为中线是 2k
+        const qint64 axisMax = niceCeil(maxV);
+        const int axisW = kAxisW, valueH = kValueH, labelH = kLabelH;
+        // 网格：顶/中/底三条淡虚线 + 左侧量级刻度
         p.setPen(QPen(line(), 1, Qt::DashLine));
         for (double r : {0.0, 0.5, 1.0}) {
             double y = plot.bottom() - plot.height() * r;
@@ -934,14 +962,14 @@ protected:
                 double y = plot.bottom() - plot.height() * r;
                 // 刻度单位统一：同一根轴上不允许出现 "1.1M" 与 "571k" 混排——
                 // 按轴最大值选定单位，全部刻度共用（读数时不必来回换算量级）
-                const qint64 v = qint64(maxV * r);
+                const qint64 v = qint64(axisMax * r);
                 QString lbl;
                 if (v == 0)
                     lbl = "0";  // 零点写 "0M" 别扭：它不属于任何量级
-                else if (maxV >= 1000000)
-                    lbl = QString::number(v / 1000000.0, 'f', 1) + "M";
-                else if (maxV >= 1000)
-                    lbl = QString::number(v / 1000.0, 'f', 0) + "k";
+                else if (axisMax >= 1000000)
+                    lbl = QString::number(v / 1000000.0, 'f', v % 1000000 == 0 ? 0 : 1) + "M";
+                else if (axisMax >= 10000)  // 轴顶 1000/2000/5000 时中点是 500/1000/2500：原样更好读
+                    lbl = QString::number(v / 1000.0, 'f', v % 1000 == 0 ? 0 : 1) + "k";
                 else
                     lbl = QString::number(v);
                 p.drawText(QRectF(0, y - 8, axisW - 5, 16), Qt::AlignRight | Qt::AlignVCenter, lbl);
@@ -953,9 +981,36 @@ protected:
         QFont f = p.font();
         f.setPixelSize(9);
         p.setFont(f);
+        // 底部日期：槽位放不下每个都标时隔 step 个标一个，最右边（今天）总是标出。
+        // 此前 14 个日期全部标出，相邻标签粘在一起
+        const int labelNeed = QFontMetrics(f).horizontalAdvance(QStringLiteral("00-00")) + 8;
+        int labelStep = 1;
+        while (labelStep < n && slot * labelStep < labelNeed) ++labelStep;
+        // 柱顶数值：任意两条相邻标注会相撞，就全部不标（确切数值悬停可见）。比的是
+        // 非零柱之间的实际间距，不是槽位宽度——只有一根柱子时标注比槽位宽一点也无妨
+        // （按槽位一刀切时，德语界面窄了 1 像素，孤零零一根柱子也丢了标注）。
+        // 贴边放不进绘图区的单条标注单独跳过
+        bool topLabels = true;
+        QVector<int> labelW(n, -1);  // 非零柱的标注宽度；贴边放不下的记 -2
+        {
+            const QFontMetrics fmTop(f);
+            int prev = -1;
+            for (int i = 0; i < n; ++i) {
+                if (entries_[i].second <= 0) continue;
+                const int w = fmTop.horizontalAdvance(fmtCompact(entries_[i].second));
+                const double lx = plot.left() + slot * (i + 0.5);
+                labelW[i] = (lx - w / 2.0 >= plot.left() - 1 && lx + w / 2.0 <= plot.right() + 1)
+                                ? w
+                                : -2;
+                if (prev >= 0 && slot * (i - prev) <
+                                     (qMax(0, labelW[prev]) + qMax(0, w)) / 2.0 + 4)
+                    topLabels = false;
+                prev = i;
+            }
+        }
         for (int i = 0; i < n; ++i) {
             double cx = plot.left() + slot * (i + 0.5);
-            double ratio = double(entries_[i].second) / double(maxV) * sweep_;
+            double ratio = double(entries_[i].second) / double(axisMax) * sweep_;
             double h = plot.height() * ratio;
             QRectF bar(cx - barW / 2, plot.bottom() - h, barW, h);
             bool isMax = entries_[i].second == maxV && maxV > 1;
@@ -969,21 +1024,39 @@ protected:
             if (h > 0.5) p.drawRoundedRect(bar, 3, 3);
             // 顶部数值（峰值亮色，其余弱化）；0 值柱不标注——否则轴线上会多出一个 "0"，
             // 和 Y 轴刻度撞在一起，像是两个不同的零点
-            if (entries_[i].second > 0) {
+            if (topLabels && labelW[i] >= 0) {
                 p.setPen(QPen(isMax ? brand() : muted()));
                 p.drawText(QRectF(cx - slot / 2, bar.top() - valueH + 2, slot, valueH),
                            Qt::AlignCenter, fmtCompact(entries_[i].second));
             }
-            // 底部日期 MM-DD
+            // 底部日期 MM-DD（见 labelStep：放不下时隔几个标一个，最右边总是标出）
             QString day = entries_[i].first;
             if (day.size() >= 10) day = day.mid(5);
-            p.setPen(QPen(muted()));
-            p.drawText(QRectF(cx - slot / 2, plot.bottom() + 3, slot, labelH - 3),
-                       Qt::AlignCenter, day);
+            const bool last = i == n - 1;
+            if (last || (i % labelStep == 0 && n - 1 - i >= labelStep)) {
+                p.setPen(QPen(muted()));
+                p.drawText(QRectF(cx - slot / 2, plot.bottom() + 3, slot, labelH - 3),
+                           Qt::AlignCenter, day);
+            }
         }
     }
 
 private:
+    // 绘制与命中测试共用这一套几何。左侧刻度区当初只加进了 paintEvent，悬停/点击
+    // 仍按整个控件宽度分槽：点到的是左边那根柱子，图表越窄偏得越多
+    static constexpr int kAxisW = 34;   // 左侧刻度区：没有刻度的柱状图读不出量级
+    static constexpr int kValueH = 18;  // 顶部数值标签区
+    static constexpr int kLabelH = 20;  // 底部日期标签区
+    QRectF plotRect() const {
+        return QRectF(kAxisW, kValueH, width() - kAxisW - 2, height() - kValueH - kLabelH);
+    }
+    int barAt(double x) const {
+        const int n = entries_.size();
+        const QRectF plot = plotRect();
+        if (n <= 0 || plot.width() <= 0) return -1;
+        const int idx = int((x - plot.left()) / (plot.width() / n));
+        return idx >= 0 && idx < n ? idx : -1;
+    }
     QVector<QPair<QString, qint64>> entries_;
     double sweep_ = 1.0;
     int hovered_ = -1;
@@ -1194,13 +1267,17 @@ public:
     AlertCard(const QString& severity, const QString& text, QWidget* parent = nullptr)
         : QFrame(parent) {
         QColor c = severity == "critical" ? danger() : (severity == "warn" ? warn() : note());
-        // 卡底按严重度淡染（12% 透明度），左侧色条 + 同色文字
-        setStyleSheet(QString("QFrame { background:rgba(%1,%2,%3,28); border-left:4px solid %4;"
-                              " border-radius:6px; padding:2px; }")
-                          .arg(c.red())
-                          .arg(c.green())
-                          .arg(c.blue())
-                          .arg(c.name()));
+        // 卡底按严重度淡染（12% 透明度），左侧色条 + 同色文字。
+        // 只作用于卡片自身：原先写的是 "QFrame { … }"，它同样命中卡片里的图标标签和
+        // 文字标签（QLabel 也是 QFrame 子类），于是一张告警卡上并排出现三道竖条
+        ui::setSelfStyleSheet(
+            this,
+            QString("background:rgba(%1,%2,%3,28); border-left:4px solid %4;"
+                    " border-radius:6px; padding:2px;")
+                .arg(c.red())
+                .arg(c.green())
+                .arg(c.blue())
+                .arg(c.name()));
         // 高度随内容增长：长文案换行后卡片必须跟着长高，否则文字会被卡片裁掉
         // （审计脚本实测：超预算告警换行后被裁 33px）
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
@@ -1402,20 +1479,30 @@ public:
             " border-radius:8px; padding:10px 14px; font-size:13px; font-weight:600;"
             " text-align:left; }"
             "QToolButton:hover { border-color:@accent@; }"));
-        content_->setStyleSheet(th(
-            "QWidget { background:@field@; border:1px solid @line@;"
-            " border-top:none; border-radius:0 0 8px 8px; }"));
+        // 只作用于内容区自身。原先写的是 "QWidget { … }"：它同样命中内容区里的每一行
+        // 标签和空状态控件——用户记忆的每个区块里都多出一圈内缩的边框，小字还被裁掉上半截
+        ui::setSelfStyleSheet(
+            content_,
+            th("background:@field@; border:1px solid @line@; border-top:none;"
+               " border-radius:0 0 8px 8px;"));
         lay->addWidget(toggle);
         lay->addWidget(content_);
+        toggle_ = toggle;
         connect(toggle, &QToolButton::toggled, this, [this, toggle](bool on) {
             content_->setVisible(on);
             toggle->setText(on ? "▾  " + toggle->text().mid(3)
                                : "▸  " + toggle->text().mid(3));
         });
     }
+    // 折叠状态：面板重建卡片时据此把用户折起来的区块保持折起
+    bool expanded() const { return toggle_->isChecked(); }
+    void setExpanded(bool on) {
+        if (toggle_->isChecked() != on) toggle_->click();
+    }
 
 private:
     QWidget* content_;
+    QToolButton* toggle_ = nullptr;
 };
 
 // ---- 空状态母题：蜜金蜂巢三六边形 + 标题 + 出路提示（品牌触点，见 docs/brand.md §3）----

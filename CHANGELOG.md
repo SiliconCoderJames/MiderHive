@@ -71,6 +71,61 @@ survive the 3-second refresh.
   scoped per agent. The step now checks the scoping itself (A sees only its own rows) and, when
   `MH_ZCODE_KEY` is set, that the manager sees everything. The other 22 steps pass again.
 
+The next group comes from a screen-by-screen review of all 47 harness scenes (every screenshot
+inspected, suspicious spots enlarged). The harness had passed all of them: it compared
+structure, not layout, and knew nothing about hit testing, number formats or disabled states.
+- **Dashboard alert cards drew three vertical bars.** The card's `QFrame { border-left: … }` rule
+  also matched the icon and text labels inside it (a `QLabel` is a `QFrame` subclass). The card
+  and the health banner now style only themselves.
+- **Memory panel rebuilt its five section cards on every 3-second refresh**, so a section the user
+  had collapsed re-expanded, and each empty section repeated a large illustration (four times on
+  one screen). Cards are rebuilt only when the entries or the language change, collapsed sections
+  stay collapsed, an empty section gets a one-line hint, and each entry is one row with key,
+  version, author and relative time.
+- **The daily usage chart's y-axis ticks were the peak, half the peak and zero, rounded for
+  display** (3090 → "3k", 1545 → "2k"): equally spaced ticks with unequal numbers. The axis top is
+  now rounded to 1 / 2 / 5 × 10ⁿ (3090 → 5000, ticks 0 / 2500 / 5000). X-axis labels are thinned
+  when they would touch (the last day is always labelled) and bar values are hidden when
+  neighbouring ones would collide.
+- **The daily usage chart's hover and click hit the wrong bar.** The left axis had been added to
+  the painting code only; hit testing still divided the full widget width, so the cursor was off
+  by up to one bar. Painting and hit testing share one geometry now.
+- **Numbers below 10,000 had no thousands separator** in compact form: the same value read "3090"
+  in a KPI tile and "3,090" in the budget card next to it.
+- **Dashboard, "Today's tokens" tile** read "vs yesterday" with nothing after it when yesterday
+  had no data (the delta pill that line introduces is hidden then). It says "no data yesterday".
+- **The KPI sparkline drew a stroke when there was no trend** (a single non-zero point).
+- **Usage panel**: the digest controls sat in a darker box inside the budget card.
+- **Knowledge panel**: the entry's meta line (title, author, version, category, time) did not wrap
+  and was cut off at the right edge of the detail pane; author and category were not escaped in
+  rich text. The table shows versions as "v1" like the detail pane and the version list, a
+  placeholder instead of a blank cell for entries without tags, and "new today" follows the
+  display clock. "Append version" is disabled while nothing is selected.
+- **Skills panel**: the table's columns covered only half of its width, with a blank area to the
+  right. A `resizeColumnsToContents()` call after the stretch column was configured reset it.
+- **Messages panel**: the sender badge was 7 px wide with no side bearing and jammed against the
+  timestamp. Qt's rich-text engine ignores `inline-block`, `min-width` and horizontal padding on a
+  span; the badge's width now comes from no-break spaces.
+- **A disabled danger button looked enabled**: "Decline" stayed solid red while every other action
+  was greyed out. `QPushButton#danger` outranks `QPushButton:disabled` and had no disabled rule.
+- **Errors panel**: with errors listed, nothing was selected and the detail pane was an empty
+  card; "Mark resolved" was always enabled and answered a click with a message box. The first row
+  is selected by default (as in the knowledge and skills panels), the button is disabled while
+  nothing is selected, and the filter dropdowns show localized names (the enum value travels in
+  the item data) instead of raw `open` / `warning` next to a table that said "unresolved" /
+  "warning". The detail header wraps and is escaped. A filter that matches nothing says so
+  instead of "No errors — all clear ✓".
+- **Graph**: two node titles could be drawn on top of each other — the repulsion acts on node
+  centres, and two nodes half a line apart have separate circles but overlapping labels. The
+  layout also pushes apart the "circle + title" boxes, the layout centre follows the canvas
+  instead of a hard-coded point (the graph sat in the upper-left of a large canvas), and the
+  simulation stops after about 96 s even if it never settles. Node details show plain text (a
+  title containing `&` was displayed as `&amp;`) and the time in the local zone (it was the UTC
+  ISO string).
+- **Empty states were spread across the whole pane**: icon at the top, hint at the bottom, 200 px
+  apart, because the labels absorbed all spare height. The block is centred as one unit, and the
+  empty graph canvas says what will appear there.
+
 ### Added
 - **The UI harness is a required check** (47 scenes; it fails CI and `scripts/ci_local.ps1`
   like any other gate). It starts the workbench exactly as `gui/main.cpp` does (application
@@ -86,6 +141,20 @@ survive the 3-second refresh.
   baseline); stylesheets must not contain unreplaced `@token@` placeholders; a container's
   stylesheet rule must not reach the controls inside it; user state (selection, filter text,
   scroll position, combo box choice) must survive an automatic refresh.
+- Four more rules from the review: a visible control must be managed by its parent's layout
+  (`widget-not-in-layout`); a container's box-model rule must not reach any visible descendant
+  (`qss-box-rule-leaks-to-children`); a plain `QWidget` inside a card must not paint the page
+  colour (`widget-paints-page-color-inside-card`); every `QPushButton#variant` must define a
+  `:disabled` state (`button-variant-no-disabled-state`). Each rule was checked by reverting the
+  fix it was written for and confirming that it fires.
+- The harness runs animations to their end state before it captures a scene. Screenshots and
+  golden images used to show the 450 ms bar animation at whatever tick it had reached — about
+  half length in a full run, the first frame with `--filter` — so the same code produced two
+  different golden images.
+- `ui::setSelfStyleSheet()` derives the name it gives a widget without an object name from the
+  widget's class and its declarations, no longer from a running counter. The counter advanced
+  with every rebuilt alert card, so one more refresh before a scene shifted every later name in
+  the snapshot; across six rounds four scenes differed from the first round by name only.
 - Baseline differences now report where they differ; every scene is captured as a screenshot
   and listed in `build/ui_harness/ui_report.html`; CI uploads the snapshots and the report as the
   `ui-harness` artifact.

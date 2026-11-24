@@ -102,6 +102,9 @@ UsagePanel::UsagePanel(ah::Platform& platform, QWidget* parent)
 
     // ---- 自动摘要沉淀（digest）：受预算闸门约束的自营调用 ----
     auto* digestBox = new QWidget(budgetCard_);
+    // 透明底：没有自己样式的 QWidget 会被全局样式表涂上页面底色，在预算卡里显出一块
+    // 更暗的方框（"卡中卡"）
+    ui::setSelfStyleSheet(digestBox, QStringLiteral("background:transparent;"));
     auto* dl = new QVBoxLayout(digestBox);
     dl->setContentsMargins(0, 10, 0, 0);
     dl->setSpacing(4);

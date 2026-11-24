@@ -416,12 +416,14 @@ void DashboardPanel::refreshHealth() {
     const QColor c = ui::warn();
     for (const auto& r : rows) {
         auto* row = new QFrame(healthBox_);
-        row->setStyleSheet(QString("QFrame { background:rgba(%1,%2,%3,28);"
-                                   " border-left:4px solid %4; border-radius:6px; }")
-                               .arg(c.red())
-                               .arg(c.green())
-                               .arg(c.blue())
-                               .arg(c.name()));
+        // 只作用于横幅自身：写 "QFrame { … }" 的话，它同样命中横幅里的图标标签和
+        // 文字标签（告警卡就因此长出三道竖条）
+        ui::setSelfStyleSheet(row, QString("background:rgba(%1,%2,%3,28);"
+                                           " border-left:4px solid %4; border-radius:6px;")
+                                       .arg(c.red())
+                                       .arg(c.green())
+                                       .arg(c.blue())
+                                       .arg(c.name()));
         auto* hl = new QHBoxLayout(row);
         hl->setContentsMargins(10, 6, 10, 6);
         hl->setSpacing(8);
@@ -685,9 +687,14 @@ void DashboardPanel::refresh() {
     if (!dailySeries.isEmpty()) {
         const qint64 today = dailySeries.back();
         const qint64 prev = dailySeries.size() >= 2 ? dailySeries[dailySeries.size() - 2] : 0;
+        // 说明文字引出的是右侧的涨跌胶囊；昨日没有数据时胶囊不显示，"较昨日"就成了
+        // 没有下文的半句话——如实说昨天没有数据
+        const bool hasPrev = prev > 0;
         kpiToday_->set(i18n::trs("今日消耗", "Today's tokens"), ui::fmtCompact(today),
-                       i18n::trs("较昨日", "vs yesterday"), ui::accent());
-        if (prev > 0) {
+                       hasPrev ? i18n::trs("较昨日", "vs yesterday")
+                               : i18n::trs("昨日无数据", "no data yesterday"),
+                       ui::accent());
+        if (hasPrev) {
             const double d = 100.0 * double(today - prev) / double(prev);
             kpiToday_->setDelta(QString("%1%2%").arg(d >= 0 ? "▲ " : "▼ ").arg(qAbs(d), 0, 'f', 0),
                                 d >= 0 ? ui::danger() : ui::ok());
