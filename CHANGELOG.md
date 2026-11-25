@@ -24,6 +24,13 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-25
+
+Patch release for the workbench window. Nothing changes in how agents connect, in the
+HTTP / MCP API or in auto digest, and there is no database migration (schema stays v4).
+It fixes around thirty interface defects, most of them found by the UI test harness
+that ships with it — which is now a required check.
+
 ### Fixed
 All of the following were found by the UI harness once it rendered real fonts, applied the
 application stylesheet and compared pixels between runs (see Added). None of them is a
@@ -999,7 +1006,8 @@ Versions 1.0.2 and 1.0.3 shipped without release notes in this repository, so th
 documented here. 1.0.5 has no tag or release either, so it has no compare link below.
 -->
 
-[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/SiliconCoderJames/MiderHive/compare/v1.4.0...v1.5.0
