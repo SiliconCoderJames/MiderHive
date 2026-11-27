@@ -1584,6 +1584,10 @@ inline const std::unordered_map<std::string_view, std::string_view>& fr() {
          "Aucune entrée de connaissances à relier pour le moment"},
         {"在知识库写入条目后，这里自动按语义相似度连成图谱",
          "Dès que la base de connaissances contient des entrées, elles apparaissent ici, reliées par similarité sémantique"},
+        {"切换语言（当前：%1）",
+         "Changer de langue (actuelle : %1)"},
+        {"一句话说清是什么事",
+         "De quoi s'agit-il ? (une phrase)"},
     };
     return k;
 }

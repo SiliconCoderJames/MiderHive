@@ -1584,6 +1584,10 @@ inline const std::unordered_map<std::string_view, std::string_view>& de() {
          "Noch keine Wissenseinträge zum Verknüpfen"},
         {"在知识库写入条目后，这里自动按语义相似度连成图谱",
          "Sobald die Wissensbasis Einträge enthält, erscheinen sie hier – nach semantischer Ähnlichkeit verknüpft"},
+        {"切换语言（当前：%1）",
+         "Sprache wechseln (aktuell: %1)"},
+        {"一句话说清是什么事",
+         "Worum geht es? (ein Satz)"},
     };
     return k;
 }

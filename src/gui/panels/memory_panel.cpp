@@ -195,6 +195,7 @@ void MemoryPanel::retranslate() {
 void MemoryPanel::onEdit() {
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("编辑用户记忆（保存后生成新版本，历史保留）", "Edit Memory (saved as a new version; history kept)"));
+    sizeFormDialog(&dlg, 600, 420);
     auto* form = new QFormLayout(&dlg);
     auto* section = new QComboBox(&dlg);
     for (const auto& sec : kSections) section->addItem(i18n::trs(sec.zh, sec.en), sec.key);
@@ -246,6 +247,7 @@ void MemoryPanel::onEdit() {
 void MemoryPanel::onShowHistory() {
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("按键查询历史版本", "Query History by Key"));
+    sizeFormDialog(&dlg, 420, 160);  // 两个字段的查询框，但键名可能很长：别只给 200 像素
     auto* form = new QFormLayout(&dlg);
     auto* section = new QComboBox(&dlg);
     for (const auto& sec : kSections) section->addItem(i18n::trs(sec.zh, sec.en), sec.key);

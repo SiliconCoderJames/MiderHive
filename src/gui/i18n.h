@@ -41,18 +41,19 @@ struct LangInfo {
     Lang lang;
     const char* id;         // 持久化用的稳定标识
     const char* nativeName; // 菜单里显示的名字
+    const char* shortName;  // 侧栏语言按钮上的简称（一行脚注放不下全名）
     const char* qtBase;     // Qt 自带文案的 qm 名（空 = 用源语言，不装）
 };
 inline const std::vector<LangInfo>& languages() {
     static const std::vector<LangInfo> k = {
-        {Lang::Zh,     "zh",      "简体中文", "qtbase_zh_CN"},
-        {Lang::ZhHant, "zh-Hant", "繁體中文", "qtbase_zh_TW"},
-        {Lang::Ja,     "ja",      "日本語",   "qtbase_ja"},
-        {Lang::Ko,     "ko",      "한국어",    "qtbase_ko"},
-        {Lang::De,     "de",      "Deutsch",  "qtbase_de"},
-        {Lang::Fr,     "fr",      "Français", "qtbase_fr"},
-        {Lang::It,     "it",      "Italiano", "qtbase_it"},
-        {Lang::En,     "en",      "English",  ""},
+        {Lang::Zh,     "zh",      "简体中文", "中", "qtbase_zh_CN"},
+        {Lang::ZhHant, "zh-Hant", "繁體中文", "繁", "qtbase_zh_TW"},
+        {Lang::Ja,     "ja",      "日本語",   "日", "qtbase_ja"},
+        {Lang::Ko,     "ko",      "한국어",    "한", "qtbase_ko"},
+        {Lang::De,     "de",      "Deutsch",  "DE", "qtbase_de"},
+        {Lang::Fr,     "fr",      "Français", "FR", "qtbase_fr"},
+        {Lang::It,     "it",      "Italiano", "IT", "qtbase_it"},
+        {Lang::En,     "en",      "English",  "EN", ""},
     };
     return k;
 }

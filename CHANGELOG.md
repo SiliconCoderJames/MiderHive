@@ -24,6 +24,68 @@ join the hive over HTTP or MCP.
 
 ## [Unreleased]
 
+### Fixed
+- **First-run onboarding was a dead end.** Clicking any tool button in the welcome dialog
+  answered "Enter an agent name first" and stopped: the name field lives in a result panel that
+  only appeared after every step succeeded, so it could never be reached (the self-test missed
+  it because it filled the name in programmatically first). The panel now opens as soon as a
+  tool is picked, the identity name is prefilled with that tool's default (switching tools
+  updates it unless you have edited it), the page scrolls with the height capped to the screen,
+  and "Get started" is pinned below the scroll area.
+- **The sidebar language button collapsed to "···" with a dropdown arrow.** The footer is one
+  ~170 px line and full native names ("简体中文", "Italiano") do not fit. It shows a short name
+  (中 / 繁 / 日 / 한 / DE / FR / IT / EN) now; the full name moved to the tooltip, and the rule
+  that hides the dropdown arrow is re-applied with the rest of the button styles on every theme
+  change (it used to be overwritten, bringing the arrow back).
+- The graph nav item had no icon (the sidebar asked the icon factory for "graph", it only knows
+  "waypoints"), and the graph page header used the overview icon. Both draw the waypoints icon.
+- **The knowledge graph opened off-centre with nodes clipped by the canvas edge.** The layout
+  starts when the panel is constructed, while the canvas is still its default 100×30; by the
+  time the user first opens the page the canvas is full size but the settled layout stays where
+  it was. Showing or resizing the panel now shifts the whole graph (relative positions kept,
+  drag in progress included) so it centres on the visible canvas.
+- The status bar drew a light separator at the right edge of every cell (Qt's classic segmented
+  look, glaring in a dark theme). Off.
+- Errors panel: the table had 2/5 of the splitter and the title column collapsed to
+  "agents.json 写…" while the detail pane had room to spare — 3/2 now. The manual-report
+  severity dropdown lists all four severities with the same localized names the table uses (it
+  was missing "错误 error" and mixed names with raw enums).
+- The "Ask console" footer button had no border and looked unrelated to the two beside it; all
+  three footer buttons share one style, re-applied on theme changes.
+- The compose dialog's kind dropdown listed raw enums (note / question / task) while the
+  message bubbles say 留言 / 提问 / 任务 — localized names now, enum in the item data. Subject
+  has a placeholder and the body a minimum height.
+- Multi-line form dialogs opened at their minimum size: new knowledge entry 310 px wide,
+  "Mark resolved" 278 px, memory history query 200 px. They open at working sizes through a
+  shared helper now.
+- The knowledge entry viewer's meta line hugged the window edge; the layout has real margins.
+- The About page said "Ctrl 1-7" for panel switching (nine panels since the graph landed) and
+  did not mention Ctrl+Q.
+- Usage ring: the used/total caption was placed with fixed pixel offsets and collided with the
+  arc ends in narrow cards (1080×680). Its position follows the radius now, falls back to the
+  compact form, and is dropped when even that does not fit through the ring opening (the
+  percentage centres itself in the ring then).
+- Skills table: at 1080×680 the stretch column was crushed below its header text
+  ("使用热度" showed as "用热") and the table grew no scrollbar. The last column stretches only
+  when everything fits; otherwise columns keep their content width and the table scrolls
+  (re-checked on resize and on every refresh).
+
+### Added
+- `ui_shots` (`src/harness/shots_main.cpp`), a screenshot workbench for docs and design work.
+  `pages` captures the whole window (system title bar included) of every panel on the real
+  desktop without stealing focus, pressing itself to the bottom of the Z-order, clearing hover
+  state, and keeping all interface settings in an INI inside the data directory (the real
+  registry is untouched). `dialogs` walks every dialog and menu offscreen and runs layout
+  checks (widget clipped by the dialog, label text cut off, destructive button as default,
+  no focus target, cramped multi-line editors). `--demo` seeds a coherent demo data set
+  in-process: 14 days of per-agent usage, budget derived to ~48 %, knowledge, memory in all
+  five sections, skills with invocation heat, conversations including an over-preview-length
+  note, and errors. Not a CI gate; data comes from the caller otherwise.
+- Harness rules: every nav item must have an icon, the language button must show a readable
+  name, and in the graph scenes every node (with its title) must stay inside the canvas —
+  the chrome lives outside the per-panel snapshots, which is exactly why the defects above
+  survived two screen-by-screen reviews of the panels.
+
 ## [1.6.2] - 2026-11-25
 
 Patch release for the workbench window. Nothing changes in how agents connect, in the

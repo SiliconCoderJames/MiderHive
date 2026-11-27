@@ -450,33 +450,43 @@ protected:
             p.setPen(prog);
             p.drawArc(rect, 45 * 16, int(-270 * 16 * ratio));
         }
-        // 中心文字（百分比随用量着色，与环体呼应）
-        p.setPen(QPen(usageColor(ratio).lighter(115)));
-        QFont f = p.font();
-        f.setPixelSize(side / 6);
-        f.setBold(true);
-        p.setFont(f);
-        QRectF center = rect.adjusted(14, 14, -14, -14);
-        p.drawText(center.adjusted(0, -14, 0, -14), Qt::AlignCenter,
-                   QString("%1%").arg(ratio * 100, 0, 'f', 1));
-        f.setPixelSize(side / 14);
-        p.setFont(f);
-        p.setPen(QPen(muted()));
+        // 中心文字：百分比在上，已用 / 总额贴着底部开口。位置按环的半径算——固定像素偏移
+        // 在环变小（1080×680 窗口下的用量页）时会把小字推到弧线端头上
+        const double r = rect.width() / 2.0;
+        const QPointF mid = rect.center();
         auto fmt = [](qint64 v) {
             QString s = QString::number(v);
             for (int i = s.size() - 3; i > 0; i -= 3) s.insert(i, ',');
             return s;
         };
-        // drawText 传入矩形会按矩形裁剪：环变小或数字变长时，首个数字会被切掉
-        // （曾出现 "4,200 / 10,000,00"）。这里按可用宽度决定是否退化为紧凑记法。
-        QFontMetrics fm(p.font());
-        const int avail = int(center.width());
-        auto fit = [&](QString s, qint64 a, qint64 b) {
-            if (fm.horizontalAdvance(s) <= avail) return s;
-            return QString("%1 / %2").arg(fmtCompact(a), fmtCompact(b));
-        };
-        p.drawText(center.adjusted(0, 16, 0, 16), Qt::AlignCenter,
-                   fit(QString("%1 / %2").arg(fmt(used_), fmt(total_)), used_, total_));
+        // 已用 / 总额：以开口的内缘为界（两侧是弧线端帽，各占约 6 像素）。带千分位的完整
+        // 记法放得下才用，否则退化为紧凑记法——drawText 传入矩形会按矩形裁剪，数字变长时
+        // 首个数字会被切掉（曾出现 "4,200 / 10,000,00"）。连紧凑记法都放不下就不画：
+        // 百分比改为落在环的正中（百分比与环下方的「剩余 …」已经说明了用量）
+        QFont f = p.font();
+        f.setPixelSize(qMax(8, side / 14));
+        p.setFont(f);
+        const QFontMetrics fm(p.font());
+        const int avail = int(2 * (0.707 * r - 14));
+        const QString full = QString("%1 / %2").arg(fmt(used_), fmt(total_));
+        const QString line = fm.horizontalAdvance(full) <= avail
+                                 ? full
+                                 : QString("%1 / %2").arg(fmtCompact(used_), fmtCompact(total_));
+        const bool showLine = fm.horizontalAdvance(line) <= avail;
+        f.setPixelSize(qMax(13, side / 6));
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(QPen(usageColor(ratio).lighter(115)));
+        const double dy = showLine ? r * 0.33 : 0.0;
+        p.drawText(QRectF(mid.x() - r, mid.y() - dy - r * 0.80, 2 * r, r * 0.95), Qt::AlignCenter,
+                   QString("%1%").arg(ratio * 100, 0, 'f', 1));
+        if (showLine) {
+            f.setPixelSize(qMax(8, side / 14));
+            p.setFont(f);
+            p.setPen(QPen(muted()));
+            p.drawText(QRectF(mid.x() - r, mid.y() + r * 0.08, 2 * r, r * 0.52), Qt::AlignCenter,
+                       line);
+        }
         if (!caption_.isEmpty()) {
             f.setPixelSize(qMax(10, side / 16));
             p.setFont(f);

@@ -11,7 +11,10 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
 #include <QSettings>
+#include <QTimer>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -27,10 +30,27 @@ WelcomeDialog::WelcomeDialog(ah::Platform& platform, QWidget* parent)
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     // 不锁死尺寸：字号调到 14px 或系统字体放大时，固定尺寸会把内容挤掉
     setMinimumSize(620, 540);
-    resize(660, 640);
+    // 高度不超过屏幕的九成。选了工具之后多出"结果面板"，整页要一千多像素——1366×768、
+    // 125% 缩放的 1080p 都放不下，底部的「开始使用」会被顶出屏幕。放不下的部分靠滚动，
+    // 按钮固定在滚动区外面
+    const int screenH = screen() ? screen()->availableGeometry().height() : 1080;
+    resize(660, qMin(900, screenH - 120));
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(28, 24, 28, 20);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+    scroll_ = new QScrollArea(this);
+    scroll_->setFrameShape(QFrame::NoFrame);
+    scroll_->setWidgetResizable(true);
+    scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // 滚动区自己不进 Tab 链：否则初始焦点落在它上面，而不是第一个工具按钮
+    scroll_->setFocusPolicy(Qt::NoFocus);
+    auto* body = new QWidget(scroll_);
+    scroll_->setWidget(body);
+    outer->addWidget(scroll_, 1);
+
+    auto* root = new QVBoxLayout(body);
+    root->setContentsMargins(28, 24, 28, 8);
     root->setSpacing(8);
 
     // 品牌头：logo + 名称 + 定稿口号
@@ -234,7 +254,9 @@ WelcomeDialog::WelcomeDialog(ah::Platform& platform, QWidget* parent)
     root->addLayout(grid);
     root->addStretch(1);
 
+    // 按钮固定在滚动区外面：内容再长，出口也一直在
     auto* row = new QHBoxLayout();
+    row->setContentsMargins(28, 0, 28, 18);
     row->addStretch(1);
     auto* go = new QPushButton(i18n::trs("开始使用 →", "Get started →"), this);
     go->setObjectName("primary");
@@ -242,7 +264,7 @@ WelcomeDialog::WelcomeDialog(ah::Platform& platform, QWidget* parent)
     go->setFixedWidth(140);
     connect(go, &QPushButton::clicked, this, &QDialog::accept);
     row->addWidget(go);
-    root->addLayout(row);
+    outer->addLayout(row);
 
     connect(this, &QDialog::finished, this, [](int) {
         QSettings s;
@@ -255,6 +277,22 @@ void WelcomeDialog::pickTool(const ui::integrations::Tool& tool) {
     // 此前它在本行就被改写，校验失败提前 return 时旧凭据残留，之后点
     // 「自动写入」会把上一个工具签发的身份写进新工具的配置文件
     for (auto* b : toolBtns_) b->setChecked(b->property("toolId") == tool.id);
+
+    // 结果面板先亮出来：身份名、配置片段、「自动写入」都在里面。此前它要等全部步骤成功
+    // 才显示，而下面的身份名校验读的正是面板里的输入框——第一次点任何工具都读到空名字，
+    // 弹「请先填写接入身份名」后原路返回，面板永远出不来：首启引导的一键接入是条死路
+    //（全链路自测没发现，因为它替用户先把名字填好了）。校验失败时面板也留着，用户才
+    // 有地方改名重试
+    resultBox_->setVisible(true);
+    // 面板在滚动区下面一截：滚过去，别让用户以为点了没反应
+    if (scroll_)
+        QTimer::singleShot(0, this, [this] { scroll_->ensureWidgetVisible(resultBox_, 0, 24); });
+    // 身份名：留空、或还是上一个工具的默认值时，换成这个工具的默认值（与接入向导一致）；
+    // 用户自己改过的名字保留
+    const QString currentName = nameEdit_->text().trimmed();
+    if (currentName.isEmpty() || currentName == lastDefault_)
+        nameEdit_->setText(tool.defaultAgentName);
+    lastDefault_ = tool.defaultAgentName;
 
     // 1) 本地检测：PATH 或常见安装路径（检测不到不影响配置——先装后配同样可行）
     const bool found = ui::integrations::installed(tool.id);

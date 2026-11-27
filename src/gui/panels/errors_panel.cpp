@@ -111,8 +111,10 @@ ErrorsPanel::ErrorsPanel(ah::Platform& platform, QWidget* parent)
     detail_ = new QTextBrowser(right);
     rl->addWidget(detail_, 1);
     splitter->addWidget(right);
-    splitter->setStretchFactor(0, 2);
-    splitter->setStretchFactor(1, 3);
+    // 左侧表格占大头：标题是最该读全的一列。此前反过来是 2:3，1280 宽的窗口里标题列
+    // 被挤成"agents.json 写…"，右边详情栏却空着一大片
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 2);
     layout->addWidget(splitter, 1);
 
     // 空状态：说明"这里会出现什么 + 怎么补充内容"，并给手动上报的显眼入口
@@ -287,6 +289,7 @@ void ErrorsPanel::onResolve() {
     const ah::ErrorReport e = errors_[static_cast<size_t>(row)];
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("登记解决: %1", "Resolve: %1").arg(QString::fromStdString(e.title)));
+    sizeFormDialog(&dlg, 560, 340);
     auto* l = new QVBoxLayout(&dlg);
     auto* notes = new QPlainTextEdit(&dlg);
     notes->setPlaceholderText(i18n::trs("解决说明（追加到错误记录，不覆盖原内容）",
@@ -311,13 +314,14 @@ void ErrorsPanel::onResolve() {
 void ErrorsPanel::onManualReport() {
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("手动上报错误", "Report an issue"));
+    sizeFormDialog(&dlg, 580, 440);
     auto* form = new QFormLayout(&dlg);
     auto* sev = new QComboBox(&dlg);
-    sev->addItem(i18n::trs("提示 info", "info"), QString("info"));
-    // data 必须是后端契约枚举 warning：此前写成 "warn"，platform 层归一化后
-    // 该错误入库为 error——在"警告"筛选下永远看不到自己刚上报的条目
-    sev->addItem(i18n::trs("警告 warning", "warning"), QString("warning"));
-    sev->addItem(i18n::trs("严重 critical", "critical"), QString("critical"));
+    // 四个严重度全列出来，显示名与表格、筛选项同一种写法（存储值在 item data 里）。
+    // 此前只列了三个、缺"错误"，而且显示的是"提示 info"这种名字加枚举的混合写法；
+    // data 必须是后端契约枚举——曾写成 "warn"，归一化后入库为 error，在"警告"筛选下
+    // 永远看不到自己刚上报的条目
+    for (const auto& e : kSeverity) sev->addItem(enumText(kSeverity, e.value), QString::fromLatin1(e.value));
     auto* title = new QLineEdit(&dlg);
     title->setPlaceholderText(i18n::trs("一句话概括问题", "One-line summary"));
     auto* detail = new QPlainTextEdit(&dlg);

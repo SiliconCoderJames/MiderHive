@@ -20,6 +20,9 @@ public:
     void retranslate() override;
     void focusFilter() override;
 
+protected:
+    void resizeEvent(QResizeEvent*) override;  // 窗口变宽变窄后重算"吃富余还是滚动"
+
 private slots:
     void onRegister();
     void onSelectSkill(int row);

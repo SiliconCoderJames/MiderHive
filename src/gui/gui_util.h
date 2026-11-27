@@ -14,6 +14,7 @@
 #include <QMessageBox>
 #include <QTableWidget>
 #include <QTimeZone>
+#include <QTimer>
 #include <QTreeWidget>
 
 #include <functional>
@@ -227,6 +228,32 @@ inline void fitTableColumns(QTableWidget* table, int stretchColumn = -1) {
     }
 }
 
+// "最后一列吃富余"与"横向滚动"之间自动切换，配 fitTableColumns(table) 使用。只设最后一列
+// 拉伸的话，内容放不下时它会被硬压到剩余宽度——表头文字被裁掉（1080×680 窗口下技能库的
+// 「使用热度」只剩两个字），而且表格不会出滚动条。放得下时拉伸、不留空白条；放不下时各列
+// 保持内容宽，表格自己出滚动条。视口宽度或内容变化后都要重算（延迟到事件循环的下一拍，
+// 那时表头长度才更新）
+inline void fillOrScroll(QTableWidget* table) {
+    auto* h = table->horizontalHeader();
+    const int last = h->count() - 1;
+    if (last < 0) return;
+    int content = 0;
+    for (int i = 0; i < last; ++i) content += h->sectionSize(i);
+    // 最后一列按内容宽应该多宽（它是 ResizeToContents 模式，表头自己算得出来）
+    const int lastContent = h->sectionSizeHint(last);
+    const bool fits = content + lastContent + 2 <= table->viewport()->width();
+    if (fits) {
+        h->setStretchLastSection(true);
+    } else {
+        h->setStretchLastSection(false);
+        h->resizeSection(last, lastContent);  // 从"吃富余"切回来时，它还停在原来的宽度
+    }
+}
+
+inline void fillOrScrollLater(QTableWidget* table) {
+    QTimer::singleShot(0, table, [table] { fillOrScroll(table); });
+}
+
 // 审计日志的 detail 是紧凑 JSON。这里做轻量清洗（不引入 JSON 依赖），
 // 让"改了哪个字段、值是什么"能一眼读出来：
 //   {"call_type":"llm","tokens_in":2600}  ->  call_type=llm · tokens_in=2600
@@ -275,6 +302,13 @@ inline void polishTable(QTableWidget* table) {
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::SingleSelection);
     table->setWordWrap(false);
+}
+
+// 多行输入对话框的尺寸。QDialog::exec() 按最小尺寸弹出，一段说明只有一行十来个字的
+// 宽度可写（新建知识条目 310 像素宽、登记解决 278 像素）。按内容类型给宽高，最小值兜底
+inline void sizeFormDialog(QDialog* dlg, int width, int height) {
+    dlg->resize(width, height);
+    dlg->setMinimumSize(qMin(420, width), qMin(300, height));
 }
 
 // 即时过滤（纯函数）：按任意列、大小写不敏感隐藏不匹配的行，空文本恢复全部；

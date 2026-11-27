@@ -1584,6 +1584,10 @@ inline const std::unordered_map<std::string_view, std::string_view>& it() {
          "Ancora nessuna voce di conoscenza da collegare"},
         {"在知识库写入条目后，这里自动按语义相似度连成图谱",
          "Non appena la base di conoscenza contiene voci, queste compaiono qui, collegate per somiglianza semantica"},
+        {"切换语言（当前：%1）",
+         "Cambia lingua (attuale: %1)"},
+        {"一句话说清是什么事",
+         "Di cosa si tratta? (una frase)"},
     };
     return k;
 }

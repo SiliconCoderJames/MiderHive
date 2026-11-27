@@ -12,6 +12,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QResizeEvent>
 #include <QSettings>
 #include <QSplitter>
 #include <QVBoxLayout>
@@ -56,7 +57,11 @@ SkillsPanel::SkillsPanel(ah::Platform& platform, QWidget* parent)
     table_->setHorizontalHeaderLabels({i18n::trs("名称", "Name"), i18n::trs("显示名", "Display"),
                                       i18n::trs("分类", "Category"), i18n::trs("提供者", "Owner"), i18n::trs("版本", "Ver."),
                                       i18n::trs("状态", "Status"), i18n::trs("使用热度", "Usage Heat")});
-    fitTableColumns(table_, 6);  // 使用热度列吃剩余空间，其余按内容宽
+    // 各列按内容宽；"最后一列吃富余"与"横向滚动"由 fillOrScroll 按窗口宽度自动切换。
+    // 不能只把最后一列设成拉伸列：放不下时它会被硬压到表头文字以下（1080×680 下
+    // 「使用热度」只剩"用热"两个字），而且表格不会出滚动条
+    fitTableColumns(table_);
+    fillOrScrollLater(table_);
     polishTable(table_);
     // 不要再调 resizeColumnsToContents()：它把拉伸列也打回内容宽，列就只铺到表格的
     // 一半，右边剩一块空白（选中行的底色也到那里为止）。ResizeToContents 自己会跟着内容变
@@ -91,6 +96,11 @@ SkillsPanel::SkillsPanel(ah::Platform& platform, QWidget* parent)
     layout->addWidget(splitter, 1);
 
     connect(table_, &QTableWidget::cellClicked, this, [this](int row, int) { onSelectSkill(row); });
+}
+
+void SkillsPanel::resizeEvent(QResizeEvent* e) {
+    PanelBase::resizeEvent(e);
+    fillOrScrollLater(table_);  // 视口宽度变了，表头放不放得下要重算
 }
 
 void SkillsPanel::focusFilter() {
@@ -211,6 +221,7 @@ void SkillsPanel::refresh() {
     // 这里不再 resizeColumnsToContents()：列是 ResizeToContents 模式，行一插入就自己
     // 按内容重算；再手动调一遍反而把拉伸列打回内容宽（见构造函数里的说明）
     applyTableFilter(table_, filterEdit_->text());  // 行已重建，重放即时过滤态
+    fillOrScrollLater(table_);  // 内容变了，表头放不放得下要重算
     if (restoreRow >= 0) {
         detailStack_->setCurrentWidget(detail_);
         table_->selectRow(restoreRow);
@@ -274,6 +285,7 @@ void SkillsPanel::onSelectSkill(int row) {
 void SkillsPanel::onRegister() {
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("注册新技能（先注册后调用）", "Register Skill (register before invoke)"));
+    sizeFormDialog(&dlg, 620, 540);
     auto* form = new QFormLayout(&dlg);
     auto* name = new QLineEdit(&dlg);
     auto* display = new QLineEdit(&dlg);

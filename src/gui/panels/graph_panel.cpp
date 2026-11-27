@@ -14,6 +14,8 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QShowEvent>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -72,6 +74,7 @@ public:
         nodes_.clear();
         edges_.clear();
         byUuid_.clear();
+        bool reused = false;  // 有没有沿用旧位置的节点
         const QFontMetricsF fm(font());
         ascent_ = fm.ascent();
         descent_ = fm.descent();
@@ -86,6 +89,7 @@ public:
             if (it != keep.constEnd()) {
                 node.x = it->x();
                 node.y = it->y();
+                reused = true;
             } else {
                 const double ang = (nodes_.size() % 12) * 0.5236;  // 錯开初始角
                 node.x = cx() + 120 * std::cos(ang) + (rand01() - 0.5) * 60;
@@ -94,6 +98,8 @@ public:
             byUuid_.insert(node.uuid, static_cast<int>(nodes_.size()));
             nodes_.push_back(node);
         }
+        // 整批都是新节点时，布局从"此刻的画布中心"开始（见 recenter）
+        if (!reused) centreUsed_ = QPointF(cx(), cy());
         for (const auto& e : g.edges) {
             const auto a = byUuid_.value(QString::fromStdString(e.a_uuid), -1);
             const auto b = byUuid_.value(QString::fromStdString(e.b_uuid), -1);
@@ -119,6 +125,7 @@ public:
         }
         panX_ = panY_ = 0;
         scale_ = 1.0;
+        centreUsed_ = QPointF(cx(), cy());
         wake();
     }
 
@@ -127,6 +134,17 @@ public:
     int nodeCount() const { return static_cast<int>(nodes_.size()); }
     int edgeCount() const { return static_cast<int>(edges_.size()); }
     bool running() const { return running_; }
+    // 所有节点（连右侧的标题）是否都在画布可见范围内。给 UI harness 用：面板藏着的时候
+    // 算出来的布局会偏到画布外（见 recenter）
+    bool withinCanvas() const {
+        for (const auto& n : nodes_) {
+            const QPointF s = toScreen(QPointF(n.x, n.y));
+            const double r = (6 + std::min(n.degree, 12)) * scale_;
+            const QRectF box(s.x() - r - 2, s.y() - r - 2, 2 * r + 5 + n.labelW * scale_ + 2, 2 * r + 4);
+            if (!QRectF(rect()).contains(box)) return false;
+        }
+        return true;
+    }
 
     // 同步把物理跑到它自己的停止条件。给测试用：UI harness 要的是可复现的最终布局，
     // 不能取决于拍摄前定时器恰好跑了多少帧（阻尼较弱，5 个节点也要跑几秒才停——
@@ -207,6 +225,9 @@ protected:
             auto& n = nodes_[dragIdx_];
             n.x = dragX_; n.y = dragY_;
         }
+        // 布局实际围绕的中心跟着节点一起向当前画布中心靠拢（与节点同一个一阶滞后）。
+        // recenter 靠它知道"这张图现在是围着哪一点摆的"
+        centreUsed_ += (QPointF(cx(), cy()) - centreUsed_) * (kCenter * kDamp);
         update();
         ++ticks_;
         if (energy < kMinMove * nodes_.size()) {
@@ -324,6 +345,32 @@ protected:
         return best;
     }
 
+    // 面板从隐藏到显示、画布变大变小时，把整张图平移到画布中心（保持相对位置）。
+    // 面板一构造就开始算布局，那时它还藏在页面栈里、画布只有默认的 100×30：布局围着那个
+    // "中心"收敛后停帧。等用户第一次打开图谱页，画布已经是真实尺寸，位置却不再动——
+    // 看到的是偏在左上角、被画布左缘裁掉一截的图，要点一次「重新布局」才正常
+    void showEvent(QShowEvent* e) override {
+        recenter();
+        QWidget::showEvent(e);
+    }
+    void resizeEvent(QResizeEvent* e) override {
+        recenter();
+        QWidget::resizeEvent(e);
+    }
+    void recenter() {
+        const QPointF now(cx(), cy());
+        const QPointF shift = now - centreUsed_;
+        if (shift.isNull()) return;
+        for (auto& n : nodes_) {
+            n.x += shift.x();
+            n.y += shift.y();
+        }
+        dragX_ += shift.x();
+        dragY_ += shift.y();
+        centreUsed_ = now;
+        update();
+    }
+
     void wheelEvent(QWheelEvent* e) override {
         const double factor = e->angleDelta().y() > 0 ? 1.15 : 1 / 1.15;
         const double newScale = std::clamp(scale_ * factor, 0.2, 4.0);
@@ -392,6 +439,7 @@ private:
     std::mt19937 rng_{0x9E3779B9u};  // 初始摆放的随机源（固定种子；relayout 时重新播种）
     double scale_ = 1.0;
     double panX_ = 0, panY_ = 0;
+    QPointF centreUsed_{0, 0};  // 当前布局围绕的中心（世界坐标；见 recenter）
     bool panning_ = false;
     QPointF panStart_;
     double panStartX_ = 0, panStartY_ = 0;
@@ -407,7 +455,7 @@ GraphPanel::GraphPanel(ah::Platform& platform, QWidget* parent) : PanelBase(plat
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(16, 16, 16, 16);
     root->setSpacing(10);
-    buildHeader(root, "overview", "图谱", "Graph",
+    buildHeader(root, "waypoints", "图谱", "Graph",  // 节点连线图标：与侧栏同一枚
                 "语义关联知识图谱 · 向量 kNN 相似边",
                 "Semantic knowledge graph · vector kNN similarity edges");
 
@@ -520,6 +568,10 @@ QString GraphPanel::digestHintText() {
 
 void GraphPanel::settleLayout() {
     static_cast<GraphCanvas*>(graphView_)->settle();
+}
+
+bool GraphPanel::layoutWithinCanvas() const {
+    return static_cast<GraphCanvas*>(graphView_)->withinCanvas();
 }
 
 void GraphPanel::refresh() {

@@ -87,6 +87,7 @@
 #include <QThread>
 #include <QTimeZone>
 #include <QTimer>
+#include <QToolButton>
 
 #include <algorithm>
 #include <cmath>
@@ -1272,6 +1273,27 @@ int main(int argc, char** argv) {
         // 不变量规则（rubric）：违例即记录（不影响快照对比本身）
         for (const auto& v : runRules(id, panel, visibleCount, tree.contains("text")))
             recordRule(id, v.rule, v.detail);
+        // 窗口铬层规则（便宜，每个场景都查）：侧栏每一项都要有图标；语言按钮要显示当前
+        // 语言的简称。铬层在面板快照之外——此前"图谱没有图标""语言按钮被挤成 ···"坏了
+        // 半年没有任何门禁能抓到（面板截图里根本没有侧栏）
+        for (int i = 0; i < nav->count(); ++i)
+            if (nav->item(i)->icon().isNull())
+                recordRule(id, "nav-item-no-icon", nav->item(i)->text().trimmed());
+        if (auto* langBtn = w.findChild<QToolButton*>("langBtn")) {
+            const QString t = langBtn->text().trimmed();
+            if (t.isEmpty() || t == QStringLiteral("…") || t == QStringLiteral("..."))
+                recordRule(id, "lang-btn-unreadable", t);
+        }
+        // 图谱：所有节点（连标题）都要落在画布可见范围内。布局在面板藏着的时候算出来
+        // 会围着旧中心收敛，用户打开图谱页看到的就是偏在左上角、被裁掉一截的图
+        if (id.startsWith("graph"))
+            for (QWidget* c : panel->findChildren<QWidget*>())
+                if (auto* gp = dynamic_cast<GraphPanel*>(c)) {
+                    if (!gp->layoutWithinCanvas())
+                        recordRule(id, "graph-node-outside-canvas",
+                                   "a node or its title is outside the canvas");
+                    break;
+                }
         QFile f(outDir + "/" + id + ".json");
         f.open(QIODevice::WriteOnly);
         f.write(QJsonDocument(tree).toJson(QJsonDocument::Indented));

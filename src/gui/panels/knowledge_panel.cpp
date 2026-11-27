@@ -306,6 +306,7 @@ void KnowledgePanel::onEntryViewer(int row) {
     dlg.setWindowTitle(QString("%1 · v%2").arg(QString::fromStdString(e.title)).arg(e.version));
     dlg.resize(780, 560);
     auto* l = new QVBoxLayout(&dlg);
+    l->setContentsMargins(14, 12, 14, 12);  // 作者行与正文框对齐；默认边距下它紧贴窗口左缘
     auto* meta = new QLabel(
         QString("%1: %2 · %3: %4 · %5: %6 · %7: %8")
             .arg(i18n::trs("作者", "Author"), QString::fromStdString(e.author))
@@ -340,6 +341,7 @@ void KnowledgePanel::onVersionChanged(int idx) {
 void KnowledgePanel::onNewEntry() {
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("新建知识条目", "New Knowledge Entry"));
+    sizeFormDialog(&dlg, 640, 500);  // 知识正文是多行的，要写得开
     auto* form = new QFormLayout(&dlg);
     auto* title = new QLineEdit(&dlg);
     auto* content = new QPlainTextEdit(&dlg);
@@ -377,6 +379,7 @@ void KnowledgePanel::onAddVersion() {
     if (currentUuid_.empty()) return;
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("追加新版本（旧版本保留，禁止覆盖）", "Append Version (old versions kept, overwrite forbidden)"));
+    sizeFormDialog(&dlg, 640, 420);
     auto* form = new QFormLayout(&dlg);
     auto* title = new QLineEdit(&dlg);
     auto* content = new QPlainTextEdit(&dlg);

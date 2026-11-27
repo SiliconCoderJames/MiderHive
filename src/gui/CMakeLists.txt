@@ -61,6 +61,19 @@ if(BUILD_TESTS)
         PREFIX "/theme"
         FILES qss/dark.qss qss/spin-arrow-up.svg qss/spin-arrow-down.svg)
     target_sources(ui_harness PRIVATE brand.qrc)
+
+    # ---- 界面截图工具（开发 / 文档用，不是门禁）：整窗截图 + 对话框巡览 ----
+    # pages 模式在真实桌面上截整窗（含系统标题栏），dialogs 模式离屏截对话框并做版式检查。
+    # 用法见 src/harness/shots_main.cpp 的头注释。PrintWindow / DwmGetWindowAttribute 需要系统库。
+    add_executable(ui_shots
+        ../harness/shots_main.cpp
+    )
+    target_link_libraries(ui_shots PRIVATE miderhive_gui dwmapi user32 gdi32)
+    set_target_properties(ui_shots PROPERTIES AUTOMOC ON AUTORCC ON)
+    qt_add_resources(ui_shots "theme"
+        PREFIX "/theme"
+        FILES qss/dark.qss qss/spin-arrow-up.svg qss/spin-arrow-down.svg)
+    target_sources(ui_shots PRIVATE brand.qrc)
 endif()
 
 # ---- 可复现的 Qt 运行时部署 ----

@@ -266,6 +266,9 @@ QScrollBar::handle:horizontal:pressed { background: @accent@; }
 /* ---- 其它 ---- */
 QStatusBar { background-color: @deep@; color: @muted@; border-top: 1px solid @line@; }
 QStatusBar QLabel { color: @muted@; font-size: 11px; }
+/* 状态栏一旦有了样式表，Qt 就会给每一格画老式分格线：调色板的亮色，在深色主题里是一道道
+   刺眼的白竖线（服务地址、更新时间、用量，以及最左边那格的右缘各一道）。关掉 */
+QStatusBar::item { border: 0; }
 QToolTip {
     background-color: @card@;
     color: @text@;

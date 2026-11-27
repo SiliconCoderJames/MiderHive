@@ -92,7 +92,7 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
     sideLay->addWidget(brandLine_);
 
     nav_ = new QListWidget(side_);
-    nav_->setFocusPolicy(Qt::NoFocus);  // 去除选中项虚线焦点框；Ctrl+1..7 仍可切换面板
+    nav_->setFocusPolicy(Qt::NoFocus);  // 去除选中项虚线焦点框；Ctrl+1..9 仍可切换面板
     sideLay->addWidget(nav_, 1);
 
     // 脚注：版本号 + 设置 + 语言切换（主题/字号在 ⚙ 设置的外观页，此处不再重复入口）
@@ -110,9 +110,7 @@ MainWindow::MainWindow(ah::Platform& platform, QWidget* parent)
     connect(settingsBtn_, &QToolButton::clicked, this, &MainWindow::openSettings);
     langBtn_ = new QToolButton(foot);
     langBtn_->setObjectName("langBtn");  // 自测的英文扫描按名字排除（按钮显示当前语言名）
-    langBtn_->setPopupMode(QToolButton::InstantPopup);
-    langBtn_->setStyleSheet(
-        "QToolButton::menu-indicator { image: none; }");  // 纯文字外观
+    langBtn_->setPopupMode(QToolButton::InstantPopup);  // 纯文字外观（样式在 applyChrome，随主题重设）
     auto* langMenu = new QMenu(langBtn_);
     for (const auto& li : i18n::languages()) {
         const auto lang = li.lang;
@@ -312,8 +310,11 @@ void MainWindow::buildNav() {
     };
     for (const auto& it : navItems_) {
         // 图标与文字一律中性色；「错误报告」有未解决错误时由 updateStatusBar
-        // 换红色图标 + 追加计数，避免侧栏在没有错误时也长期处于告警色
-        const QString kind = it.id == "overview" ? "overview" : it.id;
+        // 换红色图标 + 追加计数，避免侧栏在没有错误时也长期处于告警色。
+        // 图标名不等于面板 id 的两处在这里对应：图谱画的是 waypoints（节点连线）。此前
+        // 直接拿 id "graph" 去取图标——图标工厂没有这个名字，返回空图标，「图谱」成了
+        // 侧栏里唯一没有图标的项
+        const QString kind = it.id == "graph" ? QStringLiteral("waypoints") : it.id;
         auto* item = new QListWidgetItem(ui::makeIcon(kind, ui::muted(), 18, ui::selText()),
                                         "  " + i18n::trs(it.zh, it.en));
         item->setData(Qt::UserRole, it.id);  // 稳定 id：徽标/下钻都按 id 定位，不用下标
@@ -343,15 +344,19 @@ void MainWindow::applyLanguage() {
     setWindowTitle(i18n::trs("MiderHive · 多 Agent 协作工作台",
                              "MiderHive · Multi-Agent Collaboration Workbench"));
     tagline_->setText(i18n::trs("多 Agent 协作工作台", "multi-agent collaboration hub"));
-    // 语言按钮显示当前语言的_nativeName_；菜单四语言全量列出、勾选当前项
+    // 菜单里全量列出八种语言，勾选当前项
     if (auto* menu = langBtn_->menu()) {
         const auto& langs = i18n::languages();
         for (int i = 0; i < menu->actions().size() && i < static_cast<int>(langs.size()); ++i)
             menu->actions()[i]->setChecked(langs[i].lang == i18n::g_lang);
     }
-    if (const auto* li = i18n::langInfo(i18n::g_lang))
-        langBtn_->setText(QString::fromUtf8(li->nativeName));
-    langBtn_->setToolTip(i18n::trs("切换语言", "Switch language"));
+    // 语言按钮显示当前语言的简称：脚注一行只有 170 像素，放不下"简体中文""Italiano"这样的
+    // 全名——此前按钮被挤到只剩省略号"···"。全名在菜单和提示里
+    if (const auto* li = i18n::langInfo(i18n::g_lang)) {
+        langBtn_->setText(QString::fromUtf8(li->shortName));
+        langBtn_->setToolTip(i18n::trs("切换语言（当前：%1）", "Switch language (current: %1)")
+                                 .arg(QString::fromUtf8(li->nativeName)));
+    }
     settingsBtn_->setToolTip(i18n::trs("设置", "Settings"));
     settingsBtn_->setAccessibleName(i18n::trs("设置", "Settings"));
     askBtn_->setToolTip(i18n::trs("临时问答（Ctrl+Q）", "Ask console (Ctrl+Q)"));
@@ -423,13 +428,21 @@ void MainWindow::applyChrome() {
         " border:1px solid @line@; border-radius:7px; padding:4px 10px; }"
         "QToolButton:hover { color:@text@; border-color:@accenthi@; background:@card@; }"
         "QToolButton:pressed { background:@fieldhover@; border-color:@accent@; }");
-    langBtn_->setStyleSheet(btn);
+    // 语言按钮是纯文字外观，不画下拉箭头。这条规则必须跟着 btn 一起设：此前它只在构造时
+    // 设过一次，换主题时 btn 把它冲掉，箭头又冒了出来
+    langBtn_->setStyleSheet(ui::th("QToolButton::menu-indicator { image: none; }") + btn);
     settingsBtn_->setStyleSheet(btn);
-    settingsBtn_->setIcon(ui::makeIcon("gear", ui::muted(), 16));  // 随主题重涂齿轮
+    // 三个脚注按钮同一个样子。临时问答按钮此前没有自己的样式，只剩一枚光秃秃的图标，
+    // 和旁边两个带边框的按钮不像是一组的
+    askBtn_->setStyleSheet(btn);
+    // 图标随主题重涂
+    settingsBtn_->setIcon(ui::makeIcon("gear", ui::muted(), 16));
+    askBtn_->setIcon(ui::makeIcon("spark", ui::muted(), 16));
     // 手型光标：导航与 chrome 按钮都是可点击目标（产品化交互惯例）
     nav_->viewport()->setCursor(Qt::PointingHandCursor);
     langBtn_->setCursor(Qt::PointingHandCursor);
     settingsBtn_->setCursor(Qt::PointingHandCursor);
+    askBtn_->setCursor(Qt::PointingHandCursor);
 }
 
 void MainWindow::applyUiPrefs() {

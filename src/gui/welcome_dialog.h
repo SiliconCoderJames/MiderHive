@@ -16,6 +16,7 @@ class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
+class QScrollArea;
 class QToolButton;
 
 class WelcomeDialog : public QDialog {
@@ -42,5 +43,7 @@ private:
     ui::integrations::Tool current_;
     QString issuedKey_;  // 本次签发的明文密钥（仅存于对话框生命周期内）
     QString issuedName_;
+    QString lastDefault_;  // 上一个所选工具的默认身份名（名字还是它时，换工具就跟着换）
+    QScrollArea* scroll_ = nullptr;  // 内容滚动区（选了工具后内容比屏幕高）
     ah::Platform& platform_;
 };

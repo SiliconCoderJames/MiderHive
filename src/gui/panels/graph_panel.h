@@ -22,6 +22,9 @@ public:
     // 把力导向布局同步跑到稳定（测试用：UI harness 拍摄前调用，拿到可复现的最终布局；
     // 用户的实时动画不受影响——它照旧由定时器逐帧驱动）
     void settleLayout();
+    // 所有节点（连标题）是否都落在画布可见范围内。给 UI harness 用：布局在面板藏着的
+    // 时候算出来会偏到画布外，重新居中之后必须全部可见
+    bool layoutWithinCanvas() const;
 
 private:
     void showNodeDetail(const QString& uuid);

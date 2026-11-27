@@ -734,12 +734,15 @@ QWidget* SettingsDialog::buildAboutPage() {
                               " padding:0 4px; font-family:@mono@,monospace;'>%1</span>")
                           .arg(k));
     };
+    keys->setWordWrap(true);
     keys->setText(QString(
-        "%1 %2　%3 %4　%5 %6　%7 %8")
-        .arg(kbd("Ctrl 1-7"), i18n::trs("切换面板", "switch panel"))
+        "%1 %2　%3 %4　%5 %6　%7 %8　%9 %10")
+        // 面板数与 MainWindow 的 Ctrl+1..9 一致：这里原先写死 "Ctrl 1-7"，加了图谱后没跟着改
+        .arg(kbd("Ctrl+1..9"), i18n::trs("切换面板", "switch panel"))
         .arg(kbd("F5"), i18n::trs("刷新", "refresh"))
         .arg(kbd("Ctrl+F"), i18n::trs("聚焦过滤框", "focus filter"))
-        .arg(kbd("Ctrl+,"), i18n::trs("打开设置", "open settings")));
+        .arg(kbd("Ctrl+,"), i18n::trs("打开设置", "open settings"))
+        .arg(kbd("Ctrl+Q"), i18n::trs("临时问答", "Ask console")));
     lay->addWidget(keys);
     lay->addSpacing(2);
 

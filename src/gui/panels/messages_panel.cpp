@@ -32,9 +32,17 @@ QString bubbleBody(const QString& body, bool* truncatedOut = nullptr) {
     return out;
 }
 
+// 消息类型枚举的展示层本地化（存储仍英文枚举；未知值原样回显）
+QString kindLabel(const QString& k) {
+    return k == "task"     ? i18n::trs("任务", "Task")
+           : k == "question" ? i18n::trs("提问", "Q")
+           : k == "note"     ? i18n::trs("留言", "Note")
+                             : k;
+}
+
 QString kindChip(const QString& kind) {
     const auto chip = [](const QColor& c, const QString& label) {
-        return QString("<span style='background:rgba(%1,%2,%3,70);color:%4;"
+        return QString("<span style='color:%1; background:rgba(%2,%3,%4,38);"
                        "border-radius:4px;padding:1px 6px;'>%5</span>")
             .arg(c.red())
             .arg(c.green())
@@ -42,9 +50,9 @@ QString kindChip(const QString& kind) {
             .arg(c.lighter(140).name())
             .arg(label);
     };
-    if (kind == "task") return chip(ui::danger(), i18n::trs("任务", "Task"));
-    if (kind == "question") return chip(ui::warn(), i18n::trs("提问", "Q"));
-    return chip(ui::accent(), i18n::trs("留言", "Note"));
+    if (kind == "task") return chip(ui::danger(), kindLabel(kind));
+    if (kind == "question") return chip(ui::warn(), kindLabel(kind));
+    return chip(ui::accent(), kindLabel(kind));
 }
 // 消息状态枚举的展示层本地化（存储仍英文枚举；未知值原样回显）
 QString statusLabel(const QString& s) {
@@ -290,9 +298,14 @@ void MessagesPanel::updateActions() {
 void MessagesPanel::onCompose() {
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("发消息 / 指派任务", "Send Message / Assign Task"));
+    // 内容是多行正文：给一个写得开的地方。此前按最小尺寸弹出，只有 323 像素宽
+    sizeFormDialog(&dlg, 600, 460);
     auto* form = new QFormLayout(&dlg);
     auto* kind = new QComboBox(&dlg);
-    kind->addItems({"note", "question", "task"});
+    // 显示本地化名称，存储值放进 item data 回传后端。此前直接列出 note / question /
+    // task——气泡上的类型标签是「留言」「提问」「任务」，下拉里却是英文枚举
+    for (const char* k : {"note", "question", "task"})
+        kind->addItem(kindLabel(k), QString::fromLatin1(k));
     auto* recipient = new QComboBox(&dlg);
     recipient->addItem(i18n::trs("（广播给所有 Agent）", "(broadcast to all agents)"), "");
     std::vector<ah::AgentInfo> agents;
@@ -301,7 +314,9 @@ void MessagesPanel::onCompose() {
         for (const auto& a : agents)
             recipient->addItem(QString::fromStdString(a.name), QString::fromStdString(a.name));
     auto* subject = new QLineEdit(&dlg);
+    subject->setPlaceholderText(i18n::trs("一句话说清是什么事", "one line saying what this is about"));
     auto* body = new QPlainTextEdit(&dlg);
+    body->setMinimumHeight(180);
     form->addRow(i18n::trs("类型", "Kind"), kind);
     form->addRow(i18n::trs("接收者", "Recipient"), recipient);
     form->addRow(i18n::trs("主题", "Subject"), subject);
@@ -313,7 +328,7 @@ void MessagesPanel::onCompose() {
     if (dlg.exec() != QDialog::Accepted) return;
 
     ah::Message out;
-    if (!platform_.messageSend(kind->currentText().toStdString(), "user",
+    if (!platform_.messageSend(kind->currentData().toString().toStdString(), "user",
                                recipient->currentData().toString().toStdString(),
                                subject->text().trimmed().toStdString(),
                                body->toPlainText().toStdString(), out, err)) {
@@ -361,6 +376,7 @@ void MessagesPanel::onReply() {
     const ah::Message target = *cur;
     QDialog dlg(this);
     dlg.setWindowTitle(i18n::trs("回复: %1", "Reply: %1").arg(QString::fromStdString(target.subject)));
+    sizeFormDialog(&dlg, 560, 340);
     auto* l = new QVBoxLayout(&dlg);
     auto* body = new QPlainTextEdit(&dlg);
     l->addWidget(body);
